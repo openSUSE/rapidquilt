@@ -1,10 +1,5 @@
 #[macro_use] extern crate failure;
 #[macro_use] extern crate lazy_static;
-extern crate regex;
-extern crate libc;
-extern crate seahash;
-extern crate crossbeam;
-extern crate getopts;
 
 mod apply;
 mod line_interner;
@@ -12,27 +7,21 @@ mod file_arena;
 mod interned_file;
 mod patch;
 
-use std::collections::{HashMap, HashSet};
 use std::env;
 use std::fs::File;
 use std::fs;
-use std::hash::BuildHasherDefault;
 use std::io;
 use std::io::BufRead;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
 
 use failure::Error;
 
 use getopts::Options;
 
-use apply::{apply_patches, apply_patches_parallel};
-use file_arena::FileArena;
-use patch::{PatchDirection, TextFilePatch, FilePatchKind};
-use line_interner::LineInterner;
-use interned_file::InternedFile;
+use crate::apply::{apply_patches, apply_patches_parallel};
+use crate::patch::PatchDirection;
+use crate::line_interner::LineInterner;
+use crate::interned_file::InternedFile;
 
 
 fn backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
@@ -71,7 +60,5 @@ fn main() {
             std::path::PathBuf::from(line)
         }).collect();
 
-    let direction = PatchDirection::Forward;
-
-    apply_patches_parallel(&patch_filenames, ".", direction, 1).unwrap();
+    apply_patches_parallel(&patch_filenames, ".", 1).unwrap();
 }

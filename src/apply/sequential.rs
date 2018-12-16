@@ -1,26 +1,19 @@
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fs::File;
 use std::fs;
 use std::hash::BuildHasherDefault;
-use std::io;
-use std::io::BufRead;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
 
-use crossbeam;
 use failure::Error;
 use seahash;
 
-use file_arena::FileArena;
-use patch::{self, PatchDirection, TextFilePatch, FilePatchKind};
-use line_interner::LineInterner;
-use interned_file::InternedFile;
+use crate::file_arena::FileArena;
+use crate::patch::{self, PatchDirection, FilePatchKind};
+use crate::line_interner::LineInterner;
+use crate::interned_file::InternedFile;
 
 
-pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, direction: PatchDirection, strip: usize) -> Result<(), Error> {
+pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, strip: usize) -> Result<(), Error> {
     let arena = FileArena::new();
     let mut interner = LineInterner::new();
 
@@ -55,7 +48,7 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
 
             removed_files.remove(&file_patch.filename);
 
-            file_patch.apply(&mut file, direction)?;
+            file_patch.apply(&mut file, PatchDirection::Forward)?;
 
             if file_patch.kind == FilePatchKind::Delete {
                 removed_files.insert(file_patch.filename.clone());

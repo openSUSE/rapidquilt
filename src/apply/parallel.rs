@@ -1,31 +1,29 @@
+use std;
 use std::collections::{HashMap, HashSet};
-use std::env;
 use std::fs::File;
 use std::fs;
 use std::hash::BuildHasherDefault;
-use std::io;
-use std::io::BufRead;
-use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicUsize;
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use crossbeam;
 use failure::Error;
 use seahash;
 
-use file_arena::FileArena;
-use patch::{self, PatchDirection, InternedFilePatch, TextFilePatch, FilePatchKind};
-use line_interner::LineInterner;
-use interned_file::InternedFile;
+use crate::file_arena::FileArena;
+use crate::patch::{self, PatchDirection, InternedFilePatch, TextFilePatch, FilePatchKind};
+use crate::line_interner::LineInterner;
+use crate::interned_file::InternedFile;
 
 
 enum Message<'a> {
     NextPatch(usize, TextFilePatch<'a>),
-    NewMaxTarget(usize),
+    AllPatchesSent,
+    NewStopBeforePatchIndex,
+    ThreadDoneApplying,
 }
 
-pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, direction: PatchDirection, strip: usize) -> Result<(), Error> {
+pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, strip: usize) -> Result<(), Error> {
     let patches_path = patches_path.as_ref();
 
     let applying_threads_count: usize = 7;
@@ -35,22 +33,29 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
     let arena_ = FileArena::new();
 
+    let stop_before_patch_index_ = AtomicUsize::new(patch_filenames.len());
+
     // TODO: Nicer way?
-    let mut senders = Vec::new();
+    let mut senders_ = Vec::new();
     let mut receivers = Vec::new();
     for _ in 0..applying_threads_count {
         let (s, r) = crossbeam::channel::bounded::<Message>(32); // TODO: Fine-tune the capacity.
-        senders.push(s);
+        senders_.push(s);
         receivers.push(r);
     }
 
     crossbeam::thread::scope(|scope| {
         let arena = &arena_;
+        let stop_before_patch_index = &stop_before_patch_index_;
 
+        let senders = senders_.clone();
         scope.spawn(move |_| {
             for (index, patch_filename) in patch_filenames.iter().enumerate() {
+                if index > stop_before_patch_index.load(Ordering::Acquire) {
+                    break;
+                }
 
-//                 println!("Loading patch #{}: {:?}", index, patch_filename);
+                println!("Loading patch #{}: {:?}", index, patch_filename);
 
                 let mut text_file_patches = (|| -> Result<_, Error> { // Poor man's try block
                     let data = arena.load_file(patches_path.join(patch_filename))?;
@@ -73,10 +78,15 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                     }
                 };
             }
+
+            for sender in senders {
+                sender.send(Message::AllPatchesSent).unwrap();
+            }
         });
 
         for (thread_index, receiver) in receivers.iter().enumerate() {
             let arena = &arena_;
+            let senders = senders_.clone();
 
             scope.spawn(move |_| -> Result<(), Error> {
                 let mut interner = LineInterner::new();
@@ -87,17 +97,27 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                     // TODO...
                 };
 
-                let mut our_patches = Vec::<PatchStatus>::new();
-                let mut current_patch = 0;
+                let mut applied_patches = Vec::<PatchStatus>::new();
 
                 let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
                 let mut removed_files = HashSet::<PathBuf, BuildHasherDefault<seahash::SeaHasher>>::default();
 
+                let mut done_applying = false;
+                let mut signalled_done_applying = false;
+                let mut received_done_applying_signals = 0;
+
                 for message in receiver.iter() {
                     match message {
                         Message::NextPatch(index, text_file_patch) => {
+                            if index >= stop_before_patch_index.load(Ordering::Acquire) {
+                                println!("TID {} - Skipping patch #{} file {:?}, we are supposed to stop before this.", thread_index, index, text_file_patch.filename);
+                                done_applying = true;
+                                continue;
+                            }
 
-        //                     println!("Applying patch #{} file {:?}", index, text_file_patch.filename);
+                            assert!(!signalled_done_applying); // If we already signalled that we are done, there is now way we should have more patches to forward-apply
+
+                            println!("TID {} - Applying patch #{} file {:?}", thread_index, index, text_file_patch.filename);
 
                             let file_patch = text_file_patch.intern(&mut interner);
 
@@ -111,24 +131,92 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
                             removed_files.remove(&file_patch.filename);
 
-                            file_patch.apply(&mut file, direction)?;
+                            match file_patch.apply(&mut file, PatchDirection::Forward) {
+                                Ok(_) => {
+                                    if file_patch.kind == FilePatchKind::Delete {
+                                        removed_files.insert(file_patch.filename.clone());
+                                    }
 
-                            if file_patch.kind == FilePatchKind::Delete {
-                                removed_files.insert(file_patch.filename.clone());
+                                    applied_patches.push(PatchStatus {
+                                        index,
+                                        file_patch,
+                                    });
+                                },
+                                Err(_) => {
+                                    println!("TID {} - Patch #{} failed to apply, signaling everyone!", thread_index, index);
+
+                                    // Atomically set `stop_before_patch_index = min(stop_before_patch_index, index)`.
+                                    let mut current = stop_before_patch_index.load(Ordering::Acquire);
+                                    while index < current {
+                                        current = stop_before_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
+                                    }
+
+                                    // Notify other threads that the stop_before_patch_index changed
+                                    for sender in &senders {
+                                        sender.send(Message::NewStopBeforePatchIndex).unwrap();
+                                    }
+                                }
+                            }
+                        },
+                        Message::NewStopBeforePatchIndex => {
+                            println!("TID {} - Got new stop_before_patch_index = {}", thread_index, stop_before_patch_index.load(Ordering::Acquire));
+
+                            // If we already applied past this stop point, signal that we are done forward applying.
+                            if let Some(applied_patch) = applied_patches.last() {
+                                if applied_patch.index >= stop_before_patch_index.load(Ordering::Acquire) {
+                                    done_applying = true;
+                                }
                             }
 
-                            // The end condition **for now**
-                            if index == patch_filenames.len() - 1 {
+                            // If we already applied past this stop point, revert all applied patches until we get to the right point.
+                            while let Some(applied_patch) = applied_patches.last() {
+                                if applied_patch.index < stop_before_patch_index.load(Ordering::Acquire) {
+                                    break;
+                                }
+
+                                let file_patch = &applied_patch.file_patch;
+
+                                println!("TID {} - Reverting #{} file {:?}", thread_index, applied_patch.index, file_patch.filename);
+
+                                let mut file = modified_files.get_mut(&file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
+                                match file_patch.apply(&mut file, PatchDirection::Revert) {
+                                    Ok(_) => {
+                                        if file_patch.kind == FilePatchKind::Delete {
+                                            removed_files.remove(&file_patch.filename);
+                                        }
+
+                                        applied_patches.pop();
+                                    },
+                                    Err(_) => {
+                                        panic!("Failed to rollback patch! This should not happen.");
+                                    }
+                                }
+                            }
+                        },
+                        Message::ThreadDoneApplying => {
+                            received_done_applying_signals += 1;
+
+                            println!("TID {} - Received ThreadDoneApplying signal, total received: {}", thread_index, received_done_applying_signals);
+
+                            if received_done_applying_signals == applying_threads_count {
                                 break;
                             }
                         },
-                        _ => {
-                            unimplemented!();
+                        Message::AllPatchesSent => {
+                            done_applying = true;
                         }
+                    }
+
+                    if done_applying && !signalled_done_applying {
+                        println!("TID {} - Signalling ThreadDoneApplying", thread_index);
+                        for sender in &senders {
+                            sender.send(Message::ThreadDoneApplying).unwrap();
+                        }
+                        signalled_done_applying = true;
                     }
                 }
 
-                println!("Saving result...");
+                println!("TID {} - Saving result...", thread_index);
 
                 for (filename, file) in &modified_files {
 //                     println!("Modified file: {:?}", filename);

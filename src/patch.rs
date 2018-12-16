@@ -9,8 +9,8 @@ use failure::Error;
 use seahash::SeaHasher;
 use regex::bytes::Regex;
 
-use line_interner::{LineId, LineInterner, EMPTY_LINE_ID, EMPTY_LINE_SLICE};
-use interned_file::InternedFile;
+use crate::line_interner::{LineId, LineInterner, EMPTY_LINE_ID, EMPTY_LINE_SLICE};
+use crate::interned_file::InternedFile;
 
 
 const NEW_LINE_TAG: &[u8] = b"\\ No newline at end of file";
@@ -96,6 +96,15 @@ pub enum FilePatchKind {
 pub enum PatchDirection {
     Forward,
     Revert
+}
+
+impl PatchDirection {
+    pub fn opposite(self) -> PatchDirection {
+        match self {
+            PatchDirection::Forward => PatchDirection::Revert,
+            PatchDirection::Revert => PatchDirection::Forward,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -305,8 +314,8 @@ impl InternedFilePatch {
         if failed_hunks.is_empty() {
             Ok(())
         } else {
-            println!("Failed hunks: {:?}", failed_hunks);
-            println!("File content: {:?}", interned_file);
+//             println!("Failed hunks: {:?}", failed_hunks);
+//             println!("File content: {:?}", interned_file);
 
             Err(PatchApplyError::HunksFailed(failed_hunks, interned_file.clone()))
         }

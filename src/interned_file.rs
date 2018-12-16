@@ -2,7 +2,7 @@ use std::io::Write;
 
 use failure::Error;
 
-use line_interner::{LineId, LineInterner};
+use crate::line_interner::{LineId, LineInterner};
 
 
 #[derive(Clone, Debug)]
