@@ -4,6 +4,7 @@ extern crate regex;
 extern crate libc;
 extern crate seahash;
 extern crate crossbeam;
+extern crate getopts;
 
 mod line_interner;
 mod file_arena;
@@ -15,6 +16,7 @@ use std::env;
 use std::fs::File;
 use std::fs;
 use std::hash::BuildHasherDefault;
+use std::io;
 use std::io::BufRead;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
@@ -22,28 +24,13 @@ use std::sync::Mutex;
 
 use failure::Error;
 
+use getopts::Options;
+
 use file_arena::FileArena;
 use patch::{PatchDirection, TextFilePatch, FilePatchKind};
 use line_interner::LineInterner;
 use interned_file::InternedFile;
 
-
-fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<PathBuf>, Error> {
-    let file = File::open(series_path)?;
-    let file = BufReader::new(file);
-
-    let patch_filenames = file
-        .lines()
-        .map(|line| line.unwrap() /* <- TODO: Propagate up. */)
-        .filter(|line| line.len() > 0 && !line.starts_with('#')) // man quilt says that comment lines start with '#', it does not mention any whitespace before that (TODO: Verify)
-        .map(|line| {
-            // TODO: Handle comments after the patch name
-
-            std::path::PathBuf::from(line)
-        }).collect();
-
-    Ok(patch_filenames)
-}
 
 fn backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
     let mut path = PathBuf::from(".pc");
@@ -168,7 +155,8 @@ fn apply_patches_parallel<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_p
                     Err(err) => {
                         // TODO: Failure, signal that this is the new goal and save the error somewhere up...
                         //       But for now just terminate!
-                        panic!();
+//                         panic!();
+                        Err::<(), Error>(err).unwrap();
                     }
                 };
             }
@@ -213,10 +201,6 @@ fn apply_patches_parallel<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_p
 
                 println!("Saving result...");
 
-                // XXX:
-                println!("...or NOT!");
-                return Ok(());
-
                 for (filename, file) in &modified_files {
 //                     println!("Modified file: {:?}", filename);
                     let _ = fs::remove_file(filename);
@@ -243,45 +227,29 @@ fn apply_patches_parallel<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_p
 fn main() {
     let args: Vec<_> = env::args().collect();
 
-    if args.len() < 2 {
-        println!("Usage: rapidquilt push|pop [<to patch> [<from patch>]]");
-        return;
+    let mut opts = Options::new();
+    opts.optopt("d", "directory", "working directory", "NAME");
+//     opts.optflag("h", "help", "print this help menu");
+
+    let matches = opts.parse(&args[1..]).unwrap();
+
+    if let Some(directory) = matches.opt_str("d") {
+        println!("Changing directory to {}", directory);
+        env::set_current_dir(directory).unwrap();
     }
 
-    let mut direction = PatchDirection::Forward;
-    if args[1] == "pop" {
-        direction = PatchDirection::Revert;
-    }
+    let stdin = io::stdin();
 
-    let patch_filenames = {
-        let mut patch_filenames = read_series_file("series").unwrap();
-        if direction == PatchDirection::Revert {
-            patch_filenames.reverse();
-        }
-        patch_filenames
-    };
+    let patch_filenames: Vec<_> = stdin
+        .lock()
+        .lines()
+        .map(|line| line.unwrap() /* <- TODO: Propagate up. */)
+//         .filter(|line| line.len() > 0 && !line.starts_with('#')) // man quilt says that comment lines start with '#', it does not mention any whitespace before that (TODO: Verify)
+        .map(|line| {
+            std::path::PathBuf::from(line)
+        }).collect();
 
-    let mut to_patch = patch_filenames.len() - 1;
-    if args.len() >= 3 {
-        let patch_filename = PathBuf::from(&args[2]);
-        if let Some(index) = patch_filenames.iter().position(|item| *item == patch_filename) {
-            to_patch = index;
-        } else {
-            println!("Patch not in series: {:?}", patch_filename);
-            return;
-        }
-    }
+    let direction = PatchDirection::Forward;
 
-    let mut from_patch = 0;
-    if args.len() >= 4 {
-        let patch_filename = PathBuf::from(&args[3]);
-        if let Some(index) = patch_filenames.iter().position(|item| *item == patch_filename) {
-            from_patch = index;
-        } else {
-            println!("Patch not in series: {:?}", patch_filename);
-            return;
-        }
-    }
-
-    apply_patches/*_parallel*/(&patch_filenames[from_patch..=to_patch], "patches", direction, 1).unwrap();
+    apply_patches_parallel(&patch_filenames, ".", direction, 1).unwrap();
 }

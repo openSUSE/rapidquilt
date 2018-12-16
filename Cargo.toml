@@ -7,8 +7,7 @@ authors = ["Michal Srb <michalsrb@gmail.com>"]
 lto = true
 
 [dependencies]
-# crossbeam-channel = "0.3"
-# crossbeam-utils = "0.6"
+getopts = "0.2"
 crossbeam = "0.5"
 failure = "0.1"
 seahash = "3.0"
