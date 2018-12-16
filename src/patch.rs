@@ -16,11 +16,6 @@ use crate::interned_file::InternedFile;
 const NEW_LINE_TAG: &[u8] = b"\\ No newline at end of file";
 const NULL_FILENAME: &[u8] = b"/dev/null";
 
-#[derive(Debug, Fail)]
-pub enum PatchApplyError {
-    #[fail(display = "Hunks (TODO) failed.")]
-    HunksFailed(Vec<Hunk<LineId>>, InternedFile),
-}
 
 #[derive(Clone, Debug)]
 struct HunkPart<Line> {
@@ -84,7 +79,6 @@ impl<'a> Hunk<&'a [u8]> {
     }
 }
 
-
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum FilePatchKind {
     Modify,
@@ -105,6 +99,54 @@ impl PatchDirection {
             PatchDirection::Revert => PatchDirection::Forward,
         }
     }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum HunkApplyReport {
+    AppliedAtLine(isize),
+    Failed,
+}
+
+#[derive(Debug)]
+pub struct FilePatchApplyReport {
+    any_failed: bool,
+    hunk_reports: Vec<HunkApplyReport>,
+}
+
+impl FilePatchApplyReport {
+    fn new() -> Self {
+        FilePatchApplyReport {
+            hunk_reports: Vec::new(),
+            any_failed: false,
+        }
+    }
+
+    fn single_hunk_success(line: isize) -> Self {
+        FilePatchApplyReport {
+            hunk_reports: vec![HunkApplyReport::AppliedAtLine(line)],
+            any_failed: false,
+        }
+    }
+
+    fn single_hunk_failure() -> Self {
+        FilePatchApplyReport {
+            hunk_reports: vec![HunkApplyReport::Failed],
+            any_failed: true,
+        }
+    }
+
+    fn push_hunk_success(&mut self, line: isize) {
+        self.hunk_reports.push(HunkApplyReport::AppliedAtLine(line));
+    }
+
+    fn push_hunk_failure(&mut self) {
+        self.hunk_reports.push(HunkApplyReport::Failed);
+        self.any_failed = true;
+    }
+
+    pub fn ok(&self) -> bool { !self.any_failed }
+    pub fn failed(&self) -> bool { self.any_failed }
+    pub fn hunk_reports(&self) -> &[HunkApplyReport] { &self.hunk_reports }
 }
 
 #[derive(Debug)]
@@ -152,15 +194,30 @@ impl<'a> TextFilePatch<'a> {
     }
 }
 
-impl FilePatch<LineId> {
-    pub fn foo() {}
+#[derive(Debug)]
+enum ApplyMode<'a> {
+    Normal,
+    Rollback(&'a FilePatchApplyReport),
 }
 
 impl InternedFilePatch {
-    pub fn apply(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> Result<(), PatchApplyError> {
+    pub fn apply(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> FilePatchApplyReport {
+        self.apply_internal(interned_file, direction, ApplyMode::Normal)
+    }
+
+    pub fn rollback(&self, interned_file: &mut InternedFile, direction: PatchDirection, apply_report: &FilePatchApplyReport) {
+        assert!(self.hunks.len() == apply_report.hunk_reports().len());
+
+        println!("ROLLBACK: {:?} {:?}", self, apply_report);
+
+        let result = self.apply_internal(interned_file, direction.opposite(), ApplyMode::Rollback(apply_report));
+        assert!(result.ok()); // Rollback must apply cleanly. If not, we have a bug somewhere.
+    }
+
+    fn apply_internal(&self, interned_file: &mut InternedFile, direction: PatchDirection, apply_mode: ApplyMode) -> FilePatchApplyReport {
         match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
-                self.apply_modify(interned_file, direction),
+                self.apply_modify(interned_file, direction, apply_mode),
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
@@ -170,16 +227,15 @@ impl InternedFilePatch {
             (FilePatchKind::Create, PatchDirection::Revert) =>
                 self.apply_delete(interned_file, direction),
         }
-
     }
 
-    fn apply_create(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> Result<(), PatchApplyError> {
+    fn apply_create(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> FilePatchApplyReport {
         assert!(self.hunks.len() == 1);
 
         if interned_file.content.len() > 0 {
             // It may be single new line, we must tolerate that
             if interned_file.content.len() > 1 || interned_file.content[0] != EMPTY_LINE_ID {
-                return Err(PatchApplyError::HunksFailed(self.hunks.clone(), interned_file.clone()));
+                return FilePatchApplyReport::single_hunk_failure();
             }
         }
 
@@ -190,10 +246,10 @@ impl InternedFilePatch {
 
         interned_file.content = new_content.clone();
 
-        Ok(())
+        FilePatchApplyReport::single_hunk_success(0)
     }
 
-    fn apply_delete(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> Result<(), PatchApplyError> {
+    fn apply_delete(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> FilePatchApplyReport {
         assert!(self.hunks.len() == 1);
 
         let expected_content = match direction {
@@ -202,31 +258,41 @@ impl InternedFilePatch {
         };
 
         if *expected_content != interned_file.content {
-            return Err(PatchApplyError::HunksFailed(self.hunks.clone(), interned_file.clone()));
+            return FilePatchApplyReport::single_hunk_failure();
         }
 
         interned_file.content.clear();
 
-        Ok(())
+        FilePatchApplyReport::single_hunk_success(0)
     }
 
-    fn apply_modify(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> Result<(), PatchApplyError> {
-        let mut failed_hunks = Vec::new();
+    fn apply_modify(&self, interned_file: &mut InternedFile, direction: PatchDirection, apply_mode: ApplyMode) -> FilePatchApplyReport {
+        let mut report = FilePatchApplyReport::new();
 
         let mut last_hunk_offset = 0isize;
 
-//         println!("--- apply_modify ---");
-
-        for hunk in &self.hunks {
+        let mut for_each_hunk = |i, hunk: &Hunk<LineId>| {
             let (part_add, part_remove) = match direction {
                 PatchDirection::Forward => (&hunk.add, &hunk.remove),
                 PatchDirection::Revert => (&hunk.remove, &hunk.add),
             };
 
-            let mut target_line = match hunk.position {
-                HunkPosition::Start |
-                HunkPosition::Middle => part_add.target_line,
-                HunkPosition::End => (interned_file.content.len() as isize - part_remove.content.len() as isize),
+            let mut target_line = match apply_mode {
+                // In normal mode, pick what is in the hunk
+                ApplyMode::Normal => match hunk.position {
+                    HunkPosition::Start |
+                    HunkPosition::Middle => part_add.target_line,
+                    HunkPosition::End => (interned_file.content.len() as isize - part_remove.content.len() as isize),
+                },
+
+                // In rollback mode, take it from the report
+                ApplyMode::Rollback(report) => match report.hunk_reports()[i] {
+                    // If the hunk was applied at specific line, choose that line now.
+                    HunkApplyReport::AppliedAtLine(line) => line,
+
+                    // If the hunk failed to apply, skip it now.
+                    HunkApplyReport::Failed => return,
+                }
             };
 
 //             println!("Hunk intended for line {} (add: {}, remove: {})", target_line, part_add.target_line, part_remove.target_line);
@@ -234,8 +300,8 @@ impl InternedFilePatch {
             // If the hunk tries to remove more than the file has, reject it now.
             // So in the following code we can assume that it is smaller or equal.
             if part_remove.content.len() > interned_file.content.len() {
-                failed_hunks.push(hunk.clone());
-                continue;
+                report.push_hunk_failure();
+                return;
             }
 
             fn matches(needle: &[LineId], haystack: &[LineId], at: isize) -> bool {
@@ -252,11 +318,17 @@ impl InternedFilePatch {
 
             // Check if it matches on the originally intended target_line
             if !matches(&part_remove.content, &interned_file.content, target_line) {
+                // If it failed to apply in rollback mode, do not try to search for better place.
+                if let ApplyMode::Rollback(_) = apply_mode {
+                    report.push_hunk_failure();
+                    return;
+                }
+
                 // Only hunks that are intended for somewhere in the middle of the code
                 // can be applied somewhere else based on context.
                 if hunk.position != HunkPosition::Middle {
-                    failed_hunks.push(hunk.clone());
-                    continue;
+                    report.push_hunk_failure();
+                    return;
                 }
 
 //                 if last_hunk_offset != 0 {
@@ -295,8 +367,8 @@ impl InternedFilePatch {
                             target_line = new_target_line;
                         },
                         None => {
-                            failed_hunks.push(hunk.clone());
-                            continue;
+                            report.push_hunk_failure();
+                            return;
                         }
                     }
                 }
@@ -306,19 +378,26 @@ impl InternedFilePatch {
             last_hunk_offset = target_line - part_add.target_line;
             let range = (target_line as usize)..(target_line as usize + part_remove.content.len());
 
+            report.push_hunk_success(target_line);
+
 //             println!("Hunk applied on line {}", target_line);
 
             interned_file.content.splice(range.clone(), part_add.content.clone());
-        }
+        };
 
-        if failed_hunks.is_empty() {
-            Ok(())
-        } else {
-//             println!("Failed hunks: {:?}", failed_hunks);
-//             println!("File content: {:?}", interned_file);
+        // TODO: Nicer way to conditionally iterate forwards or backwards?
+        match direction {
+            PatchDirection::Forward =>
+                for (i, hunk) in self.hunks.iter().enumerate() {
+                    for_each_hunk(i, hunk);
+                }
+            PatchDirection::Revert =>
+                for (i, hunk) in self.hunks.iter().enumerate().rev() {
+                    for_each_hunk(i, hunk);
+                }
+        };
 
-            Err(PatchApplyError::HunksFailed(failed_hunks, interned_file.clone()))
-        }
+        report
     }
 }
 

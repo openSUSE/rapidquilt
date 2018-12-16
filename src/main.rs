@@ -19,7 +19,6 @@ use failure::Error;
 use getopts::Options;
 
 use crate::apply::{apply_patches, apply_patches_parallel};
-use crate::patch::PatchDirection;
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
