@@ -364,8 +364,6 @@ impl<'a> InternedFilePatch<'a> {
     pub fn rollback(&self, interned_file: &mut InternedFile, direction: PatchDirection, apply_report: &FilePatchApplyReport) {
         assert!(self.hunks.len() == apply_report.hunk_reports().len());
 
-        println!("ROLLBACK: {:?} {:?}", self, apply_report);
-
         let result = self.apply_internal(interned_file, direction.opposite(), ApplyMode::Rollback(apply_report));
         assert!(result.ok()); // Rollback must apply cleanly. If not, we have a bug somewhere.
     }

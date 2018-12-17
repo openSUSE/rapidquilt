@@ -56,7 +56,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                     break;
                 }
 
-                println!("Loading patch #{}: {:?}", index, patch_filename);
+//                 println!("Loading patch #{}: {:?}", index, patch_filename);
 
                 let text_file_patches = (|| -> Result<_, Error> { // Poor man's try block
                     let data = arena.load_file(patches_path.join(patch_filename))?;
@@ -110,14 +110,14 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                     match message {
                         Message::NextPatch(index, text_file_patch) => {
                             if index > earliest_broken_patch_index.load(Ordering::Acquire) {
-                                println!("TID {} - Skipping patch #{} file {:?}, we are supposed to stop before this.", thread_index, index, text_file_patch.filename);
+//                                 println!("TID {} - Skipping patch #{} file {:?}, we are supposed to stop before this.", thread_index, index, text_file_patch.filename);
                                 done_applying = true;
                                 continue;
                             }
 
                             assert!(!signalled_done_applying); // If we already signalled that we are done, there is now way we should have more patches to forward-apply
 
-                            println!("TID {} - Applying patch #{} file {:?}", thread_index, index, text_file_patch.filename);
+//                             println!("TID {} - Applying patch #{} file {:?}", thread_index, index, text_file_patch.filename);
 
                             let file_patch = text_file_patch.intern(&mut interner);
 
@@ -138,7 +138,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                             let report = file_patch.apply(&mut file, PatchDirection::Forward);
 
                             if report.failed() {
-                                println!("TID {} - Patch #{} failed to apply, signaling everyone! Report: {:?}", thread_index, index, report);
+//                                 println!("TID {} - Patch #{} failed to apply, signaling everyone! Report: {:?}", thread_index, index, report);
 
                                 // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
                                 let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
@@ -159,7 +159,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                             });
                         },
                         Message::NewEarliestBrokenPatchIndex => {
-                            println!("TID {} - Got new earliest_broken_patch_index = {}", thread_index, earliest_broken_patch_index.load(Ordering::Acquire));
+//                             println!("TID {} - Got new earliest_broken_patch_index = {}", thread_index, earliest_broken_patch_index.load(Ordering::Acquire));
 
                             // If we already applied past this stop point, signal that we are done forward applying.
                             if let Some(applied_patch) = applied_patches.last() {
@@ -176,7 +176,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
                                 let file_patch = &applied_patch.file_patch;
 
-                                println!("TID {} - Rolling back #{} file {:?}", thread_index, applied_patch.index, file_patch.filename);
+//                                 println!("TID {} - Rolling back #{} file {:?}", thread_index, applied_patch.index, file_patch.filename);
 
                                 let mut file = modified_files.get_mut(&file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
                                 file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
@@ -191,7 +191,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                         Message::ThreadDoneApplying => {
                             received_done_applying_signals += 1;
 
-                            println!("TID {} - Received ThreadDoneApplying signal, total received: {}", thread_index, received_done_applying_signals);
+//                             println!("TID {} - Received ThreadDoneApplying signal, total received: {}", thread_index, received_done_applying_signals);
 
                             if received_done_applying_signals == applying_threads_count {
                                 break;
@@ -203,7 +203,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                     }
 
                     if done_applying && !signalled_done_applying {
-                        println!("TID {} - Signalling ThreadDoneApplying", thread_index);
+//                         println!("TID {} - Signalling ThreadDoneApplying", thread_index);
                         for sender in &senders {
                             sender.send(Message::ThreadDoneApplying).unwrap();
                         }
@@ -211,7 +211,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                     }
                 }
 
-                println!("TID {} - Saving result...", thread_index);
+//                 println!("TID {} - Saving result...", thread_index);
 
                 // Rollback the last applied patch and generate .rej files if any
                 for applied_patch in applied_patches.iter().rev() {
