@@ -582,7 +582,9 @@ impl<'a> InternedFilePatch<'a> {
         lazy_static! {
             static ref MINUS_FILENAME: Regex = Regex::new(r"^--- ([^\t]+)").unwrap();
             static ref PLUS_FILENAME: Regex = Regex::new(r"^\+\+\+ ([^\t]+)").unwrap();
-            static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@(?P<place_name>.*)").unwrap();
+
+            // Warning: It seems that patch accepts if the second '@' in the second "@@" group is missing!
+            static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@?(?P<place_name>.*)").unwrap();
         }
 
         while let Some(line) = lines.next() {
