@@ -24,13 +24,15 @@ enum Message<'a> {
     ThreadDoneApplying,
 }
 
-pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, strip: usize) -> Result<(), Error> {
+pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, strip: usize, threads: usize) -> Result<(), Error> {
     let patches_path = patches_path.as_ref();
 
-    let applying_threads_count: usize = 7;
+    println!("Applying {} patches using {} threads...", patch_filenames.len(), threads);
 
-
-    println!("Patching...");
+    // Loading and parsing of patches is done by two threads, but we consider it as
+    // one thread - the first one should use almost no CPU, but is always blocked on IO.
+    // The applying threads will use the remaining threads.
+    let applying_threads_count: usize = std::cmp::max(threads, 2) - 1;
 
     let arena_ = FileArena::new();
 

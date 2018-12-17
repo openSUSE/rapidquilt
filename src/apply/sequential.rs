@@ -26,11 +26,11 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
 //         File::create(".pc/applied-patches")?
 //     };
 
-    println!("Patching...");
+    println!("Applying {} patches single-threaded...", patch_filenames.len());
 
     let patches_path = patches_path.as_ref();
     for patch_filename in patch_filenames {
-        println!("Patch: {:?}", patch_filename);
+//         println!("Patch: {:?}", patch_filename);
 
         let data = arena.load_file(patches_path.join(patch_filename))?;
         let mut text_file_patches = patch::parse_unified(&data, strip)?;
@@ -94,7 +94,7 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
     println!("Saving result...");
 
     for (filename, file) in &modified_files {
-        println!("Modified file: {:?}", filename);
+//         println!("Modified file: {:?}", filename);
         let _ = fs::remove_file(filename);
         if let Some(parent) = filename.parent() {
             fs::create_dir_all(parent)?;

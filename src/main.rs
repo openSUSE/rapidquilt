@@ -59,5 +59,13 @@ fn main() {
             std::path::PathBuf::from(line)
         }).collect();
 
-    apply_patches_parallel(&patch_filenames, ".", 1).unwrap();
+    let threads = env::var("RAPIDQUILT_THREADS").ok()
+        .and_then(|value_txt| value_txt.parse().ok())
+        .unwrap_or_else(|| num_cpus::get());
+
+    if threads <= 1 {
+        apply_patches(&patch_filenames, ".", 1).unwrap();
+    } else {
+        apply_patches_parallel(&patch_filenames, ".", 1, threads).unwrap();
+    }
 }
