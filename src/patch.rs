@@ -399,6 +399,7 @@ impl<'a> InternedFilePatch<'a> {
         };
 
         interned_file.content = new_content.clone();
+        interned_file.deleted = false;
 
         FilePatchApplyReport::single_hunk_success(0)
     }
@@ -416,6 +417,7 @@ impl<'a> InternedFilePatch<'a> {
         }
 
         interned_file.content.clear();
+        interned_file.deleted = true;
 
         FilePatchApplyReport::single_hunk_success(0)
     }
@@ -426,6 +428,11 @@ impl<'a> InternedFilePatch<'a> {
         let mut last_hunk_offset = 0isize;
 
         let mut for_each_hunk = |i, hunk: &Hunk<LineId>| {
+            if interned_file.deleted {
+                report.push_hunk_failure();
+                return;
+            }
+
             let (part_add, part_remove) = match direction {
                 PatchDirection::Forward => (&hunk.add, &hunk.remove),
                 PatchDirection::Revert => (&hunk.remove, &hunk.add),

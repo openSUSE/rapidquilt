@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use failure::Error;
 use seahash;
 
-use crate::apply::make_rej_filename;
+use crate::apply::common::*;
 use crate::file_arena::FileArena;
 use crate::patch::{self, PatchDirection, FilePatchKind, InternedFilePatch, FilePatchApplyReport};
 use crate::line_interner::LineInterner;
@@ -19,7 +19,6 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
     let mut interner = LineInterner::new();
 
     let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
-    let mut removed_files = HashSet::<PathBuf, BuildHasherDefault<seahash::SeaHasher>>::default();
 
 //     let mut applied_patches_file = {
 //         fs::create_dir_all(".pc")?;
@@ -41,22 +40,15 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
 
         for file_patch in &file_patches {
             let mut file = modified_files.entry(file_patch.filename.clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
-                let data = match arena.load_file(&file_patch.filename) {
-                    Ok(data) => data,
-                    Err(_) => &[], // If the file doesn't exist, make empty one. TODO: Differentiate between "doesn't exist" and other errors!
-                };
-                InternedFile::new(&mut interner, &data)
+                match arena.load_file(&file_patch.filename) {
+                    Ok(data) => InternedFile::new(&mut interner, &data),
+                    Err(_) => InternedFile::new_non_existent(), // If the file doesn't exist, make empty one. TODO: Differentiate between "doesn't exist" and other errors!
+                }
             });
 
 //             backup_file(patch_filename, file_patch.filename, file, &interner.lock().unwrap())?;
 
-            removed_files.remove(&file_patch.filename);
-
             let report = file_patch.apply(&mut file, PatchDirection::Forward);
-
-            if file_patch.kind == FilePatchKind::Delete {
-                removed_files.insert(file_patch.filename.clone());
-            }
 
             if report.failed() {
                 any_report_failed = true;
@@ -72,10 +64,6 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
             for (file_patch, report) in file_patches.iter().zip(reports) {
                 let mut file = modified_files.get_mut(&file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
                 file_patch.rollback(&mut file, PatchDirection::Forward, &report);
-
-                if file_patch.kind == FilePatchKind::Delete {
-                    removed_files.remove(&file_patch.filename);
-                }
 
                 if report.failed() {
                     let rej_filename = make_rej_filename(&file_patch.filename);
@@ -94,18 +82,7 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
     println!("Saving result...");
 
     for (filename, file) in &modified_files {
-//         println!("Modified file: {:?}", filename);
-        let _ = fs::remove_file(filename);
-        if let Some(parent) = filename.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut output = File::create(filename)?;
-        file.write_to(&interner, &mut output)?;
-    }
-
-    for filename in &removed_files {
-//         println!("Removed file: {:?}", filename);
-        fs::remove_file(filename)?;
+        save_modified_file(filename, file, &interner)?;
     }
 
     Ok(())

@@ -7,7 +7,8 @@ use crate::line_interner::{LineId, LineInterner};
 
 #[derive(Clone, Debug)]
 pub struct InternedFile {
-    pub content: Vec<LineId>
+    pub content: Vec<LineId>,
+    pub deleted: bool,
 }
 
 const AVG_LINE_LENGTH: usize = 30; // Heuristics, for initial estimation of line count.
@@ -23,11 +24,21 @@ impl InternedFile {
         );
 
         InternedFile {
-            content
+            content,
+            deleted: false,
+        }
+    }
+
+    pub fn new_non_existent() -> Self {
+        InternedFile {
+            content: Vec::new(),
+            deleted: true,
         }
     }
 
     pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
+        assert!(!self.deleted);
+
         let mut line_ids = self.content.iter().peekable();
         while let Some(line_id) = line_ids.next() {
             writer.write(interner.get(*line_id).unwrap())?;
