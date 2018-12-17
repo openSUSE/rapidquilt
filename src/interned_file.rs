@@ -37,7 +37,8 @@ impl InternedFile {
     }
 
     pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
-        assert!(!self.deleted);
+        // Note: Even self.deleted files can be saved - quilt backup file for a file
+        //       that did not exist is an empty file.
 
         let mut line_ids = self.content.iter().peekable();
         while let Some(line_id) = line_ids.next() {

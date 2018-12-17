@@ -8,37 +8,22 @@ mod interned_file;
 mod patch;
 
 use std::env;
-use std::fs::File;
-use std::fs;
 use std::io;
 use std::io::BufRead;
-use std::path::{Path, PathBuf};
 
 use failure::Error;
 
 use getopts::Options;
 
 use crate::apply::{apply_patches, apply_patches_parallel};
-use crate::line_interner::LineInterner;
-use crate::interned_file::InternedFile;
 
-
-fn backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
-    let mut path = PathBuf::from(".pc");
-    path.push(patch_filename);
-    path.push(&filename);
-
-    fs::create_dir_all(&path.parent().unwrap())?;
-    original_file.write_to(interner, &mut File::create(path)?)?;
-
-    Ok(())
-}
 
 fn main() {
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
     opts.optopt("d", "directory", "working directory", "NAME");
+    opts.optopt("p", "patch-directory", "directory with patches", "NAME");
 //     opts.optflag("h", "help", "print this help menu");
 
     let matches = opts.parse(&args[1..]).unwrap();
@@ -47,6 +32,8 @@ fn main() {
         println!("Changing directory to {}", directory);
         env::set_current_dir(directory).unwrap();
     }
+
+    let patch_directory = matches.opt_str("p").unwrap_or(".".to_string());
 
     let stdin = io::stdin();
 
@@ -64,8 +51,8 @@ fn main() {
         .unwrap_or_else(|| num_cpus::get());
 
     if threads <= 1 {
-        apply_patches(&patch_filenames, ".", 1).unwrap();
+        apply_patches(&patch_filenames, patch_directory, 1).unwrap();
     } else {
-        apply_patches_parallel(&patch_filenames, ".", 1, threads).unwrap();
+        apply_patches_parallel(&patch_filenames, patch_directory, 1, threads).unwrap();
     }
 }

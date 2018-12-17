@@ -74,7 +74,7 @@ END
 }
 
 apply_rapid_patches() {
-    printf "$PWD/%s\n" ${PATCHES_BEFORE[@]} | rapidquilt -d $PATCH_DIR
+    printf "%s\n" ${PATCHES_BEFORE[@]} | rapidquilt -d $PATCH_DIR -p $PWD
     status=$?
 
     PATCHES=( ${PATCHES_AFTER[@]} )

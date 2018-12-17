@@ -222,12 +222,13 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                     }
                 }
 
-//                 println!("TID {} - Saving result...", thread_index);
+                // Make a last load. From now on it won't be changing.
+                let earliest_broken_patch_index = earliest_broken_patch_index.load(Ordering::Acquire);
 
                 // Rollback the last applied patch and generate .rej files if any
-                for applied_patch in applied_patches.iter().rev() {
-                    assert!(applied_patch.index <= earliest_broken_patch_index.load(Ordering::Acquire));
-                    if applied_patch.index < earliest_broken_patch_index.load(Ordering::Acquire) {
+                while let Some(applied_patch) = applied_patches.last() {
+                    assert!(applied_patch.index <= earliest_broken_patch_index);
+                    if applied_patch.index < earliest_broken_patch_index {
                         break;
                     }
 
@@ -240,10 +241,31 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                         let mut output = File::create(rej_filename)?;
                         applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)?;
                     }
+
+                    applied_patches.pop();
+                }
+
+//                 println!("TID {} - Saving result...", thread_index);
+
+                if thread_index == 0 {
+                    println!("Saving modified files...");
                 }
 
                 for (filename, file) in &modified_files {
                     save_modified_file(filename, file, &interner)?;
+                }
+
+                if earliest_broken_patch_index != std::usize::MAX {
+                    if thread_index == 0 {
+                        println!("Saving quilt backup files...");
+                    }
+
+                    for applied_patch in applied_patches.iter().rev() {
+                        let mut file = modified_files.get_mut(&applied_patch.file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
+                        applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+
+                        save_backup_file(&patch_filenames[applied_patch.index], &applied_patch.file_patch.filename, &file, &interner)?;
+                    }
                 }
 
                 Ok(())
