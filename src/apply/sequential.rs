@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use failure::Error;
 use seahash;
 
+use crate::apply::make_rej_filename;
 use crate::file_arena::FileArena;
 use crate::patch::{self, PatchDirection, FilePatchKind, InternedFilePatch, FilePatchApplyReport};
 use crate::line_interner::LineInterner;
@@ -67,7 +68,7 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
         if any_report_failed {
             println!("Patch failed! Reports: {:?}", reports);
 
-            // Rollback the file
+            // Rollback the files and generate .rej files
             for (file_patch, report) in file_patches.iter().zip(reports) {
                 let mut file = modified_files.get_mut(&file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
                 file_patch.rollback(&mut file, PatchDirection::Forward, &report);
@@ -75,9 +76,14 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
                 if file_patch.kind == FilePatchKind::Delete {
                     removed_files.remove(&file_patch.filename);
                 }
-            }
 
-            // TODO: Generate .rej file
+                if report.failed() {
+                    let rej_filename = make_rej_filename(&file_patch.filename);
+                    println!("Saving rejects to {:?}", rej_filename);
+                    let mut output = File::create(rej_filename)?;
+                    file_patch.write_rej_to(&interner, &mut output, &report)?;
+                }
+            }
 
             break;
         }

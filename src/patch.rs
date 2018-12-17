@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::hash::{Hash, Hasher};
 use std::vec::Vec;
 use std::path::PathBuf;
@@ -13,7 +14,7 @@ use crate::line_interner::{LineId, LineInterner, EMPTY_LINE_ID, EMPTY_LINE_SLICE
 use crate::interned_file::InternedFile;
 
 
-const NEW_LINE_TAG: &[u8] = b"\\ No newline at end of file";
+const NO_NEW_LINE_TAG: &[u8] = b"\\ No newline at end of file";
 const NULL_FILENAME: &[u8] = b"/dev/null";
 
 
@@ -44,15 +45,19 @@ pub enum HunkPosition {
 }
 
 #[derive(Clone, Debug)]
-pub struct Hunk<Line> {
+pub struct Hunk<'a, Line> {
     remove: HunkPart<Line>,
     add: HunkPart<Line>,
 
     position: HunkPosition,
+
+    // TODO: Better name?
+    /// The string that follows the second "@@"
+    place_name: &'a [u8],
 }
 
-impl<Line> Hunk<Line> {
-    pub fn new(remove_line: isize, add_line: isize) -> Self {
+impl<'a, Line> Hunk<'a, Line> {
+    pub fn new(remove_line: isize, add_line: isize, place_name: &'a [u8]) -> Self {
         Hunk {
             remove: HunkPart {
                 content: Vec::new(),
@@ -65,17 +70,117 @@ impl<Line> Hunk<Line> {
             },
 
             position: HunkPosition::Middle,
+
+            place_name,
         }
     }
 }
 
-impl<'a> Hunk<&'a [u8]> {
-    pub fn intern(self, interner: &mut LineInterner<'a>) -> Hunk<LineId> {
+impl<'a> Hunk<'a, &'a [u8]> {
+    pub fn intern(self, interner: &mut LineInterner<'a>) -> Hunk<'a, LineId> {
         Hunk {
             remove: self.remove.intern(interner),
             add: self.add.intern(interner),
             position: self.position,
+            place_name: self.place_name,
         }
+    }
+}
+
+impl<'a> Hunk<'a, LineId> {
+    pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, filepatch_kind: FilePatchKind) -> Result<(), Error> {
+        // If you think this looks more complicated than it should be, it is because it must correctly print out "No newline at the end of file" lines
+
+        let hunk_goes_to_end = (self.position == HunkPosition::End || filepatch_kind != FilePatchKind::Modify);
+
+        let add_has_end_empty_line = hunk_goes_to_end && self.add.content.last() == Some(&EMPTY_LINE_ID);
+        let add_count = if add_has_end_empty_line {
+            self.add.content.len() - 1
+        } else {
+            self.add.content.len()
+        };
+
+        let remove_has_end_empty_line = hunk_goes_to_end && self.remove.content.last() == Some(&EMPTY_LINE_ID);
+        let remove_count = if remove_has_end_empty_line {
+            self.remove.content.len() - 1
+        } else {
+            self.remove.content.len()
+        };
+
+        let add_line = if filepatch_kind == FilePatchKind::Delete {
+            0
+        } else {
+            self.add.target_line + 1
+        };
+
+        let remove_line = if filepatch_kind == FilePatchKind::Create {
+            0
+        } else {
+            self.remove.target_line + 1
+        };
+
+        write!(writer, "@@ -{},{} +{},{} @@", remove_line, remove_count, add_line, add_count)?;
+        writer.write(self.place_name)?;
+        writer.write(b"\n")?;
+
+        fn find_closest_match(a: &[LineId], b: &[LineId]) -> (usize, usize) {
+            for i in 0..(a.len() + b.len()) {
+                for j in 0..std::cmp::min(i + 1, a.len()) {
+                    if (i - j) < b.len() && a[j] == b[i - j] {
+                        return (j, i - j);
+                    }
+                }
+            }
+
+            (a.len(), b.len())
+        }
+
+        let mut write_line = |c: u8, line_id: LineId, last_line: bool| -> Result<(), Error> {
+            // We mustn't write the empty line at the end
+            if !last_line || line_id != EMPTY_LINE_ID {
+                writer.write(&[c])?;
+                writer.write(interner.get(line_id).unwrap())?;
+                writer.write(b"\n")?;
+            }
+
+            // If it was last line and wasn't empty line, write the No new line message...
+            if last_line && line_id != EMPTY_LINE_ID {
+                writer.write(NO_NEW_LINE_TAG)?;
+                writer.write(b"\n")?;
+            }
+
+            Ok(())
+        };
+
+        let mut add_i = 0;
+        let mut remove_i = 0;
+
+        let add = &self.add.content;
+        let remove = &self.remove.content;
+
+        while add_i < add.len() || remove_i < remove.len() {
+            let (add_count, remove_count) = find_closest_match(&add[add_i..], &remove[remove_i..]);
+            for _ in 0..remove_count {
+                write_line(b'-', remove[remove_i], hunk_goes_to_end && remove_i == remove.len() - 1)?;
+                remove_i += 1;
+            }
+            for _ in 0..add_count {
+                write_line(b'+', add[add_i], hunk_goes_to_end && add_i == add.len() - 1)?;
+                add_i += 1;
+            }
+            if add_i < add.len() && remove_i < remove.len() {
+                if hunk_goes_to_end && add_has_end_empty_line != remove_has_end_empty_line && (remove_i == remove.len() - 1 || add_i == add.len() - 1) {
+                    write_line(b'-', remove[remove_i], hunk_goes_to_end && remove_i == remove.len() - 1)?;
+                    write_line(b'+', add[add_i],       hunk_goes_to_end && add_i == add.len() - 1)?;
+                } else {
+                    write_line(b' ', remove[remove_i], hunk_goes_to_end && remove_i == remove.len() - 1)?;
+                }
+                remove_i += 1;
+                add_i += 1;
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -150,7 +255,7 @@ impl FilePatchApplyReport {
 }
 
 #[derive(Debug)]
-pub struct FilePatch<Line> {
+pub struct FilePatch<'a, Line> {
     // TODO: Review if those can be safely public
 
     pub kind: FilePatchKind,
@@ -158,10 +263,10 @@ pub struct FilePatch<Line> {
     pub filename: PathBuf,
     pub filename_hash: u64,
 
-    pub hunks: Vec<Hunk<Line>>,
+    pub hunks: Vec<Hunk<'a, Line>>,
 }
 
-impl<Line> FilePatch<Line> {
+impl<'a, Line> FilePatch<'a, Line> {
     fn new(kind: FilePatchKind, filename: PathBuf) -> Self {
         let mut hasher = SeaHasher::default();
         filename.hash(&mut hasher);
@@ -178,11 +283,11 @@ impl<Line> FilePatch<Line> {
     }
 }
 
-pub type TextFilePatch<'a> = FilePatch<&'a [u8]>;
-pub type InternedFilePatch = FilePatch<LineId>;
+pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
+pub type InternedFilePatch<'a> = FilePatch<'a, LineId>;
 
 impl<'a> TextFilePatch<'a> {
-    pub fn intern(mut self, interner: &mut LineInterner<'a>) -> InternedFilePatch {
+    pub fn intern(mut self, interner: &mut LineInterner<'a>) -> InternedFilePatch<'a> {
         FilePatch {
             kind: self.kind,
 
@@ -194,13 +299,64 @@ impl<'a> TextFilePatch<'a> {
     }
 }
 
+impl<'a> InternedFilePatch<'a> {
+    fn write_header_to<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+        // TODO: Currently we are writing patches with `strip` level 0, which is exactly
+        //       what we need for .rej files. But we could add option to configure it?
+
+        if self.kind == FilePatchKind::Create {
+            writer.write(b"--- ")?;
+            writer.write(&NULL_FILENAME)?;
+            writer.write(b"\n")?;
+        } else {
+            writeln!(writer, "--- {}", self.filename.display())?;
+        }
+
+        if self.kind == FilePatchKind::Delete {
+            writer.write(b"+++ ")?;
+            writer.write(&NULL_FILENAME)?;
+            writer.write(b"\n")?;
+        } else {
+            writeln!(writer, "+++ {}", self.filename.display())?;
+        }
+
+        Ok(())
+    }
+
+    pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
+        self.write_header_to(writer)?;
+
+        for hunk in &self.hunks {
+            hunk.write_to(interner, writer, self.kind)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), Error> {
+        if !report.any_failed {
+            return Ok(())
+        }
+
+        self.write_header_to(writer)?;
+
+        for (hunk, report) in self.hunks.iter().zip(&report.hunk_reports) {
+            if let HunkApplyReport::Failed = report {
+                hunk.write_to(interner, writer, self.kind)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 enum ApplyMode<'a> {
     Normal,
     Rollback(&'a FilePatchApplyReport),
 }
 
-impl InternedFilePatch {
+impl<'a> InternedFilePatch<'a> {
     pub fn apply(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> FilePatchApplyReport {
         self.apply_internal(interned_file, direction, ApplyMode::Normal)
     }
@@ -421,7 +577,7 @@ impl InternedFilePatch {
         lazy_static! {
             static ref MINUS_FILENAME: Regex = Regex::new(r"^--- ([^\t]+)").unwrap();
             static ref PLUS_FILENAME: Regex = Regex::new(r"^\+\+\+ ([^\t]+)").unwrap();
-            static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@").unwrap();
+            static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@(?P<place_name>.*)").unwrap();
         }
 
         while let Some(line) = lines.next() {
@@ -459,7 +615,7 @@ impl InternedFilePatch {
 
             // Read hunks
             loop {
-                let (mut remove_line, mut remove_count, mut add_line, mut add_count) =
+                let (mut remove_line, mut remove_count, mut add_line, mut add_count, place_name) =
                     match lines.peek().and_then(|line| CHUNK.captures(line)) {
                         Some(capture) => {
                             fn parse_bytes_to_isize(bytes: &[u8]) -> isize {
@@ -473,10 +629,13 @@ impl InternedFilePatch {
                             let add_line  = parse_bytes_to_isize(capture.name("add_line").unwrap().as_bytes());
                             let add_count = capture.name("add_count").map(|m| parse_bytes_to_isize(m.as_bytes())).unwrap_or(1);
 
-                            (remove_line, remove_count, add_line, add_count)
+                            let place_name = capture.name("place_name").unwrap().as_bytes();
+
+                            (remove_line, remove_count, add_line, add_count, place_name)
                         }
                         None => break // No more hunks, next file to patch, garbage or end of file.
                     };
+
                 lines.next(); // Pull out the line we peeked
 
                 // Convert lines to zero-based numbering. But don't do that if we are creating/deleting (in that case it is 0 and would underflow)
@@ -490,7 +649,7 @@ impl InternedFilePatch {
                 } else {
                     add_line -= 1;
                 }
-                let mut hunk = Hunk::new(remove_line, add_line);
+                let mut hunk = Hunk::new(remove_line, add_line, place_name);
                 hunk.add.content.reserve(add_count as usize);
                 hunk.remove.content.reserve(remove_count as usize);
 
@@ -551,7 +710,7 @@ impl InternedFilePatch {
                                 return Err(format_err!("Badly formated patch!"));
                             }
 
-                            if lines.peek() == Some(&NEW_LINE_TAG) {
+                            if lines.peek() == Some(&NO_NEW_LINE_TAG) {
                                 lines.next(); // Skip it
                                 minus_newline_at_end = true;
                             }
@@ -567,7 +726,7 @@ impl InternedFilePatch {
                                 return Err(format_err!("Badly formated patch!"));
                             }
 
-                            if lines.peek() == Some(&NEW_LINE_TAG) {
+                            if lines.peek() == Some(&NO_NEW_LINE_TAG) {
                                 lines.next(); // Skip it
                                 plus_newline_at_end = true;
                             }
@@ -589,10 +748,10 @@ impl InternedFilePatch {
 
                 if context_suffix == 0 || context_suffix < context_prefix {
                     // If we are applying the end, add the implicit empty new line, unless there was the "No newline" tag.
-                    if !plus_newline_at_end {
+                    if !plus_newline_at_end && kind != FilePatchKind::Delete {
                         hunk.add.content.push(&EMPTY_LINE_SLICE);
                     }
-                    if !minus_newline_at_end {
+                    if !minus_newline_at_end && kind != FilePatchKind::Create {
                         hunk.remove.content.push(&EMPTY_LINE_SLICE);
                     }
                 }

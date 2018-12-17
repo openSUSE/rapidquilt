@@ -10,6 +10,7 @@ use crossbeam;
 use failure::Error;
 use seahash;
 
+use crate::apply::make_rej_filename;
 use crate::file_arena::FileArena;
 use crate::patch::{self, PatchDirection, InternedFilePatch, TextFilePatch, FilePatchKind, FilePatchApplyReport};
 use crate::line_interner::LineInterner;
@@ -19,7 +20,7 @@ use crate::interned_file::InternedFile;
 enum Message<'a> {
     NextPatch(usize, TextFilePatch<'a>),
     AllPatchesSent,
-    NewLastPatchIndex,
+    NewEarliestBrokenPatchIndex,
     ThreadDoneApplying,
 }
 
@@ -33,10 +34,11 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
     let arena_ = FileArena::new();
 
-    // Note that we make sure that every thread applies up to and including the last
-    // patch - even if the last patch is the one that failed to apply. Only after every
-    // thread synchronized on it, we also roll it back and generate it reject files.
-    let last_patch_index_ = AtomicUsize::new(patch_filenames.len() - 1);
+    // This is the earliest patch that was detected as broken. Note that this patch
+    // **will be fully applied** by all threads and applying stops after that.
+    // Only after that will all threads rollback to the patch before this one.
+    // This is necessary to have complete set of ".rej" files.
+    let earliest_broken_patch_index_ = AtomicUsize::new(std::usize::MAX);
 
     // Prepare channels to send messages to the applying threads.
     let (senders_, receivers): (Vec<_>, Vec<_>) = (0..applying_threads_count).map(|_| {
@@ -45,12 +47,12 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
     crossbeam::thread::scope(|scope| {
         let arena = &arena_;
-        let last_patch_index = &last_patch_index_;
+        let earliest_broken_patch_index = &earliest_broken_patch_index_;
 
         let senders = senders_.clone();
         scope.spawn(move |_| {
             for (index, patch_filename) in patch_filenames.iter().enumerate() {
-                if index > last_patch_index.load(Ordering::Acquire) {
+                if index > earliest_broken_patch_index.load(Ordering::Acquire) {
                     break;
                 }
 
@@ -89,9 +91,9 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
             scope.spawn(move |_| -> Result<(), Error> {
                 let mut interner = LineInterner::new();
 
-                struct PatchStatus {
+                struct PatchStatus<'a> {
                     index: usize,
-                    file_patch: InternedFilePatch,
+                    file_patch: InternedFilePatch<'a>,
                     report: FilePatchApplyReport,
                 };
 
@@ -107,7 +109,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                 for message in receiver.iter() {
                     match message {
                         Message::NextPatch(index, text_file_patch) => {
-                            if index > last_patch_index.load(Ordering::Acquire) {
+                            if index > earliest_broken_patch_index.load(Ordering::Acquire) {
                                 println!("TID {} - Skipping patch #{} file {:?}, we are supposed to stop before this.", thread_index, index, text_file_patch.filename);
                                 done_applying = true;
                                 continue;
@@ -138,15 +140,15 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                             if report.failed() {
                                 println!("TID {} - Patch #{} failed to apply, signaling everyone! Report: {:?}", thread_index, index, report);
 
-                                // Atomically set `last_patch_index = min(last_patch_index, index)`.
-                                let mut current = last_patch_index.load(Ordering::Acquire);
+                                // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
+                                let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
                                 while index < current {
-                                    current = last_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
+                                    current = earliest_broken_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
                                 }
 
-                                // Notify other threads that the last_patch_index changed
+                                // Notify other threads that the earliest_broken_patch_index changed
                                 for sender in &senders {
-                                    sender.send(Message::NewLastPatchIndex).unwrap();
+                                    sender.send(Message::NewEarliestBrokenPatchIndex).unwrap();
                                 }
                             }
 
@@ -156,19 +158,19 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                                 report,
                             });
                         },
-                        Message::NewLastPatchIndex => {
-                            println!("TID {} - Got new last_patch_index = {}", thread_index, last_patch_index.load(Ordering::Acquire));
+                        Message::NewEarliestBrokenPatchIndex => {
+                            println!("TID {} - Got new earliest_broken_patch_index = {}", thread_index, earliest_broken_patch_index.load(Ordering::Acquire));
 
                             // If we already applied past this stop point, signal that we are done forward applying.
                             if let Some(applied_patch) = applied_patches.last() {
-                                if applied_patch.index > last_patch_index.load(Ordering::Acquire) {
+                                if applied_patch.index > earliest_broken_patch_index.load(Ordering::Acquire) {
                                     done_applying = true;
                                 }
                             }
 
                             // If we already applied past this stop point, revert all applied patches until we get to the right point.
                             while let Some(applied_patch) = applied_patches.last() {
-                                if applied_patch.index <= last_patch_index.load(Ordering::Acquire) {
+                                if applied_patch.index <= earliest_broken_patch_index.load(Ordering::Acquire) {
                                     break;
                                 }
 
@@ -211,7 +213,27 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
                 println!("TID {} - Saving result...", thread_index);
 
-                // TODO: Rollback the last failed patch, if any, and generate .rej files.
+                // Rollback the last applied patch and generate .rej files if any
+                for applied_patch in applied_patches.iter().rev() {
+                    assert!(applied_patch.index <= earliest_broken_patch_index.load(Ordering::Acquire));
+                    if applied_patch.index < earliest_broken_patch_index.load(Ordering::Acquire) {
+                        break;
+                    }
+
+                    let mut file = modified_files.get_mut(&applied_patch.file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
+                    applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+
+                    if applied_patch.file_patch.kind == FilePatchKind::Delete {
+                        removed_files.remove(&applied_patch.file_patch.filename);
+                    }
+
+                    if applied_patch.report.failed() {
+                        let rej_filename = make_rej_filename(&applied_patch.file_patch.filename);
+                        println!("Saving rejects to {:?}", rej_filename);
+                        let mut output = File::create(rej_filename)?;
+                        applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)?;
+                    }
+                }
 
                 for (filename, file) in &modified_files {
 //                     println!("Modified file: {:?}", filename);
