@@ -65,7 +65,10 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 //                 println!("Loading patch #{}: {:?}", index, patch_filename);
 
                 let raw_patch_data = arena.load_file(patches_path.join(patch_filename));
-                raw_patch_sender.send((index, raw_patch_data)).unwrap();
+                if let Err(_) = raw_patch_sender.send((index, raw_patch_data)) {
+                    // If the receiving thread is done, we are done too.
+                    break;
+                }
             }
         });
 
