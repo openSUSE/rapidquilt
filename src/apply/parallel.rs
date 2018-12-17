@@ -39,13 +39,9 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
     let last_patch_index_ = AtomicUsize::new(patch_filenames.len() - 1);
 
     // Prepare channels to send messages to the applying threads.
-    let mut senders_ = Vec::new();
-    let mut receivers = Vec::new();
-    for _ in 0..applying_threads_count {
-        let (s, r) = crossbeam::channel::bounded::<Message>(32); // TODO: Fine-tune the capacity.
-        senders_.push(s);
-        receivers.push(r);
-    }
+    let (senders_, receivers): (Vec<_>, Vec<_>) = (0..applying_threads_count).map(|_| {
+        crossbeam::channel::bounded::<Message>(32) // TODO: Fine-tune the capacity.
+    }).unzip();
 
     crossbeam::thread::scope(|scope| {
         let arena = &arena_;
