@@ -45,11 +45,15 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
         crossbeam::channel::bounded::<Message>(32) // TODO: Fine-tune the capacity.
     }).unzip();
 
+    // Prepare channel to send loaded patch files
+    let (raw_patch_sender, raw_patch_receiver) = crossbeam::channel::bounded::<(usize, Result<&[u8], Error>)>(16); // We'll be preloading up to this many patches in advance.
+
     crossbeam::thread::scope(|scope| {
         let arena = &arena_;
         let earliest_broken_patch_index = &earliest_broken_patch_index_;
 
-        let senders = senders_.clone();
+        // This thread loads the patch files in and sends them into the channel for parsing in next step.
+        // It should keep the IO utilized unless the channel fills up, then it will wait.
         scope.spawn(move |_| {
             for (index, patch_filename) in patch_filenames.iter().enumerate() {
                 if index > earliest_broken_patch_index.load(Ordering::Acquire) {
@@ -58,10 +62,23 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
 //                 println!("Loading patch #{}: {:?}", index, patch_filename);
 
-                let text_file_patches = (|| -> Result<_, Error> { // Poor man's try block
-                    let data = arena.load_file(patches_path.join(patch_filename))?;
-                    patch::parse_unified(&data, strip)
-                })();
+                let raw_patch_data = arena.load_file(patches_path.join(patch_filename));
+                raw_patch_sender.send((index, raw_patch_data)).unwrap();
+            }
+        });
+
+        // This thread parses the patches, breaks them into individual file patches and sends those
+        // to the individual applying threads based on the target filename.
+        let senders = senders_.clone();
+        scope.spawn(move |_| {
+            for (index, raw_patch_data) in raw_patch_receiver.iter() {
+                if index > earliest_broken_patch_index.load(Ordering::Acquire) {
+                    break;
+                }
+
+//                 println!("Parsing patch #{}: {:?}", index, patch_filename);
+
+                let text_file_patches = raw_patch_data.and_then(|d| patch::parse_unified(d, strip));
 
                 match text_file_patches {
                     Ok(mut text_file_patches) => {
@@ -84,6 +101,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
             }
         });
 
+        // These threads each process FilePatches that target filenames assigned to them.
         for (thread_index, receiver) in receivers.iter().enumerate() {
             let arena = &arena_;
             let senders = senders_.clone();
