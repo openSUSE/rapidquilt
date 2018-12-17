@@ -512,11 +512,12 @@ impl<'a> InternedFilePatch<'a> {
                     //             set of lines matching the context given in the hunk."
 
                     // XXX: This needs to be done better! More optimized!
+                    let benchmark_target_line = target_line + last_hunk_offset;
                     let mut best_target_line: Option<isize> = None;
                     for possible_target_line in 0..=(interned_file.content.len() as isize - part_remove.content.len() as isize) {
                         if matches(&part_remove.content, &interned_file.content, possible_target_line) {
 //                             println!("... found match at {}", possible_target_line);
-                            if best_target_line.is_none() || (possible_target_line - target_line).abs() < (best_target_line.unwrap() - target_line).abs() {
+                            if best_target_line.is_none() || (possible_target_line - benchmark_target_line).abs() < (best_target_line.unwrap() - benchmark_target_line).abs() {
                                 best_target_line = Some(possible_target_line);
                             }
                         }
