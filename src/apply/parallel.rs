@@ -113,12 +113,6 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
             scope.spawn(move |_| -> Result<(), Error> {
                 let mut interner = LineInterner::new();
 
-                struct PatchStatus<'a> {
-                    index: usize,
-                    file_patch: InternedFilePatch<'a>,
-                    report: FilePatchApplyReport,
-                };
-
                 let mut applied_patches = Vec::<PatchStatus>::new();
 
                 let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
@@ -170,6 +164,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                                 index,
                                 file_patch,
                                 report,
+                                patch_filename: &patch_filenames[index],
                             });
                         },
                         Message::NewEarliestBrokenPatchIndex => {
@@ -225,24 +220,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                 let earliest_broken_patch_index = earliest_broken_patch_index.load(Ordering::Acquire);
 
                 // Rollback the last applied patch and generate .rej files if any
-                while let Some(applied_patch) = applied_patches.last() {
-                    assert!(applied_patch.index <= earliest_broken_patch_index);
-                    if applied_patch.index < earliest_broken_patch_index {
-                        break;
-                    }
-
-                    let mut file = modified_files.get_mut(&applied_patch.file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
-                    applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
-
-                    if applied_patch.report.failed() {
-                        let rej_filename = make_rej_filename(&applied_patch.file_patch.filename);
-                        println!("Saving rejects to {:?}", rej_filename);
-                        let mut output = File::create(rej_filename)?;
-                        applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)?;
-                    }
-
-                    applied_patches.pop();
-                }
+                rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner)?;
 
 //                 println!("TID {} - Saving result...", thread_index);
 
@@ -259,12 +237,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                         println!("Saving quilt backup files...");
                     }
 
-                    for applied_patch in applied_patches.iter().rev() {
-                        let mut file = modified_files.get_mut(&applied_patch.file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
-                        applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
-
-                        save_backup_file(&patch_filenames[applied_patch.index], &applied_patch.file_patch.filename, &file, &interner)?;
-                    }
+                    rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner)?;
                 }
 
                 Ok(())

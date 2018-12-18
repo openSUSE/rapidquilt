@@ -17,6 +17,8 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
     let arena = FileArena::new();
     let mut interner = LineInterner::new();
 
+    let mut applied_patches = Vec::<PatchStatus>::new();
+
     let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     let mut final_patch = 0;
@@ -32,10 +34,9 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
         let data = arena.load_file(patches_path.join(patch_filename))?;
         let mut text_file_patches = patch::parse_unified(&data, strip)?;
         let file_patches: Vec<_> = text_file_patches.drain(..).map(|text_file_patch| text_file_patch.intern(&mut interner)).collect();
-        let mut reports = Vec::with_capacity(file_patches.len());
         let mut any_report_failed = false;
 
-        for file_patch in &file_patches {
+        for file_patch in file_patches {
             let mut file = modified_files.entry(file_patch.filename.clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
                 match arena.load_file(&file_patch.filename) {
                     Ok(data) => InternedFile::new(&mut interner, &data),
@@ -49,33 +50,30 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
                 any_report_failed = true;
             }
 
-            reports.push(report);
+            applied_patches.push(PatchStatus {
+                index,
+                file_patch,
+                report,
+                patch_filename: &patch_filenames[index],
+            });
         }
 
         if any_report_failed {
-            println!("Patch failed! Reports: {:?}", reports);
-
-            // Rollback the files and generate .rej files
-            for (file_patch, report) in file_patches.iter().zip(reports) {
-                let mut file = modified_files.get_mut(&file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
-                file_patch.rollback(&mut file, PatchDirection::Forward, &report);
-
-                if report.failed() {
-                    let rej_filename = make_rej_filename(&file_patch.filename);
-                    println!("Saving rejects to {:?}", rej_filename);
-                    let mut output = File::create(rej_filename)?;
-                    file_patch.write_rej_to(&interner, &mut output, &report)?;
-                }
-            }
-
+            rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner)?;
             break;
         }
     }
 
-    println!("Saving result...");
+    println!("Saving modified files...");
 
     for (filename, file) in &modified_files {
         save_modified_file(filename, file, &interner)?;
+    }
+
+    if final_patch != patch_filenames.len() {
+        println!("Saving quilt backup files...");
+
+        rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner)?;
     }
 
     Ok(ApplyResult {
