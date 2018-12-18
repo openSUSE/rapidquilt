@@ -1,6 +1,6 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::io::Write;
+use std::io::{BufWriter, Write};
 
 use failure::Error;
 
@@ -41,6 +41,8 @@ impl InternedFile {
     pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
         // Note: Even self.deleted files can be saved - quilt backup file for a file
         //       that did not exist is an empty file.
+
+        let mut writer = BufWriter::new(writer);
 
         let mut line_ids = self.content.iter().peekable();
         while let Some(line_id) = line_ids.next() {

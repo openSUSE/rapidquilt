@@ -1,6 +1,6 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::hash::{Hash, Hasher};
 use std::vec::Vec;
 use std::path::PathBuf;
@@ -90,7 +90,7 @@ impl<'a> Hunk<'a, &'a [u8]> {
 }
 
 impl<'a> Hunk<'a, LineId> {
-    pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, filepatch_kind: FilePatchKind) -> Result<(), Error> {
+    pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut BufWriter<W>, filepatch_kind: FilePatchKind) -> Result<(), Error> {
         // If you think this looks more complicated than it should be, it is because it must correctly print out "No newline at the end of file" lines
 
         let hunk_goes_to_end = (self.position == HunkPosition::End || filepatch_kind != FilePatchKind::Modify);
@@ -302,7 +302,7 @@ impl<'a> TextFilePatch<'a> {
 }
 
 impl<'a> InternedFilePatch<'a> {
-    fn write_header_to<W: Write>(&self, writer: &mut W) -> Result<(), Error> {
+    fn write_header_to<W: Write>(&self, writer: &mut BufWriter<W>) -> Result<(), Error> {
         // TODO: Currently we are writing patches with `strip` level 0, which is exactly
         //       what we need for .rej files. But we could add option to configure it?
 
@@ -326,10 +326,12 @@ impl<'a> InternedFilePatch<'a> {
     }
 
     pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
-        self.write_header_to(writer)?;
+        let mut writer = BufWriter::new(writer);
+
+        self.write_header_to(&mut writer)?;
 
         for hunk in &self.hunks {
-            hunk.write_to(interner, writer, self.kind)?;
+            hunk.write_to(interner, &mut writer, self.kind)?;
         }
 
         Ok(())
@@ -340,11 +342,13 @@ impl<'a> InternedFilePatch<'a> {
             return Ok(())
         }
 
-        self.write_header_to(writer)?;
+        let mut writer = BufWriter::new(writer);
+
+        self.write_header_to(&mut writer)?;
 
         for (hunk, report) in self.hunks.iter().zip(&report.hunk_reports) {
             if let HunkApplyReport::Failed = report {
-                hunk.write_to(interner, writer, self.kind)?;
+                hunk.write_to(interner, &mut writer, self.kind)?;
             }
         }
 
