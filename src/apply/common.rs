@@ -1,4 +1,3 @@
-use std::ffi::OsStr;
 use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 
@@ -17,7 +16,7 @@ pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
     let path = path.as_ref();
 
     match path.extension() {
-        Some(extension) => path.with_extension((extension.to_string_lossy().into_owned() + ".rej")),
+        Some(extension) => path.with_extension(extension.to_string_lossy().into_owned() + ".rej"),
         None => path.with_extension("rej")
     }
 }

@@ -1,6 +1,3 @@
-use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
-
 mod sequential;
 mod parallel;
 mod common;

@@ -1,6 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
-use std::fs;
 use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 
@@ -22,11 +21,6 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
 
     let mut final_patch = 0;
 
-//     let mut applied_patches_file = {
-//         fs::create_dir_all(".pc")?;
-//         File::create(".pc/applied-patches")?
-//     };
-
     println!("Applying {} patches single-threaded...", patch_filenames.len());
 
     let patches_path = patches_path.as_ref();
@@ -40,7 +34,6 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
         let file_patches: Vec<_> = text_file_patches.drain(..).map(|text_file_patch| text_file_patch.intern(&mut interner)).collect();
         let mut reports = Vec::with_capacity(file_patches.len());
         let mut any_report_failed = false;
-//         let mut failure_reports = HashMap::<PathBuf, FilePatchApplyReport>::new();
 
         for file_patch in &file_patches {
             let mut file = modified_files.entry(file_patch.filename.clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
@@ -49,8 +42,6 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
                     Err(_) => InternedFile::new_non_existent(), // If the file doesn't exist, make empty one. TODO: Differentiate between "doesn't exist" and other errors!
                 }
             });
-
-//             backup_file(patch_filename, file_patch.filename, file, &interner.lock().unwrap())?;
 
             let report = file_patch.apply(&mut file, PatchDirection::Forward);
 
@@ -79,8 +70,6 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
 
             break;
         }
-
-//         writeln!(applied_patches_file, "{}", patch_filename.to_str().unwrap_or("<BAD UTF-8>"));
     }
 
     println!("Saving result...");

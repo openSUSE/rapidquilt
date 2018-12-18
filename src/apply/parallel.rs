@@ -1,7 +1,6 @@
 use std;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs::File;
-use std::fs;
 use std::hash::BuildHasherDefault;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -12,7 +11,7 @@ use seahash;
 
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
-use crate::patch::{self, PatchDirection, InternedFilePatch, TextFilePatch, FilePatchKind, FilePatchApplyReport};
+use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
