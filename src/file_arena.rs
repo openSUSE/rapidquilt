@@ -1,3 +1,5 @@
+// Licensed under the MIT license. See LICENSE.md
+
 use std::marker::PhantomData;
 use std::vec::Vec;
 use std::fs;

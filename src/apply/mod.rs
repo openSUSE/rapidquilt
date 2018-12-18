@@ -1,3 +1,5 @@
+// Licensed under the MIT license. See LICENSE.md
+
 mod sequential;
 mod parallel;
 mod common;

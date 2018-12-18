@@ -1,3 +1,5 @@
+// Licensed under the MIT license. See LICENSE.md
+
 use std::io::Write;
 use std::hash::{Hash, Hasher};
 use std::vec::Vec;

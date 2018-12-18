@@ -1,3 +1,5 @@
+// Licensed under the MIT license. See LICENSE.md
+
 #[macro_use] extern crate failure;
 #[macro_use] extern crate lazy_static;
 

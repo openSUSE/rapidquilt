@@ -1,3 +1,5 @@
+// Licensed under the MIT license. See LICENSE.md
+
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::hash::BuildHasher;
