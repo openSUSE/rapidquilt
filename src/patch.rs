@@ -569,213 +569,200 @@ impl<'a> InternedFilePatch<'a> {
     }
 }
 
-// #[derive(Debug)]
-// pub struct Patch<'a> {
-//     pub files: Vec<TextFilePatch<'a>>
-// }
-//
-// impl<'a> Patch<'a> {
-//     fn new() -> Self {
-//         Patch {
-//             files: Vec::new(),
-//         }
-//     }
+pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, Error> {
+    let mut file_patches = Vec::new();
 
-    pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, Error> {
-        let mut file_patches = Vec::new();
+    let mut lines = bytes.split(|c| *c == b'\n').peekable();
 
-        let mut lines = bytes.split(|c| *c == b'\n').peekable();
+    lazy_static! {
+        static ref MINUS_FILENAME: Regex = Regex::new(r"^--- ([^\t]+)").unwrap();
+        static ref PLUS_FILENAME: Regex = Regex::new(r"^\+\+\+ ([^\t]+)").unwrap();
 
-        lazy_static! {
-            static ref MINUS_FILENAME: Regex = Regex::new(r"^--- ([^\t]+)").unwrap();
-            static ref PLUS_FILENAME: Regex = Regex::new(r"^\+\+\+ ([^\t]+)").unwrap();
-
-            // Warning: It seems that patch accepts if the second '@' in the second "@@" group is missing!
-            static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@?(?P<place_name>.*)").unwrap();
-        }
-
-        while let Some(line) = lines.next() {
-            let minus_filename = match MINUS_FILENAME.captures(line) {
-                Some(capture) => capture.get(1).unwrap().as_bytes(),
-                None => continue // It was garbage, go for next line
-            };
-
-            let plus_filename = match lines.next().and_then(|line| PLUS_FILENAME.captures(line)) {
-                Some(capture) => capture.get(1).unwrap().as_bytes(),
-                None => return Err(format_err!("--- not followed by +++!")) // TODO: Better handling.
-            };
-
-            let (kind, filename) = if minus_filename == NULL_FILENAME {
-                (FilePatchKind::Create, plus_filename)
-            } else if plus_filename == NULL_FILENAME {
-                (FilePatchKind::Delete, minus_filename)
-            } else {
-                // TODO: What to do if plus_filename and minus_filename differ after stripping the beginning?
-
-                (FilePatchKind::Modify, plus_filename)
-            };
-
-            let filename = PathBuf::from(OsStr::from_bytes(filename));
-            if !filename.is_relative() {
-                return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
-            }
-            let filename = {
-                let mut components = filename.components();
-                for _ in 0..strip { components.next(); }
-                components.as_path().to_path_buf()
-            };
-
-            let mut filepatch = FilePatch::new(kind, filename);
-
-            // Read hunks
-            loop {
-                let (mut remove_line, mut remove_count, mut add_line, mut add_count, place_name) =
-                    match lines.peek().and_then(|line| CHUNK.captures(line)) {
-                        Some(capture) => {
-                            fn parse_bytes_to_isize(bytes: &[u8]) -> isize {
-                                // Unsafe and unwrap is ok because we are giving it only digit characters
-                                unsafe { str::from_utf8_unchecked(bytes) }.parse().unwrap()
-                            }
-
-                            // Unwraps are ok because the regex guarantees that it will be valid number
-                            let remove_line  = parse_bytes_to_isize(capture.name("remove_line").unwrap().as_bytes());
-                            let remove_count = capture.name("remove_count").map(|m| parse_bytes_to_isize(m.as_bytes())).unwrap_or(1);
-                            let add_line  = parse_bytes_to_isize(capture.name("add_line").unwrap().as_bytes());
-                            let add_count = capture.name("add_count").map(|m| parse_bytes_to_isize(m.as_bytes())).unwrap_or(1);
-
-                            let place_name = capture.name("place_name").unwrap().as_bytes();
-
-                            (remove_line, remove_count, add_line, add_count, place_name)
-                        }
-                        None => break // No more hunks, next file to patch, garbage or end of file.
-                    };
-
-                lines.next(); // Pull out the line we peeked
-
-                // Convert lines to zero-based numbering. But don't do that if we are creating/deleting (in that case it is 0 and would underflow)
-                if kind == FilePatchKind::Create {
-                    remove_count = 0;
-                } else {
-                    remove_line -= 1;
-                }
-                if kind == FilePatchKind::Delete {
-                    add_count = 0;
-                } else {
-                    add_line -= 1;
-                }
-                let mut hunk = Hunk::new(remove_line, add_line, place_name);
-                hunk.add.content.reserve(add_count as usize);
-                hunk.remove.content.reserve(remove_count as usize);
-
-                // Counters for amount of context
-                let mut context_prefix = 0;
-                let mut context_suffix = 0;
-                let mut there_was_a_non_context_line = false;
-
-                // Newline at the end markers
-                let mut minus_newline_at_end = false;
-                let mut plus_newline_at_end = false;
-
-                // Read hunk lines
-                while remove_count > 0 || add_count > 0 {
-                    let line = match lines.next() {
-                        Some(line) => line,
-                        None => {
-                            return Err(format_err!("Unexpected EOF in patch!"));
-                        }
-                    };
-
-                    // XXX: It seems that patches may have empty lines representing
-                    //      empty line of context. So if we see that, lets replace it
-                    //      what should have been there - a single space.
-                    let line = if line.len() == 0 {
-                        b" "
-                    } else {
-                        line
-                    };
-
-                    let line_content = &line[1..];
-
-                    match line[0] {
-                        b' ' => {
-                            hunk.remove.content.push(line_content);
-                            hunk.add.content.push(line_content);
-                            remove_count -= 1;
-                            add_count -= 1;
-
-                            if !there_was_a_non_context_line {
-                                context_prefix += 1;
-                            } else {
-                                context_suffix += 1;
-                            }
-
-                            if minus_newline_at_end || plus_newline_at_end {
-                                return Err(format_err!("Badly formated patch!"));
-                            }
-                        }
-                        b'-' => {
-                            hunk.remove.content.push(line_content);
-                            remove_count -= 1;
-
-                            there_was_a_non_context_line = true;
-                            context_suffix = 0;
-
-                            if minus_newline_at_end {
-                                return Err(format_err!("Badly formated patch!"));
-                            }
-
-                            if lines.peek() == Some(&NO_NEW_LINE_TAG) {
-                                lines.next(); // Skip it
-                                minus_newline_at_end = true;
-                            }
-                        }
-                        b'+' => {
-                            hunk.add.content.push(line_content);
-                            add_count -= 1;
-
-                            there_was_a_non_context_line = true;
-                            context_suffix = 0;
-
-                            if plus_newline_at_end {
-                                return Err(format_err!("Badly formated patch!"));
-                            }
-
-                            if lines.peek() == Some(&NO_NEW_LINE_TAG) {
-                                lines.next(); // Skip it
-                                plus_newline_at_end = true;
-                            }
-                        }
-                        _ => {
-                            return Err(format_err!("Badly formated patch line: \"{}\"", str::from_utf8(line).unwrap_or("<BAD UTF-8>")));
-                        }
-                    }
-                }
-
-                // man patch: "Hunks with less prefix context than suffix context (after applying fuzz) must apply at the
-                //             start of the file if their first line  number is 1. Hunks with more prefix context than suffix
-                //             context (after applying fuzz) must apply at the end of the file."
-                if context_prefix < context_suffix && add_line == 0 {
-                    hunk.position = HunkPosition::Start;
-                } else if context_prefix > context_suffix {
-                    hunk.position = HunkPosition::End;
-                }
-
-                if context_suffix == 0 || context_suffix < context_prefix {
-                    // If we are applying the end, add the implicit empty new line, unless there was the "No newline" tag.
-                    if !plus_newline_at_end && kind != FilePatchKind::Delete {
-                        hunk.add.content.push(&EMPTY_LINE_SLICE);
-                    }
-                    if !minus_newline_at_end && kind != FilePatchKind::Create {
-                        hunk.remove.content.push(&EMPTY_LINE_SLICE);
-                    }
-                }
-
-                filepatch.hunks.push(hunk);
-            }
-
-            file_patches.push(filepatch);
-        }
-
-        Ok(file_patches)
+        // Warning: It seems that patch accepts if the second '@' in the second "@@" group is missing!
+        static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@?(?P<place_name>.*)").unwrap();
     }
-// }
+
+    while let Some(line) = lines.next() {
+        let minus_filename = match MINUS_FILENAME.captures(line) {
+            Some(capture) => capture.get(1).unwrap().as_bytes(),
+            None => continue // It was garbage, go for next line
+        };
+
+        let plus_filename = match lines.next().and_then(|line| PLUS_FILENAME.captures(line)) {
+            Some(capture) => capture.get(1).unwrap().as_bytes(),
+            None => return Err(format_err!("--- not followed by +++!")) // TODO: Better handling.
+        };
+
+        let (kind, filename) = if minus_filename == NULL_FILENAME {
+            (FilePatchKind::Create, plus_filename)
+        } else if plus_filename == NULL_FILENAME {
+            (FilePatchKind::Delete, minus_filename)
+        } else {
+            // TODO: What to do if plus_filename and minus_filename differ after stripping the beginning?
+
+            (FilePatchKind::Modify, plus_filename)
+        };
+
+        let filename = PathBuf::from(OsStr::from_bytes(filename));
+        if !filename.is_relative() {
+            return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
+        }
+        let filename = {
+            let mut components = filename.components();
+            for _ in 0..strip { components.next(); }
+            components.as_path().to_path_buf()
+        };
+
+        let mut filepatch = FilePatch::new(kind, filename);
+
+        // Read hunks
+        loop {
+            let (mut remove_line, mut remove_count, mut add_line, mut add_count, place_name) =
+                match lines.peek().and_then(|line| CHUNK.captures(line)) {
+                    Some(capture) => {
+                        fn parse_bytes_to_isize(bytes: &[u8]) -> isize {
+                            // Unsafe and unwrap is ok because we are giving it only digit characters
+                            unsafe { str::from_utf8_unchecked(bytes) }.parse().unwrap()
+                        }
+
+                        // Unwraps are ok because the regex guarantees that it will be valid number
+                        let remove_line  = parse_bytes_to_isize(capture.name("remove_line").unwrap().as_bytes());
+                        let remove_count = capture.name("remove_count").map(|m| parse_bytes_to_isize(m.as_bytes())).unwrap_or(1);
+                        let add_line  = parse_bytes_to_isize(capture.name("add_line").unwrap().as_bytes());
+                        let add_count = capture.name("add_count").map(|m| parse_bytes_to_isize(m.as_bytes())).unwrap_or(1);
+
+                        let place_name = capture.name("place_name").unwrap().as_bytes();
+
+                        (remove_line, remove_count, add_line, add_count, place_name)
+                    }
+                    None => break // No more hunks, next file to patch, garbage or end of file.
+                };
+
+            lines.next(); // Pull out the line we peeked
+
+            // Convert lines to zero-based numbering. But don't do that if we are creating/deleting (in that case it is 0 and would underflow)
+            if kind == FilePatchKind::Create {
+                remove_count = 0;
+            } else {
+                remove_line -= 1;
+            }
+            if kind == FilePatchKind::Delete {
+                add_count = 0;
+            } else {
+                add_line -= 1;
+            }
+            let mut hunk = Hunk::new(remove_line, add_line, place_name);
+            hunk.add.content.reserve(add_count as usize);
+            hunk.remove.content.reserve(remove_count as usize);
+
+            // Counters for amount of context
+            let mut context_prefix = 0;
+            let mut context_suffix = 0;
+            let mut there_was_a_non_context_line = false;
+
+            // Newline at the end markers
+            let mut minus_newline_at_end = false;
+            let mut plus_newline_at_end = false;
+
+            // Read hunk lines
+            while remove_count > 0 || add_count > 0 {
+                let line = match lines.next() {
+                    Some(line) => line,
+                    None => {
+                        return Err(format_err!("Unexpected EOF in patch!"));
+                    }
+                };
+
+                // XXX: It seems that patches may have empty lines representing
+                //      empty line of context. So if we see that, lets replace it
+                //      what should have been there - a single space.
+                let line = if line.len() == 0 {
+                    b" "
+                } else {
+                    line
+                };
+
+                let line_content = &line[1..];
+
+                match line[0] {
+                    b' ' => {
+                        hunk.remove.content.push(line_content);
+                        hunk.add.content.push(line_content);
+                        remove_count -= 1;
+                        add_count -= 1;
+
+                        if !there_was_a_non_context_line {
+                            context_prefix += 1;
+                        } else {
+                            context_suffix += 1;
+                        }
+
+                        if minus_newline_at_end || plus_newline_at_end {
+                            return Err(format_err!("Badly formated patch!"));
+                        }
+                    }
+                    b'-' => {
+                        hunk.remove.content.push(line_content);
+                        remove_count -= 1;
+
+                        there_was_a_non_context_line = true;
+                        context_suffix = 0;
+
+                        if minus_newline_at_end {
+                            return Err(format_err!("Badly formated patch!"));
+                        }
+
+                        if lines.peek() == Some(&NO_NEW_LINE_TAG) {
+                            lines.next(); // Skip it
+                            minus_newline_at_end = true;
+                        }
+                    }
+                    b'+' => {
+                        hunk.add.content.push(line_content);
+                        add_count -= 1;
+
+                        there_was_a_non_context_line = true;
+                        context_suffix = 0;
+
+                        if plus_newline_at_end {
+                            return Err(format_err!("Badly formated patch!"));
+                        }
+
+                        if lines.peek() == Some(&NO_NEW_LINE_TAG) {
+                            lines.next(); // Skip it
+                            plus_newline_at_end = true;
+                        }
+                    }
+                    _ => {
+                        return Err(format_err!("Badly formated patch line: \"{}\"", str::from_utf8(line).unwrap_or("<BAD UTF-8>")));
+                    }
+                }
+            }
+
+            // man patch: "Hunks with less prefix context than suffix context (after applying fuzz) must apply at the
+            //             start of the file if their first line  number is 1. Hunks with more prefix context than suffix
+            //             context (after applying fuzz) must apply at the end of the file."
+            if context_prefix < context_suffix && add_line == 0 {
+                hunk.position = HunkPosition::Start;
+            } else if context_prefix > context_suffix {
+                hunk.position = HunkPosition::End;
+            }
+
+            if context_suffix == 0 || context_suffix < context_prefix {
+                // If we are applying the end, add the implicit empty new line, unless there was the "No newline" tag.
+                if !plus_newline_at_end && kind != FilePatchKind::Delete {
+                    hunk.add.content.push(&EMPTY_LINE_SLICE);
+                }
+                if !minus_newline_at_end && kind != FilePatchKind::Create {
+                    hunk.remove.content.push(&EMPTY_LINE_SLICE);
+                }
+            }
+
+            filepatch.hunks.push(hunk);
+        }
+
+        file_patches.push(filepatch);
+    }
+
+    Ok(file_patches)
+}
