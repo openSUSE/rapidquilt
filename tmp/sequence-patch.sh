@@ -65,7 +65,7 @@ SYNOPSIS: $0 [-qv] [--symbol=...] [--dir=...]
   of the component patches fail to apply the tree will not be rolled
   back.
 
-  The --rapid option will use rapidpatch to apply patches.
+  The --rapid option will use rapidquilt to apply patches.
 
   When used with last-patch-name, both --fast and --no-quilt
   will set up a quilt environment for the remaining patches.
@@ -74,7 +74,8 @@ END
 }
 
 apply_rapid_patches() {
-    printf "%s\n" ${PATCHES_BEFORE[@]} | rapidquilt -d $PATCH_DIR -p $PWD
+    printf "%s\n" ${PATCHES_BEFORE[@]} >> $PATCH_DIR/series
+    rapidquilt push -a -d $PATCH_DIR -p $PWD
     status=$?
 
     PATCHES=( ${PATCHES_AFTER[@]} )
@@ -254,7 +255,7 @@ while true; do
        	--fast)
 	    FAST=1
 	    ;;
-       	--rapid)
+	--rapid)
 	    RAPID=1
 	    ;;
 	--arch)
