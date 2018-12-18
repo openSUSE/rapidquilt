@@ -24,7 +24,7 @@ enum Message<'a> {
     ThreadDoneApplying,
 }
 
-pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, strip: usize, threads: usize) -> Result<(), Error> {
+pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, strip: usize, threads: usize) -> Result<ApplyResult, Error> {
     let patches_path = patches_path.as_ref();
 
     println!("Applying {} patches using {} threads...", patch_filenames.len(), threads);
@@ -273,6 +273,15 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
         }
     }).unwrap(); // XXX!
 
-    Ok(())
+
+    let mut final_patch = earliest_broken_patch_index_.load(Ordering::Acquire);
+    if final_patch == std::usize::MAX {
+        final_patch = patch_filenames.len();
+    }
+
+    Ok(ApplyResult {
+        applied_patches: &patch_filenames[0..final_patch],
+        skipped_patches: &patch_filenames[final_patch..],
+    })
 }
 

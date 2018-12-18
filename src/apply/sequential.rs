@@ -14,11 +14,13 @@ use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
 
-pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, strip: usize) -> Result<(), Error> {
+pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches_path: P, strip: usize) -> Result<ApplyResult<'a>, Error> {
     let arena = FileArena::new();
     let mut interner = LineInterner::new();
 
     let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+
+    let mut final_patch = 0;
 
 //     let mut applied_patches_file = {
 //         fs::create_dir_all(".pc")?;
@@ -28,8 +30,10 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
     println!("Applying {} patches single-threaded...", patch_filenames.len());
 
     let patches_path = patches_path.as_ref();
-    for patch_filename in patch_filenames {
+    for (index, patch_filename) in patch_filenames.iter().enumerate() {
 //         println!("Patch: {:?}", patch_filename);
+
+        final_patch = index;
 
         let data = arena.load_file(patches_path.join(patch_filename))?;
         let mut text_file_patches = patch::parse_unified(&data, strip)?;
@@ -85,5 +89,8 @@ pub fn apply_patches<P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: 
         save_modified_file(filename, file, &interner)?;
     }
 
-    Ok(())
+    Ok(ApplyResult {
+        applied_patches: &patch_filenames[0..final_patch],
+        skipped_patches: &patch_filenames[final_patch..],
+    })
 }

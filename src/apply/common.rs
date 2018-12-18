@@ -8,6 +8,11 @@ use crate::interned_file::InternedFile;
 use crate::line_interner::LineInterner;
 
 
+pub struct ApplyResult<'a> {
+    pub applied_patches: &'a [PathBuf],
+    pub skipped_patches: &'a [PathBuf],
+}
+
 pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
     let path = path.as_ref();
 
