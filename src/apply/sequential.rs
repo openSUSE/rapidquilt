@@ -72,7 +72,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
         save_modified_file(filename, file, &interner)?;
     }
 
-    if final_patch != patch_filenames.len() {
+    if final_patch != patch_filenames.len() - 1 {
         println!("Saving quilt backup files...");
 
         rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner)?;
