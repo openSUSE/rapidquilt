@@ -10,13 +10,14 @@ use crate::line_interner::{LineId, LineInterner};
 #[derive(Clone, Debug)]
 pub struct InternedFile {
     pub content: Vec<LineId>,
+    pub existed: bool,
     pub deleted: bool,
 }
 
 const AVG_LINE_LENGTH: usize = 30; // Heuristics, for initial estimation of line count.
 
 impl InternedFile {
-    pub fn new<'a, 'b: 'a>(interner: &mut LineInterner<'a>, bytes: &'b [u8]) -> Self {
+    pub fn new<'a, 'b: 'a>(interner: &mut LineInterner<'a>, bytes: &'b [u8], existed: bool) -> Self {
         let mut content = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
 
         content.extend(
@@ -28,6 +29,7 @@ impl InternedFile {
         InternedFile {
             content,
             deleted: false,
+            existed,
         }
     }
 
@@ -35,6 +37,7 @@ impl InternedFile {
         InternedFile {
             content: Vec::new(),
             deleted: true,
+            existed: false,
         }
     }
 

@@ -31,16 +31,23 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
 
 //     println!("Saving modified file: {:?}", filename);
 
-    // First we delete it, no matter what. The fie may be a hard link and
-    // we must replace it with new one, not edit the shared content.
-    // We ignore the result, because it is ok if it is not there.
-    // TODO: Do not ignore other errors, e.g. permissions.
-    let _ = fs::remove_file(filename);
+    if file.existed {
+        // If the file file existed, delete it. Whether we want to overwrite it
+        // or really delete it - the file may be a hard link and we must replace
+        // it with a new one, not edit the shared content.
+        // We ignore the result, because it is ok if it wasn't there.
+        // TODO: Do not ignore other errors, e.g. from permissions.
+        let _ = fs::remove_file(filename);
+    }
 
     // If the file is not tracked as deleted, re-create it with the next content.
     if !file.deleted {
-        if let Some(parent) = filename.parent() {
-            fs::create_dir_all(parent)?;
+        if !file.existed {
+            // If the file is new, the directory may be new as well. Let's
+            // create it now.
+            if let Some(parent) = filename.parent() {
+                fs::create_dir_all(parent)?;
+            }
         }
         let mut output = File::create(filename)?;
         file.write_to(&interner, &mut output)?;

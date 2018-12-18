@@ -41,7 +41,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
         for file_patch in file_patches {
             let mut file = modified_files.entry(file_patch.filename.clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
                 match arena.load_file(&file_patch.filename) {
-                    Ok(data) => InternedFile::new(&mut interner, &data),
+                    Ok(data) => InternedFile::new(&mut interner, &data, true),
                     Err(_) => InternedFile::new_non_existent(), // If the file doesn't exist, make empty one. TODO: Differentiate between "doesn't exist" and other errors!
                 }
             });
