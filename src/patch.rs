@@ -588,9 +588,15 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
             None => continue // It was garbage, go for next line
         };
 
-        let plus_filename = match lines.next().and_then(|line| PLUS_FILENAME.captures(line)) {
-            Some(capture) => capture.get(1).unwrap().as_bytes(),
-            None => return Err(format_err!("--- not followed by +++!")) // TODO: Better handling.
+        let plus_filename = match lines.peek().and_then(|line| PLUS_FILENAME.captures(line)) {
+            Some(capture) => {
+                lines.next(); // We just peeked, so consume it now.
+                capture.get(1).unwrap().as_bytes()
+            },
+            None => {
+                // patch ignores if there is "--- filename1" line followed by something else than "+++ filename2", so we have to ignore it too.
+                continue
+            }
         };
 
         let (kind, filename) = if minus_filename == NULL_FILENAME {
