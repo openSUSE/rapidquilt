@@ -39,6 +39,7 @@ pub struct ApplyConfig<'a> {
     pub patch_filenames: &'a [PathBuf],
     pub patches_path: &'a Path,
     pub strip: usize,
+    pub fuzz: usize,
     pub do_backups: ApplyConfigDoBackups,
     pub backup_count: ApplyConfigBackupCount,
 }

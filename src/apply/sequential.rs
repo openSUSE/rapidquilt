@@ -46,7 +46,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                 }
             });
 
-            let report = file_patch.apply(&mut file, PatchDirection::Forward);
+            let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz);
 
             if report.failed() {
                 println!("Patch {} failed on file {} hunks {:?}.",

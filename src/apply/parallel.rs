@@ -144,7 +144,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, threads: usize) -> Result<Appl
                                 }
                             });
 
-                            let report = file_patch.apply(&mut file, PatchDirection::Forward);
+                            let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz);
 
                             if report.failed() {
 //                                 println!("TID {} - Patch #{} failed to apply, signaling everyone! Report: {:?}", thread_index, index, report);

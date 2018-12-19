@@ -58,6 +58,7 @@ enum PushGoal {
 
 fn cmd_push<P: AsRef<Path>>(patches_path: P,
                             goal: PushGoal,
+                            fuzz: usize,
                             strip: usize,
                             do_backups: ApplyConfigDoBackups,
                             backup_count: ApplyConfigBackupCount)
@@ -97,6 +98,7 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
     let config = ApplyConfig {
         patch_filenames,
         patches_path: patches_path.as_ref(),
+        fuzz,
         strip,
         do_backups,
         backup_count,
@@ -130,6 +132,7 @@ fn main() {
     opts.optopt("p", "patch-directory", "directory with patches (default: \"patches\")", "DIR");
     opts.optopt("b", "backup", "create backup files for `quilt pop` (default: onfail)", "always|onfail|never");
     opts.optopt("", "backup-count", "amount of backup files for `quilt pop` to create (default: 100)", "all|<n>");
+    opts.optopt("F", "fuzz", "maximal allowed fuzz (default: 0)", "<n>");
     opts.optflag("h", "help", "print this help menu");
 
     if args.len() < 2 || args[1] != "push" {
@@ -149,10 +152,10 @@ fn main() {
     }
 
     let do_backups = match matches.opt_str("backup") {
-        Some(ref s) if s == "always"        => ApplyConfigDoBackups::Always,
-        Some(ref s) if s == "onfail"        => ApplyConfigDoBackups::OnFail,
-        Some(ref s) if s == "never"         => ApplyConfigDoBackups::Never,
-        None                            => ApplyConfigDoBackups::OnFail,
+        Some(ref s) if s == "always" => ApplyConfigDoBackups::Always,
+        Some(ref s) if s == "onfail" => ApplyConfigDoBackups::OnFail,
+        Some(ref s) if s == "never"  => ApplyConfigDoBackups::Never,
+        None                         => ApplyConfigDoBackups::OnFail,
         _ => Err(format_err!("Bad value given to \"backup\" parameter!")).unwrap(),
     };
 
@@ -163,6 +166,8 @@ fn main() {
     };
 
     let patches_path = matches.opt_str("p").unwrap_or("patches".to_string());
+
+    let fuzz = matches.opt_str("fuzz").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
 
     let mut goal = PushGoal::Count(1);
     if matches.opt_present("a") {
@@ -176,5 +181,5 @@ fn main() {
         }
     }
 
-    cmd_push(patches_path, goal, 1, do_backups, backup_count).unwrap();
+    cmd_push(patches_path, goal, fuzz, 1, do_backups, backup_count).unwrap();
 }
