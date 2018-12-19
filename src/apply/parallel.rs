@@ -14,7 +14,7 @@ use seahash;
 use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
-use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
+use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, HunkApplyReport, PatchDirection, TextFilePatch};
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
@@ -148,6 +148,11 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, threads: usize) -> Result<Appl
 
                             if report.failed() {
 //                                 println!("TID {} - Patch #{} failed to apply, signaling everyone! Report: {:?}", thread_index, index, report);
+
+                                println!("Patch {} failed on file {} hunks {:?}.",
+                                    config.patch_filenames[index].display(),
+                                    file_patch.filename.display(),
+                                    report.hunk_reports().iter().enumerate().filter(|r| *r.1 == HunkApplyReport::Failed).map(|r| r.0 + 1).collect::<Vec<_>>());
 
                                 // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
                                 let mut current = earliest_broken_patch_index.load(Ordering::Acquire);

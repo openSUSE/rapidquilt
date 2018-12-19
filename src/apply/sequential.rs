@@ -11,7 +11,7 @@ use seahash;
 use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
-use crate::patch::{self, PatchDirection, FilePatchKind, InternedFilePatch, FilePatchApplyReport};
+use crate::patch::{self, PatchDirection, FilePatchKind, InternedFilePatch, FilePatchApplyReport, HunkApplyReport};
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
@@ -49,6 +49,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
             let report = file_patch.apply(&mut file, PatchDirection::Forward);
 
             if report.failed() {
+                println!("Patch {} failed on file {} hunks {:?}.",
+                    patch_filename.display(),
+                    file_patch.filename.display(),
+                    report.hunk_reports().iter().enumerate().filter(|r| *r.1 == HunkApplyReport::Failed).map(|r| r.0 + 1).collect::<Vec<_>>());
                 any_report_failed = true;
             }
 
