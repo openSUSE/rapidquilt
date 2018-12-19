@@ -19,7 +19,13 @@ use failure::Error;
 
 use getopts::Options;
 
-use crate::apply::{apply_patches, apply_patches_parallel};
+use crate::apply::{
+    ApplyConfig,
+    ApplyConfigBackupCount,
+    ApplyConfigDoBackups,
+    apply_patches,
+    apply_patches_parallel
+};
 
 
 fn usage(opts: &Options) {
@@ -50,7 +56,13 @@ enum PushGoal {
     UpTo(PathBuf),
 }
 
-fn cmd_push<P: AsRef<Path>>(patches_directory: P, goal: PushGoal, strip: usize) -> Result<(), Error> {
+fn cmd_push<P: AsRef<Path>>(patches_path: P,
+                            goal: PushGoal,
+                            strip: usize,
+                            do_backups: ApplyConfigDoBackups,
+                            backup_count: ApplyConfigBackupCount)
+                            -> Result<(), Error>
+{
     let patch_filenames = read_series_file("series").unwrap();
 
     let first_patch = if let Ok(applied_patch_filenames) = read_series_file(".pc/applied-patches") {
@@ -82,14 +94,22 @@ fn cmd_push<P: AsRef<Path>>(patches_directory: P, goal: PushGoal, strip: usize) 
 
     let patch_filenames = &patch_filenames[first_patch..last_patch];
 
+    let config = ApplyConfig {
+        patch_filenames,
+        patches_path: patches_path.as_ref(),
+        strip,
+        do_backups,
+        backup_count,
+    };
+
     let threads = env::var("RAPIDQUILT_THREADS").ok()
         .and_then(|value_txt| value_txt.parse().ok())
         .unwrap_or_else(|| num_cpus::get());
 
     let apply_result = if threads <= 1 {
-        apply_patches(&patch_filenames, patches_directory, strip)?
+        apply_patches(&config)?
     } else {
-        apply_patches_parallel(&patch_filenames, patches_directory, strip, threads)?
+        apply_patches_parallel(&config, threads)?
     };
 
     fs::create_dir_all(".pc")?;
@@ -108,6 +128,8 @@ fn main() {
     opts.optflag("a", "all", "apply all patches in series");
     opts.optopt("d", "directory", "working directory", "DIR");
     opts.optopt("p", "patch-directory", "directory with patches (default: \"patches\")", "DIR");
+    opts.optopt("b", "backup", "create backup files for `quilt pop` (default: onfail)", "always|onfail|never");
+    opts.optopt("", "backup-count", "amount of backup files for `quilt pop` to create (default: 100)", "all|<n>");
     opts.optflag("h", "help", "print this help menu");
 
     if args.len() < 2 || args[1] != "push" {
@@ -117,16 +139,30 @@ fn main() {
 
     let matches = opts.parse(&args[2..]).unwrap();
 
-    if matches.opt_present("h") {
+    if matches.opt_present("help") {
         usage(&opts);
         process::exit(1);
     }
 
-    if let Some(directory) = matches.opt_str("d") {
+    if let Some(directory) = matches.opt_str("directory") {
         env::set_current_dir(directory).unwrap();
     }
 
-    let patches_directory = matches.opt_str("p").unwrap_or("patches".to_string());
+    let do_backups = match matches.opt_str("backup") {
+        Some(ref s) if s == "always"        => ApplyConfigDoBackups::Always,
+        Some(ref s) if s == "onfail"        => ApplyConfigDoBackups::OnFail,
+        Some(ref s) if s == "never"         => ApplyConfigDoBackups::Never,
+        None                            => ApplyConfigDoBackups::OnFail,
+        _ => Err(format_err!("Bad value given to \"backup\" parameter!")).unwrap(),
+    };
+
+    let backup_count = match matches.opt_str("backup-count") {
+        Some(ref s) if s == "all" => ApplyConfigBackupCount::All,
+        Some(n)                   => ApplyConfigBackupCount::Last(n.parse::<usize>().unwrap()),
+        None                      => ApplyConfigBackupCount::Last(100),
+    };
+
+    let patches_path = matches.opt_str("p").unwrap_or("patches".to_string());
 
     let mut goal = PushGoal::Count(1);
     if matches.opt_present("a") {
@@ -140,5 +176,5 @@ fn main() {
         }
     }
 
-    cmd_push(patches_directory, goal, 1).unwrap();
+    cmd_push(patches_path, goal, 1, do_backups, backup_count).unwrap();
 }

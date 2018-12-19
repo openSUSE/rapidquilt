@@ -12,11 +12,6 @@ use crate::line_interner::LineInterner;
 use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
 
 
-pub struct ApplyResult<'a> {
-    pub applied_patches: &'a [PathBuf],
-    pub skipped_patches: &'a [PathBuf],
-}
-
 pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
     let path = path.as_ref();
 
@@ -108,10 +103,15 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
 pub fn rollback_and_save_backup_files<H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus>,
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
-    interner: &LineInterner)
+    interner: &LineInterner,
+    down_to_index: usize)
     -> Result<(), Error>
 {
     for applied_patch in applied_patches.iter().rev() {
+        if applied_patch.index < down_to_index {
+            break;
+        }
+
         let mut file = modified_files.get_mut(&applied_patch.file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
         applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 

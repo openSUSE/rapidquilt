@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use failure::Error;
 use seahash;
 
+use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
 use crate::patch::{self, PatchDirection, FilePatchKind, InternedFilePatch, FilePatchApplyReport};
@@ -15,7 +16,7 @@ use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
 
-pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches_path: P, strip: usize) -> Result<ApplyResult<'a>, Error> {
+pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Error> {
     let arena = FileArena::new();
     let mut interner = LineInterner::new();
 
@@ -25,16 +26,15 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
 
     let mut final_patch = 0;
 
-    println!("Applying {} patches single-threaded...", patch_filenames.len());
+    println!("Applying {} patches single-threaded...", config.patch_filenames.len());
 
-    let patches_path = patches_path.as_ref();
-    for (index, patch_filename) in patch_filenames.iter().enumerate() {
+    for (index, patch_filename) in config.patch_filenames.iter().enumerate() {
 //         println!("Patch: {:?}", patch_filename);
 
         final_patch = index;
 
-        let data = arena.load_file(patches_path.join(patch_filename))?;
-        let mut text_file_patches = patch::parse_unified(&data, strip)?;
+        let data = arena.load_file(config.patches_path.join(patch_filename))?;
+        let mut text_file_patches = patch::parse_unified(&data, config.strip)?;
         let file_patches: Vec<_> = text_file_patches.drain(..).map(|text_file_patch| text_file_patch.intern(&mut interner)).collect();
         let mut any_report_failed = false;
 
@@ -56,7 +56,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
                 index,
                 file_patch,
                 report,
-                patch_filename: &patch_filenames[index],
+                patch_filename: &config.patch_filenames[index],
             });
         }
 
@@ -72,14 +72,22 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &'a [PathBuf], patches
         save_modified_file(filename, file, &interner)?;
     }
 
-    if final_patch != patch_filenames.len() - 1 {
+    if config.do_backups == ApplyConfigDoBackups::Always ||
+       (config.do_backups == ApplyConfigDoBackups::OnFail &&
+        final_patch != config.patch_filenames.len() - 1)
+    {
         println!("Saving quilt backup files...");
 
-        rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner)?;
+        let down_to_index = match config.backup_count {
+            ApplyConfigBackupCount::All => 0,
+            ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+        };
+
+        rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
     }
 
     Ok(ApplyResult {
-        applied_patches: &patch_filenames[0..final_patch],
-        skipped_patches: &patch_filenames[final_patch..],
+        applied_patches: &config.patch_filenames[0..final_patch],
+        skipped_patches: &config.patch_filenames[final_patch..],
     })
 }

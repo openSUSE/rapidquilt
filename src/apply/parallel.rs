@@ -11,6 +11,7 @@ use crossbeam;
 use failure::Error;
 use seahash;
 
+use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
 use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
@@ -25,10 +26,8 @@ enum Message<'a> {
     ThreadDoneApplying,
 }
 
-pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_path: P, strip: usize, threads: usize) -> Result<ApplyResult, Error> {
-    let patches_path = patches_path.as_ref();
-
-    println!("Applying {} patches using {} threads...", patch_filenames.len(), threads);
+pub fn apply_patches<'a>(config: &'a ApplyConfig, threads: usize) -> Result<ApplyResult<'a>, Error> {
+    println!("Applying {} patches using {} threads...", config.patch_filenames.len(), threads);
 
     // Loading and parsing of patches is done by two threads, but we consider it as
     // one thread - the first one should use almost no CPU, but is always blocked on IO.
@@ -58,14 +57,14 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
         // This thread loads the patch files in and sends them into the channel for parsing in next step.
         // It should keep the IO utilized unless the channel fills up, then it will wait.
         scope.spawn(move |_| {
-            for (index, patch_filename) in patch_filenames.iter().enumerate() {
+            for (index, patch_filename) in config.patch_filenames.iter().enumerate() {
                 if index > earliest_broken_patch_index.load(Ordering::Acquire) {
                     break;
                 }
 
 //                 println!("Loading patch #{}: {:?}", index, patch_filename);
 
-                let raw_patch_data = arena.load_file(patches_path.join(patch_filename));
+                let raw_patch_data = arena.load_file(config.patches_path.join(patch_filename));
                 if let Err(_) = raw_patch_sender.send((index, raw_patch_data)) {
                     // If the receiving thread is done, we are done too.
                     break;
@@ -84,7 +83,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
 //                 println!("Parsing patch #{}: {:?}", index, patch_filename);
 
-                let text_file_patches = raw_patch_data.and_then(|d| patch::parse_unified(d, strip));
+                let text_file_patches = raw_patch_data.and_then(|d| patch::parse_unified(d, config.strip));
 
                 match text_file_patches {
                     Ok(mut text_file_patches) => {
@@ -166,7 +165,7 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                                 index,
                                 file_patch,
                                 report,
-                                patch_filename: &patch_filenames[index],
+                                patch_filename: &config.patch_filenames[index],
                             });
                         },
                         Message::NewEarliestBrokenPatchIndex => {
@@ -234,12 +233,26 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
                     save_modified_file(filename, file, &interner)?;
                 }
 
-                if earliest_broken_patch_index != std::usize::MAX {
+                if config.do_backups == ApplyConfigDoBackups::Always ||
+                   (config.do_backups == ApplyConfigDoBackups::OnFail &&
+                    earliest_broken_patch_index != std::usize::MAX)
+                {
                     if thread_index == 0 {
                         println!("Saving quilt backup files...");
                     }
 
-                    rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner)?;
+                    let final_patch = if earliest_broken_patch_index == std::usize::MAX {
+                        config.patch_filenames.len() - 1
+                    } else {
+                        earliest_broken_patch_index
+                    };
+
+                    let down_to_index = match config.backup_count {
+                        ApplyConfigBackupCount::All => 0,
+                        ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+                    };
+
+                    rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
                 }
 
                 Ok(())
@@ -250,12 +263,12 @@ pub fn apply_patches<'a, P: AsRef<Path>>(patch_filenames: &[PathBuf], patches_pa
 
     let mut final_patch = earliest_broken_patch_index_.load(Ordering::Acquire);
     if final_patch == std::usize::MAX {
-        final_patch = patch_filenames.len();
+        final_patch = config.patch_filenames.len();
     }
 
     Ok(ApplyResult {
-        applied_patches: &patch_filenames[0..final_patch],
-        skipped_patches: &patch_filenames[final_patch..],
+        applied_patches: &config.patch_filenames[0..final_patch],
+        skipped_patches: &config.patch_filenames[final_patch..],
     })
 }
 

@@ -11,10 +11,22 @@ The goal is to be very fast.
 
     Options:
         -a, --all           apply all patches in series
+
         -d, --directory DIR working directory
+
         -p, --patch-directory DIR
                             directory with patches (default: "patches")
+
+        -b, --backup always|onfail|never
+                            create backup files for `quilt pop`
+                            (default: onfail)
+
+            --backup-count all|<n>
+                            amount of backup files for `quilt pop` to create
+                            (default: 100)
+
         -h, --help          print this help menu
+
 
 ## Limitations compared to quilt & patch
 
