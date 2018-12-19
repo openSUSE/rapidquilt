@@ -76,7 +76,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
        (config.do_backups == ApplyConfigDoBackups::OnFail &&
         final_patch != config.patch_filenames.len() - 1)
     {
-        println!("Saving quilt backup files...");
+        println!("Saving quilt backup files ({})...", config.backup_count);
 
         let down_to_index = match config.backup_count {
             ApplyConfigBackupCount::All => 0,

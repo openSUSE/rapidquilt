@@ -1,5 +1,6 @@
 // Licensed under the MIT license. See LICENSE.md
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 
 mod sequential;
@@ -22,6 +23,15 @@ pub enum ApplyConfigDoBackups {
 pub enum ApplyConfigBackupCount {
     All,
     Last(usize),
+}
+
+impl fmt::Display for ApplyConfigBackupCount {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ApplyConfigBackupCount::All => write!(f, "all"),
+            ApplyConfigBackupCount::Last(n) => write!(f, "last {}", n),
+        }
+    }
 }
 
 #[derive(Debug)]

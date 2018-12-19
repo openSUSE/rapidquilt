@@ -238,7 +238,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, threads: usize) -> Result<Appl
                     earliest_broken_patch_index != std::usize::MAX)
                 {
                     if thread_index == 0 {
-                        println!("Saving quilt backup files...");
+                        println!("Saving quilt backup files ({})...", config.backup_count);
                     }
 
                     let final_patch = if earliest_broken_patch_index == std::usize::MAX {
