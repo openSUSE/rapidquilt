@@ -12,9 +12,6 @@ use seahash;
 #[derive(Clone, Copy, PartialEq)]
 pub struct LineId(u32); // 4G interned slices ought to be enough for everybody...
 
-pub const EMPTY_LINE_ID: LineId = LineId(0);
-pub const EMPTY_LINE_SLICE: [u8; 0] = [];
-
 impl<'a> fmt::Debug for LineId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{:?}", self.0)
@@ -28,17 +25,18 @@ pub struct LineInterner<'a> {
 
 impl<'a> LineInterner<'a> {
     pub fn new() -> Self {
-        let vec = vec!(&EMPTY_LINE_SLICE as &[u8]);
-        let mut map = HashMap::default();
-        map.insert(&EMPTY_LINE_SLICE as &[u8], EMPTY_LINE_ID);
-
         Self {
-            vec,
-            map,
+            vec: Vec::new(),
+            map: HashMap::default(),
         }
     }
 
     pub fn add(&mut self, bytes: &'a [u8]) -> LineId {
+        // There is nothing like empty line. Each line has at least '\n'. If the
+        // last line in file is not terminated by '\n', it still has some characters,
+        // otherwise it would not exist.
+        assert!(bytes.len() > 0);
+
         // This is written strangely because of borrow checker limitation
         // It could be done nicely with entry and or_insert_with if we had NLL
         let id = self.map.entry(bytes).or_insert(LineId(self.vec.len() as u32));

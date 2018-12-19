@@ -11,6 +11,7 @@ lto = true
 rayon = "1.0"
 getopts = "0.2"
 failure = "0.1"
+memchr = "2.1"
 seahash = "3.0"
 lazy_static = "1.2"
 libc = "0.2"

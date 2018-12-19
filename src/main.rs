@@ -9,6 +9,7 @@ mod file_arena;
 mod interned_file;
 mod patch;
 mod patch_unified;
+mod util;
 
 #[cfg(test)]
 mod tests;

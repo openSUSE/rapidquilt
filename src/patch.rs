@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::vec::Vec;
 use std::path::PathBuf;
 
-use crate::line_interner::{LineId, LineInterner, EMPTY_LINE_ID};
+use crate::line_interner::{LineId, LineInterner};
 use crate::interned_file::InternedFile;
 
 
@@ -412,10 +412,7 @@ impl<'a> InternedFilePatch<'a> {
         assert!(self.hunks.len() == 1);
 
         if interned_file.content.len() > 0 {
-            // It may be single new line, we must tolerate that
-            if interned_file.content.len() > 1 || interned_file.content[0] != EMPTY_LINE_ID {
-                return FilePatchApplyReport::single_hunk_failure();
-            }
+            return FilePatchApplyReport::single_hunk_failure();
         }
 
         let new_content = match direction {

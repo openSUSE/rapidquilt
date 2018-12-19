@@ -5,6 +5,7 @@ use std::io::{BufWriter, Write};
 use failure::Error;
 
 use crate::line_interner::{LineId, LineInterner};
+use crate::util::split_lines_with_endings;
 
 
 #[derive(Clone, Debug)]
@@ -21,8 +22,7 @@ impl InternedFile {
         let mut content = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
 
         content.extend(
-            bytes
-            .split(|c| *c == b'\n')
+            split_lines_with_endings(bytes)
             .map(|line| interner.add(line))
         );
 
@@ -80,13 +80,10 @@ impl InternedFile {
 
         let mut writer = BufWriter::new(writer);
 
-        let mut line_ids = self.content.iter().peekable();
-        while let Some(line_id) = line_ids.next() {
+        for line_id in &self.content {
             writer.write(interner.get(*line_id).unwrap())?;
-            if line_ids.peek().is_some() {
-                writer.write(b"\n")?;
-            }
         }
+
         Ok(())
     }
 }

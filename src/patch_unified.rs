@@ -10,30 +10,31 @@ use std::str;
 use failure::Error;
 use regex::bytes::{Regex, RegexSet};
 
-use crate::line_interner::{LineId, LineInterner, EMPTY_LINE_ID, EMPTY_LINE_SLICE};
+use crate::line_interner::{LineId, LineInterner};
 use crate::patch::*;
+use crate::util::split_lines_with_endings;
 
 
-const NO_NEW_LINE_TAG: &[u8] = b"\\ No newline at end of file";
+const NO_NEW_LINE_TAG: &[u8] = b"\\ No newline at end of file\n";
 const NULL_FILENAME: &[u8] = b"/dev/null";
 
 lazy_static! {
-    static ref MINUS_FILENAME: Regex = Regex::new(r"^--- ([^\t]+)").unwrap();
-    static ref PLUS_FILENAME: Regex = Regex::new(r"^\+\+\+ ([^\t]+)").unwrap();
+    static ref MINUS_FILENAME: Regex = Regex::new(r"^--- ([^\t]+)\n$").unwrap();
+    static ref PLUS_FILENAME: Regex = Regex::new(r"^\+\+\+ ([^\t]+)\n$").unwrap();
 
     // Warning: It seems that patch accepts if the second '@' in the second "@@" group is missing!
-    static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@?(?P<place_name>.*)").unwrap();
+    static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@?(?P<place_name>.*)\n$").unwrap();
 
-    static ref DIFF_GIT: Regex = Regex::new(r"^diff --git +(?P<oldfilename>[^ ]+) +(?P<newfilename>[^ ]+)").unwrap();
+    static ref DIFF_GIT: Regex = Regex::new(r"^diff --git +(?P<oldfilename>[^ ]+) +(?P<newfilename>[^ ]+)\n$").unwrap();
 
     // Same order as MatchedMetadata enum
     static ref METADATA: RegexSet = RegexSet::new(&[
         r"^git --diff ", // this is exactly what patch uses to recognize end of hunk-less filepatch
         r"^index", // TODO: ?
-        r"^old mode +(?P<permissions>[0-9]+)$",
-        r"^new mode +(?P<permissions>[0-9]+)$",
-        r"^deleted file mode +(?P<permissions>[0-9]+)$",
-        r"^new file mode +(?P<permissions>[0-9]+)$",
+        r"^old mode +(?P<permissions>[0-9]+)\n$",
+        r"^new mode +(?P<permissions>[0-9]+)\n$",
+        r"^deleted file mode +(?P<permissions>[0-9]+)\n$",
+        r"^new file mode +(?P<permissions>[0-9]+)\n$",
         r"^rename from ",  // patch ignores the filename behind this
         r"^rename to ",    // patch ignores the filename behind this
         r"^copy from ",    // patch ignores the filename behind this
@@ -116,7 +117,7 @@ fn new_filepatch<'a>(filepatch_metadata: &FilePatchMetadata, strip: usize) -> Re
 pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, Error> {
     let mut file_patches = Vec::new();
 
-    let mut lines = bytes.split(|c| *c == b'\n').peekable();
+    let mut lines = split_lines_with_endings(bytes).peekable();
 
     let mut filepatch_metadata = FilePatchMetadata::default();
 
@@ -238,10 +239,6 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
             // Counters for amount of context
             let mut there_was_a_non_context_line = false;
 
-            // Newline at the end markers
-            let mut minus_newline_at_end = false;
-            let mut plus_newline_at_end = false;
-
             // Read hunk lines
             while remove_count > 0 || add_count > 0 {
                 let line = match lines.next() {
@@ -254,13 +251,23 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                 // XXX: It seems that patches may have empty lines representing
                 //      empty line of context. So if we see that, lets replace it
                 //      what should have been there - a single space.
-                let line = if line.len() == 0 {
-                    b" "
+                let line = if line == b"\n" {
+                    b" \n"
                 } else {
                     line
                 };
 
                 let mut line_content = &line[1..];
+
+                // Check for the "No newline..." tag
+                if lines.peek() == Some(&NO_NEW_LINE_TAG) && line_content.last() == Some(&b'\n') {
+                    // Cut away the '\n' from the end of the line. It does not belong to the content,
+                    // it is just there for patch formating.
+                    line_content = &line_content[..(line_content.len()-1)];
+
+                    // Skip the line with the tag
+                    lines.next();
+                }
 
                 match line[0] {
                     b' ' | b'\t' => {
@@ -281,16 +288,6 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                         } else {
                             hunk.context_after += 1;
                         }
-
-                        if minus_newline_at_end || plus_newline_at_end {
-                            return Err(format_err!("Badly formated patch!"));
-                        }
-
-                        if lines.peek() == Some(&NO_NEW_LINE_TAG) {
-                            lines.next(); // Skip it
-                            plus_newline_at_end = true;
-                            minus_newline_at_end = true;
-                        }
                     }
                     b'-' => {
                         hunk.remove.content.push(line_content);
@@ -298,15 +295,6 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
 
                         there_was_a_non_context_line = true;
                         hunk.context_after = 0;
-
-                        if minus_newline_at_end {
-                            return Err(format_err!("Badly formated patch!"));
-                        }
-
-                        if lines.peek() == Some(&NO_NEW_LINE_TAG) {
-                            lines.next(); // Skip it
-                            minus_newline_at_end = true;
-                        }
                     }
                     b'+' => {
                         hunk.add.content.push(line_content);
@@ -314,15 +302,6 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
 
                         there_was_a_non_context_line = true;
                         hunk.context_after = 0;
-
-                        if plus_newline_at_end {
-                            return Err(format_err!("Badly formated patch!"));
-                        }
-
-                        if lines.peek() == Some(&NO_NEW_LINE_TAG) {
-                            lines.next(); // Skip it
-                            plus_newline_at_end = true;
-                        }
                     }
                     _ => {
                         return Err(format_err!("Badly formated patch line: \"{}\"", str::from_utf8(line).unwrap_or("<BAD UTF-8>")));
@@ -337,16 +316,6 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                 hunk.position = HunkPosition::Start;
             } else if hunk.context_before > hunk.context_after {
                 hunk.position = HunkPosition::End;
-            }
-
-            if hunk.context_after == 0 || hunk.context_after < hunk.context_before {
-                // If we are applying the end, add the implicit empty new line, unless there was the "No newline" tag.
-                if !plus_newline_at_end && file_patch.kind() != FilePatchKind::Delete {
-                    hunk.add.content.push(&EMPTY_LINE_SLICE);
-                }
-                if !minus_newline_at_end && file_patch.kind() != FilePatchKind::Create {
-                    hunk.remove.content.push(&EMPTY_LINE_SLICE);
-                }
             }
 
             file_patch.hunks.push(hunk);
@@ -368,31 +337,16 @@ pub trait UnifiedPatchRejWriter {
 
 impl<'a> UnifiedPatchWriter for Hunk<'a, LineId> {
     fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
-        // If you think this looks more complicated than it should be, it is because it must correctly print out "No newline at the end of file" lines
+        let add_count = self.add.content.len();
+        let remove_count = self.remove.content.len();
 
-        let hunk_goes_to_end = (self.position == HunkPosition::End || /*filepatch_kind != FilePatchKind::Modify*/ self.add.content.len() == 0 || self.remove.content.len() == 0);
-
-        let add_has_end_empty_line = hunk_goes_to_end && self.add.content.last() == Some(&EMPTY_LINE_ID);
-        let add_count = if add_has_end_empty_line {
-            self.add.content.len() - 1
-        } else {
-            self.add.content.len()
-        };
-
-        let remove_has_end_empty_line = hunk_goes_to_end && self.remove.content.last() == Some(&EMPTY_LINE_ID);
-        let remove_count = if remove_has_end_empty_line {
-            self.remove.content.len() - 1
-        } else {
-            self.remove.content.len()
-        };
-
-        let add_line = if /*filepatch_kind == FilePatchKind::Delete*/ self.add.content.len() == 0 {
+        let add_line = if add_count == 0 {
             0
         } else {
             self.add.target_line + 1
         };
 
-        let remove_line = if /*filepatch_kind == FilePatchKind::Create*/ self.remove.content.len() == 0 {
+        let remove_line = if remove_count == 0 {
             0
         } else {
             self.remove.target_line + 1
@@ -414,18 +368,17 @@ impl<'a> UnifiedPatchWriter for Hunk<'a, LineId> {
             (a.len(), b.len())
         }
 
-        let mut write_line = |c: u8, line_id: LineId, last_line: bool| -> Result<(), Error> {
-            // We mustn't write the empty line at the end
-            if !last_line || line_id != EMPTY_LINE_ID {
-                writer.write(&[c])?;
-                writer.write(interner.get(line_id).unwrap())?;
-                writer.write(b"\n")?;
-            }
+        let mut write_line = |c: u8, line_id: LineId| -> Result<(), Error> {
+            let line = interner.get(line_id).unwrap(); // NOTE(unwrap): Must succeed, we are printing patch that was already interned. If it is not there, it is a bug.
 
-            // If it was last line and wasn't empty line, write the No new line message...
-            if last_line && line_id != EMPTY_LINE_ID {
-                writer.write(NO_NEW_LINE_TAG)?;
+            writer.write(&[c])?;
+            writer.write(line)?;
+            if line.last() != Some(&b'\n') {
+                // If the line doesn't end with newline character, we have to write it ourselves
+                // (otherwise it would not be valid patch file), but we also print the "No newline..."
+                // tag which informs that the newline is not part of the file.
                 writer.write(b"\n")?;
+                writer.write(NO_NEW_LINE_TAG)?;
             }
 
             Ok(())
@@ -440,20 +393,15 @@ impl<'a> UnifiedPatchWriter for Hunk<'a, LineId> {
         while add_i < add.len() || remove_i < remove.len() {
             let (add_count, remove_count) = find_closest_match(&add[add_i..], &remove[remove_i..]);
             for _ in 0..remove_count {
-                write_line(b'-', remove[remove_i], hunk_goes_to_end && remove_i == remove.len() - 1)?;
+                write_line(b'-', remove[remove_i])?;
                 remove_i += 1;
             }
             for _ in 0..add_count {
-                write_line(b'+', add[add_i], hunk_goes_to_end && add_i == add.len() - 1)?;
+                write_line(b'+', add[add_i])?;
                 add_i += 1;
             }
             if add_i < add.len() && remove_i < remove.len() {
-                if hunk_goes_to_end && add_has_end_empty_line != remove_has_end_empty_line && (remove_i == remove.len() - 1 || add_i == add.len() - 1) {
-                    write_line(b'-', remove[remove_i], hunk_goes_to_end && remove_i == remove.len() - 1)?;
-                    write_line(b'+', add[add_i],       hunk_goes_to_end && add_i == add.len() - 1)?;
-                } else {
-                    write_line(b' ', remove[remove_i], hunk_goes_to_end && remove_i == remove.len() - 1)?;
-                }
+                write_line(b' ', remove[remove_i])?;
                 remove_i += 1;
                 add_i += 1;
             }
