@@ -599,27 +599,29 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
             }
         };
 
-        let (kind, filename) = if minus_filename == NULL_FILENAME {
-            (FilePatchKind::Create, plus_filename)
-        } else if plus_filename == NULL_FILENAME {
-            (FilePatchKind::Delete, minus_filename)
-        } else {
-            // TODO: What to do if plus_filename and minus_filename differ after stripping the beginning?
+        let mut filepatch = {
+            let (kind, filename) = if minus_filename == NULL_FILENAME {
+                (FilePatchKind::Create, plus_filename)
+            } else if plus_filename == NULL_FILENAME {
+                (FilePatchKind::Delete, minus_filename)
+            } else {
+                // TODO: What to do if plus_filename and minus_filename differ after stripping the beginning?
 
-            (FilePatchKind::Modify, plus_filename)
+                (FilePatchKind::Modify, plus_filename)
+            };
+
+            let filename = PathBuf::from(OsStr::from_bytes(filename));
+            if !filename.is_relative() {
+                return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
+            }
+            let filename = {
+                let mut components = filename.components();
+                for _ in 0..strip { components.next(); }
+                components.as_path().to_path_buf()
+            };
+
+            FilePatch::new(kind, filename)
         };
-
-        let filename = PathBuf::from(OsStr::from_bytes(filename));
-        if !filename.is_relative() {
-            return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
-        }
-        let filename = {
-            let mut components = filename.components();
-            for _ in 0..strip { components.next(); }
-            components.as_path().to_path_buf()
-        };
-
-        let mut filepatch = FilePatch::new(kind, filename);
 
         // Read hunks
         loop {
@@ -646,13 +648,21 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
 
             lines.next(); // Pull out the line we peeked
 
+            // It seems that there are patches that do not use the /dev/null filename, yet they add or remove
+            // complete files. Recognize these as well.
+            if remove_line == 0 {
+                filepatch.kind = FilePatchKind::Create;
+            } else if add_line == 0 {
+                filepatch.kind = FilePatchKind::Delete;
+            }
+
             // Convert lines to zero-based numbering. But don't do that if we are creating/deleting (in that case it is 0 and would underflow)
-            if kind == FilePatchKind::Create {
+            if filepatch.kind == FilePatchKind::Create {
                 remove_count = 0;
             } else {
                 remove_line -= 1;
             }
-            if kind == FilePatchKind::Delete {
+            if filepatch.kind == FilePatchKind::Delete {
                 add_count = 0;
             } else {
                 add_line -= 1;
@@ -762,10 +772,10 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
 
             if context_suffix == 0 || context_suffix < context_prefix {
                 // If we are applying the end, add the implicit empty new line, unless there was the "No newline" tag.
-                if !plus_newline_at_end && kind != FilePatchKind::Delete {
+                if !plus_newline_at_end && filepatch.kind != FilePatchKind::Delete {
                     hunk.add.content.push(&EMPTY_LINE_SLICE);
                 }
-                if !minus_newline_at_end && kind != FilePatchKind::Create {
+                if !minus_newline_at_end && filepatch.kind != FilePatchKind::Create {
                     hunk.remove.content.push(&EMPTY_LINE_SLICE);
                 }
             }
