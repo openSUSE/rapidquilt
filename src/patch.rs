@@ -606,7 +606,7 @@ impl<'a> InternedFilePatch<'a> {
             let possible_fuzz_levels = match apply_mode {
                 // In normal mode consider fuzz 0 up to given maximum fuzz or what is useable for this hunk
                 ApplyMode::Normal =>
-                    0..(std::cmp::max(fuzz, hunk.max_useable_fuzz()) + 1),
+                    0..(std::cmp::min(fuzz, hunk.max_useable_fuzz()) + 1),
 
                 // In rollback mode use what worked in normal mode
                 ApplyMode::Rollback(ref report) => match report.hunk_reports[i] {
