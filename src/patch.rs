@@ -700,6 +700,12 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                         if minus_newline_at_end || plus_newline_at_end {
                             return Err(format_err!("Badly formated patch!"));
                         }
+
+                        if lines.peek() == Some(&NO_NEW_LINE_TAG) {
+                            lines.next(); // Skip it
+                            plus_newline_at_end = true;
+                            minus_newline_at_end = true;
+                        }
                     }
                     b'-' => {
                         hunk.remove.content.push(line_content);
