@@ -87,7 +87,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
     }
 
     Ok(ApplyResult {
-        applied_patches: &config.patch_filenames[0..final_patch],
-        skipped_patches: &config.patch_filenames[final_patch..],
+        applied_patches: &config.patch_filenames[0..=final_patch],
+        skipped_patches: &config.patch_filenames[(final_patch + 1)..],
     })
 }
