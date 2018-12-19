@@ -698,10 +698,17 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                     line
                 };
 
-                let line_content = &line[1..];
+                let mut line_content = &line[1..];
 
                 match line[0] {
-                    b' ' => {
+                    b' ' | b'\t' => {
+                        // Apparently patch accepts tabs in context too and just takes the
+                        // whole line as context...
+                        // TODO: Maybe it accepts just anything that doesn't start with space, plus or minus?
+                        if line[0] == b'\t' {
+                            line_content = &line[..];
+                        }
+
                         hunk.remove.content.push(line_content);
                         hunk.add.content.push(line_content);
                         remove_count -= 1;
