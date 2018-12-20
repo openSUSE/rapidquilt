@@ -62,7 +62,7 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
                             strip: usize,
                             do_backups: ApplyConfigDoBackups,
                             backup_count: ApplyConfigBackupCount)
-                            -> Result<(), Error>
+                            -> Result<bool, Error>
 {
     let patch_filenames = read_series_file("series").unwrap();
 
@@ -120,7 +120,7 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
         writeln!(file_applied_patches, "{}", applied_patch.display())?;
     }
 
-    Ok(())
+    Ok(apply_result.skipped_patches.len() == 0)
 }
 
 fn main() {
@@ -186,5 +186,9 @@ fn main() {
         }
     }
 
-    cmd_push(patches_path, goal, fuzz, 1, do_backups, backup_count).unwrap();
+    let all_good = cmd_push(patches_path, goal, fuzz, 1, do_backups, backup_count).unwrap();
+
+    if !all_good {
+        process::exit(1);
+    }
 }
