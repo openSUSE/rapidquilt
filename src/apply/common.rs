@@ -10,6 +10,7 @@ use failure::Error;
 use crate::interned_file::InternedFile;
 use crate::line_interner::LineInterner;
 use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
+use crate::patch_unified::{UnifiedPatchWriter, UnifiedPatchRejWriter};
 
 
 pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
@@ -84,11 +85,11 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
             break;
         }
 
-        let mut file = modified_files.get_mut(&applied_patch.file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
+        let mut file = modified_files.get_mut(applied_patch.file_patch.filename()).unwrap(); // It must be there, we must have loaded it when applying the patch.
         applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
         if applied_patch.report.failed() {
-            let rej_filename = make_rej_filename(&applied_patch.file_patch.filename);
+            let rej_filename = make_rej_filename(applied_patch.file_patch.filename());
             println!("Saving rejects to {:?}", rej_filename);
             let mut output = File::create(rej_filename)?;
             applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)?;
@@ -112,10 +113,10 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
             break;
         }
 
-        let mut file = modified_files.get_mut(&applied_patch.file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
+        let mut file = modified_files.get_mut(applied_patch.file_patch.filename()).unwrap(); // It must be there, we must have loaded it when applying the patch.
         applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
-        save_backup_file(applied_patch.patch_filename, &applied_patch.file_patch.filename, &file, &interner)?;
+        save_backup_file(applied_patch.patch_filename, applied_patch.file_patch.filename(), &file, &interner)?;
     }
 
     Ok(())

@@ -8,6 +8,7 @@ mod line_interner;
 mod file_arena;
 mod interned_file;
 mod patch;
+mod patch_unified;
 
 use std::env;
 use std::fs::{self, File};

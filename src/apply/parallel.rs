@@ -15,6 +15,7 @@ use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
 use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, HunkApplyReport, PatchDirection, TextFilePatch};
+use crate::patch_unified::parse_unified;
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
@@ -83,13 +84,13 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, threads: usize) -> Result<Appl
 
 //                 println!("Parsing patch #{}: {:?}", index, patch_filename);
 
-                let text_file_patches = raw_patch_data.and_then(|d| patch::parse_unified(d, config.strip));
+                let text_file_patches = raw_patch_data.and_then(|d| parse_unified(d, config.strip));
 
                 match text_file_patches {
                     Ok(mut text_file_patches) => {
                         // Success, send the individual text file patches to their respective threads
                         for text_file_patch in text_file_patches.drain(..) {
-                            let thread_index = (text_file_patch.filename_hash % applying_threads_count as u64) as usize;
+                            let thread_index = (text_file_patch.filename_hash() % applying_threads_count as u64) as usize;
                             senders[thread_index].send(Message::NextPatch(index, text_file_patch)).unwrap(); // TODO: Properly propagate up?
                         }
                     }
@@ -126,19 +127,19 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, threads: usize) -> Result<Appl
                     match message {
                         Message::NextPatch(index, text_file_patch) => {
                             if index > earliest_broken_patch_index.load(Ordering::Acquire) {
-//                                 println!("TID {} - Skipping patch #{} file {:?}, we are supposed to stop before this.", thread_index, index, text_file_patch.filename);
+//                                 println!("TID {} - Skipping patch #{} file {:?}, we are supposed to stop before this.", thread_index, index, text_file_patch.filename());
                                 done_applying = true;
                                 continue;
                             }
 
                             assert!(!signalled_done_applying); // If we already signalled that we are done, there is now way we should have more patches to forward-apply
 
-//                             println!("TID {} - Applying patch #{} file {:?}", thread_index, index, text_file_patch.filename);
+//                             println!("TID {} - Applying patch #{} file {:?}", thread_index, index, text_file_patch.filename());
 
                             let file_patch = text_file_patch.intern(&mut interner);
 
-                            let mut file = modified_files.entry(file_patch.filename.clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
-                                match arena.load_file(&file_patch.filename) {
+                            let mut file = modified_files.entry(file_patch.filename().clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
+                                match arena.load_file(&file_patch.filename()) {
                                     Ok(data) => InternedFile::new(&mut interner, &data, true),
                                     Err(_) => InternedFile::new_non_existent(), // If the file doesn't exist, make empty one. TODO: Differentiate between "doesn't exist" and other errors!
                                 }
@@ -151,7 +152,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, threads: usize) -> Result<Appl
 
                                 println!("Patch {} failed on file {} hunks {:?}.",
                                     config.patch_filenames[index].display(),
-                                    file_patch.filename.display(),
+                                    file_patch.filename().display(),
                                     report.hunk_reports().iter().enumerate().filter(|r| *r.1 == HunkApplyReport::Failed).map(|r| r.0 + 1).collect::<Vec<_>>());
 
                                 // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
@@ -191,9 +192,9 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, threads: usize) -> Result<Appl
 
                                 let file_patch = &applied_patch.file_patch;
 
-//                                 println!("TID {} - Rolling back #{} file {:?}", thread_index, applied_patch.index, file_patch.filename);
+//                                 println!("TID {} - Rolling back #{} file {:?}", thread_index, applied_patch.index, file_patch.filename());
 
-                                let mut file = modified_files.get_mut(&file_patch.filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
+                                let mut file = modified_files.get_mut(file_patch.filename()).unwrap(); // It must be there, we must have loaded it when applying the patch.
                                 file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
                                 applied_patches.pop();
