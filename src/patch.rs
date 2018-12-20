@@ -318,7 +318,7 @@ impl FilePatchApplyReport {
     pub fn hunk_reports(&self) -> &[HunkApplyReport] { &self.hunk_reports }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct FilePatch<'a, Line> {
     // TODO: Review if those can be safely public
 
@@ -327,8 +327,8 @@ pub struct FilePatch<'a, Line> {
     filename: PathBuf,
     filename_hash: u64,
 
-    original_filename: Option<PathBuf>,
-    original_filename_hash: u64,
+    new_filename: Option<PathBuf>,
+    new_filename_hash: u64,
 
     pub hunks: Vec<Hunk<'a, Line>>,
 }
@@ -338,19 +338,19 @@ impl<'a, Line> FilePatch<'a, Line> {
         Self::new_internal(kind, filename, None)
     }
 
-    pub fn new_renamed(kind: FilePatchKind, filename: PathBuf, original_filename: PathBuf) -> Self {
-        Self::new_internal(kind, filename, Some(original_filename))
+    pub fn new_renamed(kind: FilePatchKind, filename: PathBuf, new_filename: PathBuf) -> Self {
+        Self::new_internal(kind, filename, Some(new_filename))
     }
 
-    fn new_internal(kind: FilePatchKind, filename: PathBuf, original_filename: Option<PathBuf>) -> Self {
+    fn new_internal(kind: FilePatchKind, filename: PathBuf, new_filename: Option<PathBuf>) -> Self {
         let mut hasher = SeaHasher::default();
         filename.hash(&mut hasher);
         let filename_hash = hasher.finish();
 
-        let original_filename_hash = match original_filename {
-            Some(ref original_filename) => {
+        let new_filename_hash = match new_filename {
+            Some(ref new_filename) => {
                 let mut hasher = SeaHasher::default();
-                original_filename.hash(&mut hasher);
+                new_filename.hash(&mut hasher);
                 hasher.finish()
             },
             None => 0,
@@ -362,8 +362,8 @@ impl<'a, Line> FilePatch<'a, Line> {
             filename,
             filename_hash,
 
-            original_filename,
-            original_filename_hash,
+            new_filename,
+            new_filename_hash,
 
             hunks: Vec::new(),
         }
@@ -378,10 +378,10 @@ impl<'a, Line> FilePatch<'a, Line> {
     pub fn filename(&self) -> &PathBuf { &self.filename }
     pub fn filename_hash(&self) -> u64 { self.filename_hash }
 
-    pub fn is_rename(&self) -> bool { self.original_filename.is_some() }
+    pub fn is_rename(&self) -> bool { self.new_filename.is_some() }
 
-    pub fn original_filename(&self) -> Option<&PathBuf> { self.original_filename.as_ref() }
-    pub fn original_filename_hash(&self) -> u64 { self.original_filename_hash }
+    pub fn new_filename(&self) -> Option<&PathBuf> { self.new_filename.as_ref() }
+    pub fn new_filename_hash(&self) -> u64 { self.new_filename_hash }
 }
 
 pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
@@ -395,8 +395,8 @@ impl<'a> TextFilePatch<'a> {
             filename: self.filename,
             filename_hash: self.filename_hash,
 
-            original_filename: self.original_filename,
-            original_filename_hash: self.original_filename_hash,
+            new_filename: self.new_filename,
+            new_filename_hash: self.new_filename_hash,
 
             hunks: self.hunks.drain(..).map(|hunk| hunk.intern(interner)).collect(),
         }

@@ -140,8 +140,8 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
             let filename = strip_filename(filename, strip)?;
 
             if filepatch_metadata.rename_from && filepatch_metadata.rename_to && other_filename.is_some() {
-                let original_filename = strip_filename(other_filename.unwrap(), strip)?;
-                FilePatch::new_renamed(kind, filename, original_filename)
+                let other_filename = strip_filename(other_filename.unwrap(), strip)?;
+                FilePatch::new_renamed(kind, other_filename, filename)
             } else {
                 FilePatch::new(kind, filename)
             }
