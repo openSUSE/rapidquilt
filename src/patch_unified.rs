@@ -23,6 +23,49 @@ lazy_static! {
 
     // Warning: It seems that patch accepts if the second '@' in the second "@@" group is missing!
     static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@?(?P<place_name>.*)").unwrap();
+
+    // Same order as MatchedMetadata enum
+    static ref METADATA: RegexSet = RegexSet::new(&[
+        r"^index", // TODO: ?
+        r"^old mode +(?P<permissions>[0-9]+)$",
+        r"^new mode +(?P<permissions>[0-9]+)$",
+        r"^deleted file mode +(?P<permissions>[0-9]+)$",
+        r"^new file mode +(?P<permissions>[0-9]+)$",
+        r"^rename from ",  // patch ignores the filename behind this
+        r"^rename to ",    // patch ignores the filename behind this
+        r"^copy from ",    // patch ignores the filename behind this
+        r"^copy to ",      // patch ignores the filename behind this
+        r"^GIT binary patch", // TODO: ???
+    ]).unwrap();
+}
+
+// Same order as METADATA RegexSet!
+#[repr(usize)]
+enum MatchedMetadata {
+    Index = 0,
+    OldMode,
+    NewMode,
+    DeletedFileMode,
+    NewFileMode,
+    RenameFrom,
+    RenameTo,
+    CopyFrom,
+    CopyTo,
+    GitBinaryPatch
+}
+
+struct FilePatchMetadata {
+    rename_from: bool,
+    rename_to: bool,
+}
+
+impl Default for FilePatchMetadata {
+    fn default() -> Self {
+        FilePatchMetadata {
+            rename_from: false,
+            rename_to: false,
+        }
+    }
 }
 
 pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, Error> {
@@ -30,7 +73,32 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
 
     let mut lines = bytes.split(|c| *c == b'\n').peekable();
 
+    let mut filepatch_metadata = FilePatchMetadata::default();
+
     while let Some(line) = lines.next() {
+        if let Some(metadata) = METADATA.matches(line).iter().next() { // There will be at most one match because the METADATA regexes are mutually exclusive
+            // TODO: Use TryFrom instead of transmute when stable.
+            match unsafe { std::mem::transmute::<usize, MatchedMetadata>(metadata) } {
+                MatchedMetadata::RenameFrom => {
+                    // We do not actually care about the filename written next to the "rename from" line.
+                    // patch doesn't care either
+                    filepatch_metadata.rename_from = true;
+                },
+                MatchedMetadata::RenameTo => {
+                    // We do not actually care about the filename written next to the "rename to" line.
+                    // patch doesn't care either
+                    filepatch_metadata.rename_to = true;
+                },
+                MatchedMetadata::GitBinaryPatch => {
+                    return Err(format_err!("GIT binary patch is not supported!"));
+                }
+                _ => {
+                    // TODO: Handle the other metadata...
+                }
+            }
+            continue;
+        }
+
         let minus_filename = match MINUS_FILENAME.captures(line) {
             Some(capture) => capture.get(1).unwrap().as_bytes(),
             None => continue // It was garbage, go for next line
@@ -48,27 +116,35 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
         };
 
         let mut filepatch = {
-            let (kind, filename) = if minus_filename == NULL_FILENAME {
-                (FilePatchKind::Create, plus_filename)
+            let (kind, filename, other_filename) = if minus_filename == NULL_FILENAME {
+                (FilePatchKind::Create, plus_filename, None)
             } else if plus_filename == NULL_FILENAME {
-                (FilePatchKind::Delete, minus_filename)
+                (FilePatchKind::Delete, minus_filename, None)
             } else {
                 // TODO: What to do if plus_filename and minus_filename differ after stripping the beginning?
 
-                (FilePatchKind::Modify, plus_filename)
+                (FilePatchKind::Modify, plus_filename, Some(minus_filename))
             };
 
-            let filename = PathBuf::from(OsStr::from_bytes(filename));
-            if !filename.is_relative() {
-                return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
-            }
-            let filename = {
+            fn strip_filename(filename: &[u8], strip: usize) -> Result<PathBuf, Error> {
+                let filename = PathBuf::from(OsStr::from_bytes(filename));
+                if !filename.is_relative() {
+                    return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
+                }
+
                 let mut components = filename.components();
                 for _ in 0..strip { components.next(); }
-                components.as_path().to_path_buf()
-            };
+                Ok(components.as_path().to_path_buf())
+            }
 
-            FilePatch::new(kind, filename)
+            let filename = strip_filename(filename, strip)?;
+
+            if filepatch_metadata.rename_from && filepatch_metadata.rename_to && other_filename.is_some() {
+                let original_filename = strip_filename(other_filename.unwrap(), strip)?;
+                FilePatch::new_renamed(kind, filename, original_filename)
+            } else {
+                FilePatch::new(kind, filename)
+            }
         };
 
         // Read hunks

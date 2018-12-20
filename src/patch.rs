@@ -327,16 +327,34 @@ pub struct FilePatch<'a, Line> {
     filename: PathBuf,
     filename_hash: u64,
 
-    pub rename_from: Option<PathBuf>,
+    original_filename: Option<PathBuf>,
+    original_filename_hash: u64,
 
     pub hunks: Vec<Hunk<'a, Line>>,
 }
 
 impl<'a, Line> FilePatch<'a, Line> {
     pub fn new(kind: FilePatchKind, filename: PathBuf) -> Self {
+        Self::new_internal(kind, filename, None)
+    }
+
+    pub fn new_renamed(kind: FilePatchKind, filename: PathBuf, original_filename: PathBuf) -> Self {
+        Self::new_internal(kind, filename, Some(original_filename))
+    }
+
+    fn new_internal(kind: FilePatchKind, filename: PathBuf, original_filename: Option<PathBuf>) -> Self {
         let mut hasher = SeaHasher::default();
         filename.hash(&mut hasher);
         let filename_hash = hasher.finish();
+
+        let original_filename_hash = match original_filename {
+            Some(ref original_filename) => {
+                let mut hasher = SeaHasher::default();
+                original_filename.hash(&mut hasher);
+                hasher.finish()
+            },
+            None => 0,
+        };
 
         Self {
             kind,
@@ -344,7 +362,8 @@ impl<'a, Line> FilePatch<'a, Line> {
             filename,
             filename_hash,
 
-            rename_from: None,
+            original_filename,
+            original_filename_hash,
 
             hunks: Vec::new(),
         }
@@ -358,6 +377,11 @@ impl<'a, Line> FilePatch<'a, Line> {
 
     pub fn filename(&self) -> &PathBuf { &self.filename }
     pub fn filename_hash(&self) -> u64 { self.filename_hash }
+
+    pub fn is_rename(&self) -> bool { self.original_filename.is_some() }
+
+    pub fn original_filename(&self) -> Option<&PathBuf> { self.original_filename.as_ref() }
+    pub fn original_filename_hash(&self) -> u64 { self.original_filename_hash }
 }
 
 pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
@@ -371,7 +395,8 @@ impl<'a> TextFilePatch<'a> {
             filename: self.filename,
             filename_hash: self.filename_hash,
 
-            rename_from: self.rename_from,
+            original_filename: self.original_filename,
+            original_filename_hash: self.original_filename_hash,
 
             hunks: self.hunks.drain(..).map(|hunk| hunk.intern(interner)).collect(),
         }
