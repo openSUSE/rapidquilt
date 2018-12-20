@@ -169,6 +169,11 @@ fn main() {
 
     let fuzz = matches.opt_str("fuzz").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
 
+    if fuzz > 0 {
+        println!("--fuzz > 0 is not working correctly right now, can not proceed.");
+        process::exit(1);
+    }
+
     let mut goal = PushGoal::Count(1);
     if matches.opt_present("a") {
         goal = PushGoal::All;
