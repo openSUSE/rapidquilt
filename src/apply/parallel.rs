@@ -134,7 +134,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
     // Prepare channels to send messages between applying threads.
     let (senders, receivers): (Vec<_>, Vec<_>) = (0..threads).map(|_| {
-        mpsc::channel::<Message>()
+        mpsc::sync_channel::<Message>(threads * 2) // At the moment every thread can send at most 2 messages, so lets use fixed size channel.
     }).unzip();
 
     // Run the applying threads
@@ -205,7 +205,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                         applied_patches.pop();
                     }
 
-                    if (received_done_applying_count == threads) {
+                    if received_done_applying_count == threads {
                         // Everybody is done applying => nobody will be able to find
                         // earlier failed patch. Since we already rollbacked everything,
                         // it is time to proceed with next step.
