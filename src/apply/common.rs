@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 
 use failure::Error;
 
+use crate::apply::*;
 use crate::interned_file::InternedFile;
+use crate::file_arena::FileArena;
 use crate::line_interner::LineInterner;
-use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
+use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, HunkApplyReport, PatchDirection, TextFilePatch};
 use crate::patch_unified::{UnifiedPatchWriter, UnifiedPatchRejWriter};
 
 
@@ -70,6 +72,52 @@ pub struct PatchStatus<'a, 'b> {
     pub file_patch: InternedFilePatch<'a>,
     pub report: FilePatchApplyReport,
     pub patch_filename: &'b Path,
+}
+
+pub fn apply_one_file_patch<
+    'arena: 'interner,
+    'interner,
+    'config: 'applied_patches,
+    'applied_patches,
+    H: BuildHasher>
+(
+    config: &'config ApplyConfig,
+    index: usize,
+    text_file_patch: TextFilePatch<'arena>,
+    applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
+    modified_files: &mut HashMap<PathBuf, InternedFile, H>,
+    arena: &'arena FileArena,
+    interner: &'interner mut LineInterner<'arena>)
+    -> bool
+{
+    let file_patch = text_file_patch.intern(interner);
+
+    let mut file = modified_files.entry(file_patch.filename().clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
+        match arena.load_file(&file_patch.filename()) {
+            Ok(data) => InternedFile::new(interner, &data, true),
+            Err(_) => InternedFile::new_non_existent(), // If the file doesn't exist, make empty one. TODO: Differentiate between "doesn't exist" and other errors!
+        }
+    });
+
+    let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz);
+
+    let report_ok = report.ok();
+    if !report_ok {
+        // TODO: Proper reporting, instead of just printing it here...
+        println!("Patch {} failed on file {} hunks {:?}.",
+            config.patch_filenames[index].display(),
+            file_patch.filename().display(),
+            report.hunk_reports().iter().enumerate().filter(|r| *r.1 == HunkApplyReport::Failed).map(|r| r.0 + 1).collect::<Vec<_>>());
+    }
+
+    applied_patches.push(PatchStatus {
+        index,
+        file_patch,
+        report,
+        patch_filename: &config.patch_filenames[index],
+    });
+
+    report_ok
 }
 
 pub fn rollback_and_save_rej_files<H: BuildHasher>(

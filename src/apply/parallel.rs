@@ -164,24 +164,15 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
 //                     println!("TID {} - Applying patch #{} file {:?}", thread_id, index, text_file_patch.filename());
 
-                    let file_patch = text_file_patch.intern(&mut interner);
-
-                    let mut file = modified_files.entry(file_patch.filename().clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
-                        match arena.load_file(&file_patch.filename()) {
-                            Ok(data) => InternedFile::new(&mut interner, &data, true),
-                            Err(_) => InternedFile::new_non_existent(), // If the file doesn't exist, make empty one. TODO: Differentiate between "doesn't exist" and other errors!
-                        }
-                    });
-
-                    let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz);
-
-                    if report.failed() {
+                    if !apply_one_file_patch(config,
+                                             index,
+                                             text_file_patch,
+                                             &mut applied_patches,
+                                             &mut modified_files,
+                                             &arena,
+                                             &mut interner)
+                    {
 //                         println!("TID {} - Patch #{} failed to apply, signaling everyone! Report: {:?}", thread_id, index, report);
-
-                        println!("Patch {} failed on file {} hunks {:?}.",
-                            config.patch_filenames[index].display(),
-                            file_patch.filename().display(),
-                            report.hunk_reports().iter().enumerate().filter(|r| *r.1 == HunkApplyReport::Failed).map(|r| r.0 + 1).collect::<Vec<_>>());
 
                         // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
                         let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
@@ -191,13 +182,6 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
                         broadcast_message(Message::NewEarliestBrokenPatchIndex);
                     }
-
-                    applied_patches.push(PatchStatus {
-                        index,
-                        file_patch,
-                        report,
-                        patch_filename: &config.patch_filenames[index],
-                    });
                 }
 
                 // Signal that we are done applying
