@@ -3,8 +3,8 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-mod sequential;
-mod parallel;
+pub mod sequential;
+pub mod parallel;
 mod common;
 
 

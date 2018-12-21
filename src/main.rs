@@ -10,6 +10,9 @@ mod interned_file;
 mod patch;
 mod patch_unified;
 
+#[cfg(test)]
+mod tests;
+
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
@@ -105,14 +108,20 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
         backup_count,
     };
 
-    let threads = env::var("RAPIDQUILT_THREADS").ok()
-        .and_then(|value_txt| value_txt.parse().ok())
-        .unwrap_or_else(|| num_cpus::get());
+    let threads = match env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
+        Some(manual_threads) => {
+            rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global()?;
+            manual_threads
+        },
+        None => {
+            rayon::current_num_threads()
+        }
+    };
 
     let apply_result = if threads <= 1 {
         apply_patches(&config)?
     } else {
-        apply_patches_parallel(&config, threads)?
+        apply_patches_parallel(&config)?
     };
 
     fs::create_dir_all(".pc")?;

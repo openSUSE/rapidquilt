@@ -10,7 +10,6 @@ lto = true
 [dependencies]
 rayon = "1.0"
 getopts = "0.2"
-crossbeam = "0.5"
 failure = "0.1"
 num_cpus = "0.2"
 seahash = "3.0"
