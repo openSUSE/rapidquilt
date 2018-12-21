@@ -24,8 +24,11 @@ lazy_static! {
     // Warning: It seems that patch accepts if the second '@' in the second "@@" group is missing!
     static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@?(?P<place_name>.*)").unwrap();
 
+    static ref DIFF_GIT: Regex = Regex::new(r"^diff --git +(?P<oldfilename>[^ ]+) +(?P<newfilename>[^ ]+)").unwrap();
+
     // Same order as MatchedMetadata enum
     static ref METADATA: RegexSet = RegexSet::new(&[
+        r"^git --diff ", // this is exactly what patch uses to recognize end of hunk-less filepatch
         r"^index", // TODO: ?
         r"^old mode +(?P<permissions>[0-9]+)$",
         r"^new mode +(?P<permissions>[0-9]+)$",
@@ -41,8 +44,10 @@ lazy_static! {
 
 // Same order as METADATA RegexSet!
 #[repr(usize)]
+#[allow(unused)]
 enum MatchedMetadata {
-    Index = 0,
+    GitDiffSeparator = 0,
+    Index,
     OldMode,
     NewMode,
     DeletedFileMode,
@@ -54,17 +59,57 @@ enum MatchedMetadata {
     GitBinaryPatch
 }
 
-struct FilePatchMetadata {
+struct FilePatchMetadata<'a> {
+    old_filename: Option<&'a [u8]>,
+    new_filename: Option<&'a [u8]>,
     rename_from: bool,
     rename_to: bool,
 }
 
-impl Default for FilePatchMetadata {
+impl<'a> Default for FilePatchMetadata<'a> {
     fn default() -> Self {
         FilePatchMetadata {
+            old_filename: None,
+            new_filename: None,
             rename_from: false,
             rename_to: false,
         }
+    }
+}
+
+fn new_filepatch<'a>(filepatch_metadata: &FilePatchMetadata, strip: usize) -> Result<Option<TextFilePatch<'a>>, Error> {
+    if let (Some(old_filename), Some(new_filename)) = (filepatch_metadata.old_filename, filepatch_metadata.new_filename) {
+        let (kind, filename, other_filename) = if old_filename == NULL_FILENAME {
+            (FilePatchKind::Create, new_filename, None)
+        } else if new_filename == NULL_FILENAME {
+            (FilePatchKind::Delete, old_filename, None)
+        } else {
+            // TODO: What to do if new_filename and old_filename differ after stripping the beginning?
+
+            (FilePatchKind::Modify, new_filename, Some(old_filename))
+        };
+
+        fn strip_filename(filename: &[u8], strip: usize) -> Result<PathBuf, Error> {
+            let filename = PathBuf::from(OsStr::from_bytes(filename));
+            if !filename.is_relative() {
+                return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
+            }
+
+            let mut components = filename.components();
+            for _ in 0..strip { components.next(); }
+            Ok(components.as_path().to_path_buf())
+        }
+
+        let filename = strip_filename(filename, strip)?;
+
+        if filepatch_metadata.rename_from && filepatch_metadata.rename_to && other_filename.is_some() {
+            let other_filename = strip_filename(other_filename.unwrap(), strip)?;
+            Ok(Some(FilePatch::new_renamed(kind, other_filename, filename)))
+        } else {
+            Ok(Some(FilePatch::new(kind, filename)))
+        }
+    } else {
+        Ok(None)
     }
 }
 
@@ -75,7 +120,7 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
 
     let mut filepatch_metadata = FilePatchMetadata::default();
 
-    while let Some(line) = lines.next() {
+    while let Some(line) = lines.peek() {
         if let Some(metadata) = METADATA.matches(line).iter().next() { // There will be at most one match because the METADATA regexes are mutually exclusive
             // TODO: Use TryFrom instead of transmute when stable.
             match unsafe { std::mem::transmute::<usize, MatchedMetadata>(metadata) } {
@@ -96,56 +141,51 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                     // TODO: Handle the other metadata...
                 }
             }
+            lines.next();
             continue;
         }
 
-        let minus_filename = match MINUS_FILENAME.captures(line) {
-            Some(capture) => capture.get(1).unwrap().as_bytes(),
-            None => continue // It was garbage, go for next line
-        };
+        if let Some(capture) = MINUS_FILENAME.captures(line) {
+            filepatch_metadata.old_filename = Some(capture.get(1).unwrap().as_bytes());
+            lines.next();
+            continue;
+        }
 
-        let plus_filename = match lines.peek().and_then(|line| PLUS_FILENAME.captures(line)) {
-            Some(capture) => {
-                lines.next(); // We just peeked, so consume it now.
-                capture.get(1).unwrap().as_bytes()
-            },
-            None => {
-                // patch ignores if there is "--- filename1" line followed by something else than "+++ filename2", so we have to ignore it too.
-                continue
-            }
-        };
+        if let Some(capture) = PLUS_FILENAME.captures(line) {
+            filepatch_metadata.new_filename = Some(capture.get(1).unwrap().as_bytes());
+            lines.next();
+            continue;
+        }
 
-        let mut filepatch = {
-            let (kind, filename, other_filename) = if minus_filename == NULL_FILENAME {
-                (FilePatchKind::Create, plus_filename, None)
-            } else if plus_filename == NULL_FILENAME {
-                (FilePatchKind::Delete, minus_filename, None)
-            } else {
-                // TODO: What to do if plus_filename and minus_filename differ after stripping the beginning?
-
-                (FilePatchKind::Modify, plus_filename, Some(minus_filename))
-            };
-
-            fn strip_filename(filename: &[u8], strip: usize) -> Result<PathBuf, Error> {
-                let filename = PathBuf::from(OsStr::from_bytes(filename));
-                if !filename.is_relative() {
-                    return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
+        if let Some(capture) = DIFF_GIT.captures(line) {
+            // patch uses "diff --git " as a separator that can mean a filepatch ended even if it had no hunks
+            {
+                if let Some(file_patch) = new_filepatch(&filepatch_metadata, strip)? {
+                    file_patches.push(file_patch);
                 }
-
-                let mut components = filename.components();
-                for _ in 0..strip { components.next(); }
-                Ok(components.as_path().to_path_buf())
+                filepatch_metadata = FilePatchMetadata::default();
             }
 
-            let filename = strip_filename(filename, strip)?;
+            filepatch_metadata.old_filename = Some(capture.name("oldfilename").unwrap().as_bytes());
+            filepatch_metadata.new_filename = Some(capture.name("newfilename").unwrap().as_bytes());
 
-            if filepatch_metadata.rename_from && filepatch_metadata.rename_to && other_filename.is_some() {
-                let other_filename = strip_filename(other_filename.unwrap(), strip)?;
-                FilePatch::new_renamed(kind, other_filename, filename)
-            } else {
-                FilePatch::new(kind, filename)
+            lines.next();
+            continue;
+        }
+
+        if !CHUNK.is_match(line) {
+            lines.next();
+            continue;
+        }
+
+        let mut file_patch = match new_filepatch(&filepatch_metadata, strip)? {
+            Some(file_patch) => file_patch,
+            None => {
+                // TODO: Better error reporting...
+                return Err(format_err!("Badly formated patch!"));
             }
         };
+        filepatch_metadata = FilePatchMetadata::default();
 
         // Read hunks
         loop {
@@ -175,18 +215,18 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
             // It seems that there are patches that do not use the /dev/null filename, yet they add or remove
             // complete files. Recognize these as well.
             if remove_line == 0 {
-                filepatch.change_kind(FilePatchKind::Create);
+                file_patch.change_kind(FilePatchKind::Create);
             } else if add_line == 0 {
-                filepatch.change_kind(FilePatchKind::Delete);
+                file_patch.change_kind(FilePatchKind::Delete);
             }
 
             // Convert lines to zero-based numbering. But don't do that if we are creating/deleting (in that case it is 0 and would underflow)
-            if filepatch.kind() == FilePatchKind::Create {
+            if file_patch.kind() == FilePatchKind::Create {
                 remove_count = 0;
             } else {
                 remove_line -= 1;
             }
-            if filepatch.kind() == FilePatchKind::Delete {
+            if file_patch.kind() == FilePatchKind::Delete {
                 add_count = 0;
             } else {
                 add_line -= 1;
@@ -301,18 +341,18 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
 
             if hunk.context_after == 0 || hunk.context_after < hunk.context_before {
                 // If we are applying the end, add the implicit empty new line, unless there was the "No newline" tag.
-                if !plus_newline_at_end && filepatch.kind() != FilePatchKind::Delete {
+                if !plus_newline_at_end && file_patch.kind() != FilePatchKind::Delete {
                     hunk.add.content.push(&EMPTY_LINE_SLICE);
                 }
-                if !minus_newline_at_end && filepatch.kind() != FilePatchKind::Create {
+                if !minus_newline_at_end && file_patch.kind() != FilePatchKind::Create {
                     hunk.remove.content.push(&EMPTY_LINE_SLICE);
                 }
             }
 
-            filepatch.hunks.push(hunk);
+            file_patch.hunks.push(hunk);
         }
 
-        file_patches.push(filepatch);
+        file_patches.push(file_patch);
     }
 
     Ok(file_patches)
