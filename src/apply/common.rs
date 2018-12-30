@@ -196,11 +196,11 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
 
     if let Some(new_filename) = applied_patch.file_patch.new_filename() {
         // Now we have to do the rename backwards
-        let file = modified_files.get_mut(filename).unwrap();
+        let file = modified_files.get_mut(new_filename).unwrap();
         let mut tmp_file = file.move_out();
         drop(file);
 
-        let old_file = modified_files.get_mut(new_filename).unwrap();
+        let old_file = modified_files.get_mut(applied_patch.file_patch.filename()).unwrap();
         let ok = old_file.move_in(&mut tmp_file);
         assert!(ok); // It must be ok during rollback, otherwise we made mistake during applying
 
