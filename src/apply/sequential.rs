@@ -1,9 +1,8 @@
 // Licensed under the MIT license. See LICENSE.md
 
 use std::collections::HashMap;
-use std::fs::File;
 use std::hash::BuildHasherDefault;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use failure::Error;
 use seahash;
@@ -11,7 +10,6 @@ use seahash;
 use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
-use crate::patch::{self, PatchDirection, FilePatchKind, InternedFilePatch, FilePatchApplyReport, HunkApplyReport};
 use crate::patch_unified::parse_unified;
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;

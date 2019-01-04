@@ -2,9 +2,8 @@
 
 use std;
 use std::collections::HashMap;
-use std::fs::File;
 use std::hash::{BuildHasherDefault, Hash};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
@@ -16,7 +15,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
-use crate::patch::{self, FilePatchApplyReport, InternedFilePatch, HunkApplyReport, PatchDirection, FilePatch, TextFilePatch};
+use crate::patch::{PatchDirection, TextFilePatch};
 use crate::patch_unified::parse_unified;
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
