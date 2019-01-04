@@ -197,9 +197,17 @@ fn main() {
         }
     }
 
-    let all_good = cmd_push(patches_path, goal, fuzz, 1, do_backups, backup_count).unwrap();
+    match cmd_push(patches_path, goal, fuzz, 1, do_backups, backup_count) {
+        Err(err) => {
+            for (i, cause) in err.iter_chain().enumerate() {
+                eprintln!("{}{}", "  ".repeat(i), cause);
+            }
 
-    if !all_good {
-        process::exit(1);
+            process::exit(1);
+        },
+        Ok(false) => {
+            process::exit(1);
+        }
+        _ => {}
     }
 }

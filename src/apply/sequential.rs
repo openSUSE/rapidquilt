@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasherDefault;
 use std::path::PathBuf;
 
-use failure::Error;
+use failure::{Error, ResultExt};
 use seahash;
 
 use crate::apply::*;
@@ -32,8 +32,12 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
         final_patch = index;
 
-        let data = arena.load_file(config.patches_path.join(patch_filename))?;
-        let text_file_patches = parse_unified(&data, config.strip)?;
+        let text_file_patches = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
+            let data = arena.load_file(config.patches_path.join(patch_filename))?;
+            let text_file_patches = parse_unified(&data, config.strip)?;
+            Ok(text_file_patches)
+        })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
+
         let mut any_report_failed = false;
 
         for text_file_patch in text_file_patches {

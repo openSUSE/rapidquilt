@@ -7,7 +7,6 @@ pub mod sequential;
 pub mod parallel;
 mod common;
 
-
 pub use self::sequential::apply_patches;
 pub use self::parallel::apply_patches as apply_patches_parallel;
 
@@ -48,4 +47,10 @@ pub struct ApplyConfig<'a> {
 pub struct ApplyResult<'a> {
     pub applied_patches: &'a [PathBuf],
     pub skipped_patches: &'a [PathBuf],
+}
+
+#[derive(Debug, Fail)]
+pub enum ApplyError {
+    #[fail(display = "Failed to load patch {:?}", patch_filename)]
+    PatchLoad { patch_filename: PathBuf },
 }

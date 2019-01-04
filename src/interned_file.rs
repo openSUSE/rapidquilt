@@ -1,8 +1,6 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::io::{BufWriter, Write};
-
-use failure::Error;
+use std::io::{self, BufWriter, Write};
 
 use crate::line_interner::{LineId, LineInterner};
 use crate::util::split_lines_with_endings;
@@ -74,7 +72,7 @@ impl InternedFile {
         true
     }
 
-    pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
+    pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
         // Note: Even self.deleted files can be saved - quilt backup file for a file
         //       that did not exist is an empty file.
 

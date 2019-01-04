@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 
-use failure::Error;
+use failure::{Error, ResultExt};
 use seahash;
 use rayon;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
@@ -96,10 +96,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
     let arena = &FileArena::new();
 
     // Load all patches multi-threaded.
-    let mut text_patches: Vec<_> = config.patch_filenames.par_iter().map(|patch_filename| {
+    let mut text_patches: Vec<_> = config.patch_filenames.par_iter().map(|patch_filename| -> Result<_, Error> {
         let raw_patch_data = arena.load_file(config.patches_path.join(patch_filename))?;
-
-        parse_unified(raw_patch_data, config.strip)
+        let text_file_patches = parse_unified(raw_patch_data, config.strip)?;
+        Ok(text_file_patches)
     }).collect();
 
     // Distribute the patches to queues for worker threads
@@ -119,8 +119,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         config.patch_filenames.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
     ); threads];
     for (index, text_file_patches) in text_patches.drain(..).enumerate() {
-        for text_file_patch in text_file_patches?.drain(..) {
-            let thread_id = *filename_to_thread_id.get(text_file_patch.filename()).unwrap();
+        let mut text_file_patches = text_file_patches.with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
+
+        for text_file_patch in text_file_patches.drain(..) {
+            let thread_id = *filename_to_thread_id.get(text_file_patch.filename()).unwrap(); // NOTE(unwrap): We put the filename in there, it must be there.
             text_file_patches_per_thread[thread_id].push((index, text_file_patch));
         }
     }
@@ -143,7 +145,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                 let senders = senders.clone();
                 move |message: Message| {
                     for sender in &senders {
-                        sender.send(message.clone()).unwrap(); // TODO: Propagate error up?
+                        sender.send(message.clone()).unwrap(); // NOTE(unwrap): Send can only fail if the receiving side is disconnected, which can not happen in our case.
                     }
                 }
             };
@@ -198,7 +200,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
 //                         println!("TID {} - Rolling back #{} file {:?}", thread_id, applied_patch.index, file_patch.filename());
 
-                        let mut file = modified_files.get_mut(file_patch.filename()).unwrap(); // It must be there, we must have loaded it when applying the patch.
+                        let mut file = modified_files.get_mut(file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
                         file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
                         applied_patches.pop();
@@ -212,7 +214,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                     }
 
                     // Wait until everybody is done or someone finds that earlier patch failed
-                    match receiver.recv().unwrap() {
+                    match receiver.recv().unwrap() { // NOTE(unwrap): Receive can only fail if the receiving side is disconnected, which can not happen in our case.
                         Message::NewEarliestBrokenPatchIndex => {
 //                             println!("TID {} - Received NewEarliestBrokenPatchIndex", thread_id);
 

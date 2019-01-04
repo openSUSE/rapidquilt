@@ -2,12 +2,11 @@
 
 use std::marker::PhantomData;
 use std::vec::Vec;
+use std::io;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use std::mem::transmute;
-
-use failure::Error;
 
 
 /// Utility that reads files and keeps them loaded in immovable place in memory
@@ -26,7 +25,7 @@ impl<'a> FileArena<'a> {
         }
     }
 
-    pub fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<&'a [u8], Error> {
+    pub fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<&'a [u8], io::Error> {
         let data = fs::read(path.as_ref())?.into_boxed_slice();
 
         let slice = unsafe {

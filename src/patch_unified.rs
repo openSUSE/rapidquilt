@@ -1,13 +1,12 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::io::{BufWriter, Write};
+use std::io::{self, BufWriter, Write};
 use std::vec::Vec;
 use std::path::PathBuf;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::str;
 
-use failure::Error;
 use regex::bytes::{Regex, RegexSet};
 
 use crate::line_interner::{LineId, LineInterner};
@@ -60,6 +59,28 @@ enum MatchedMetadata {
     GitBinaryPatch
 }
 
+#[derive(Debug, Fail, PartialEq)]
+pub enum ParseError {
+    #[fail(display = "Path in patch is not relative: {:?}", path)]
+    AbsolutePathInPatch { path: PathBuf },
+
+    #[fail(display = "Unsupported metadata: \"{}\"", line)]
+    UnsupportedMetadata { line: String },
+
+    #[fail(display = "Could not figure out the filename for hunk \"{}\"", hunk_line)]
+    MissingFilenameForHunk { hunk_line: String },
+
+    #[fail(display = "Unexpected end of file")]
+    UnexpectedEndOfFile,
+
+    #[fail(display = "Unexpected line in the middle of hunk: \"{}\"", line)]
+    BadLineInHunk { line: String },
+}
+
+fn debug_line_to_string(line: &[u8]) -> String {
+    String::from_utf8_lossy(line).replace('\n', "")
+}
+
 struct FilePatchMetadata<'a> {
     old_filename: Option<&'a [u8]>,
     new_filename: Option<&'a [u8]>,
@@ -78,7 +99,7 @@ impl<'a> Default for FilePatchMetadata<'a> {
     }
 }
 
-fn new_filepatch<'a>(filepatch_metadata: &FilePatchMetadata, strip: usize) -> Result<Option<TextFilePatch<'a>>, Error> {
+fn new_filepatch<'a>(filepatch_metadata: &FilePatchMetadata, strip: usize) -> Result<Option<TextFilePatch<'a>>, ParseError> {
     if let (Some(old_filename), Some(new_filename)) = (filepatch_metadata.old_filename, filepatch_metadata.new_filename) {
         let (kind, filename, other_filename) = if old_filename == NULL_FILENAME {
             (FilePatchKind::Create, new_filename, None)
@@ -90,10 +111,10 @@ fn new_filepatch<'a>(filepatch_metadata: &FilePatchMetadata, strip: usize) -> Re
             (FilePatchKind::Modify, new_filename, Some(old_filename))
         };
 
-        fn strip_filename(filename: &[u8], strip: usize) -> Result<PathBuf, Error> {
+        fn strip_filename(filename: &[u8], strip: usize) -> Result<PathBuf, ParseError> {
             let filename = PathBuf::from(OsStr::from_bytes(filename));
             if !filename.is_relative() {
-                return Err(format_err!("Path in patch is not relative: \"{:?}\"", filename));
+                return Err(ParseError::AbsolutePathInPatch { path: filename });
             }
 
             let mut components = filename.components();
@@ -114,7 +135,7 @@ fn new_filepatch<'a>(filepatch_metadata: &FilePatchMetadata, strip: usize) -> Re
     }
 }
 
-pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, Error> {
+pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, ParseError> {
     let mut file_patches = Vec::new();
 
     let mut lines = split_lines_with_endings(bytes).peekable();
@@ -129,17 +150,18 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                     // We do not actually care about the filename written next to the "rename from" line.
                     // patch doesn't care either
                     filepatch_metadata.rename_from = true;
-                },
+                }
                 MatchedMetadata::RenameTo => {
                     // We do not actually care about the filename written next to the "rename to" line.
                     // patch doesn't care either
                     filepatch_metadata.rename_to = true;
-                },
+                }
                 MatchedMetadata::GitBinaryPatch => {
-                    return Err(format_err!("GIT binary patch is not supported!"));
+                    // These metadata are not (yet) supported and ignoring them would be bad
+                    return Err(ParseError::UnsupportedMetadata { line: debug_line_to_string(line) });
                 }
                 _ => {
-                    // TODO: Handle the other metadata...
+                    // TODO: Handle the other metadata... For now they can be ignored.
                 }
             }
             lines.next();
@@ -182,8 +204,7 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
         let mut file_patch = match new_filepatch(&filepatch_metadata, strip)? {
             Some(file_patch) => file_patch,
             None => {
-                // TODO: Better error reporting...
-                return Err(format_err!("Badly formated patch!"));
+                return Err(ParseError::MissingFilenameForHunk { hunk_line: debug_line_to_string(line) });
             }
         };
         filepatch_metadata = FilePatchMetadata::default();
@@ -244,7 +265,7 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                 let line = match lines.next() {
                     Some(line) => line,
                     None => {
-                        return Err(format_err!("Unexpected EOF in patch!"));
+                        return Err(ParseError::UnexpectedEndOfFile);
                     }
                 };
 
@@ -304,7 +325,7 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
                         hunk.context_after = 0;
                     }
                     _ => {
-                        return Err(format_err!("Badly formated patch line: \"{}\"", str::from_utf8(line).unwrap_or("<BAD UTF-8>")));
+                        return Err(ParseError::BadLineInHunk { line: debug_line_to_string(line) });
                     }
                 }
             }
@@ -328,15 +349,15 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
 }
 
 pub trait UnifiedPatchWriter {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error>;
+    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error>;
 }
 
 pub trait UnifiedPatchRejWriter {
-    fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), Error>;
+    fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error>;
 }
 
 impl<'a> UnifiedPatchWriter for Hunk<'a, LineId> {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
+    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
         let add_count = self.add.content.len();
         let remove_count = self.remove.content.len();
 
@@ -368,7 +389,7 @@ impl<'a> UnifiedPatchWriter for Hunk<'a, LineId> {
             (a.len(), b.len())
         }
 
-        let mut write_line = |c: u8, line_id: LineId| -> Result<(), Error> {
+        let mut write_line = |c: u8, line_id: LineId| -> Result<(), io::Error> {
             let line = interner.get(line_id).unwrap(); // NOTE(unwrap): Must succeed, we are printing patch that was already interned. If it is not there, it is a bug.
 
             writer.write(&[c])?;
@@ -412,7 +433,7 @@ impl<'a> UnifiedPatchWriter for Hunk<'a, LineId> {
 }
 
 
-fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, writer: &mut BufWriter<W>) -> Result<(), Error> {
+fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, writer: &mut BufWriter<W>) -> Result<(), io::Error> {
     // TODO: Currently we are writing patches with `strip` level 0, which is exactly
     //       what we need for .rej files. But we could add option to configure it?
 
@@ -436,7 +457,7 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, w
 }
 
 impl<'a> UnifiedPatchWriter for FilePatch<'a, LineId> {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), Error> {
+    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
         let mut writer = BufWriter::new(writer);
 
         write_file_patch_header_to(self, &mut writer)?;
@@ -450,7 +471,7 @@ impl<'a> UnifiedPatchWriter for FilePatch<'a, LineId> {
 }
 
 impl<'a> UnifiedPatchRejWriter for FilePatch<'a, LineId> {
-    fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), Error> {
+    fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error> {
         if report.ok() {
             return Ok(())
         }

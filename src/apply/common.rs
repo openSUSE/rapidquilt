@@ -2,10 +2,9 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File};
+use std::io;
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
-
-use failure::Error;
 
 use crate::apply::*;
 use crate::interned_file::InternedFile;
@@ -24,7 +23,7 @@ pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
     }
 }
 
-fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), Error> {
+fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), io::Error> {
     let mut path = path.as_ref();
 
     while let Some(parent) = path.parent() {
@@ -41,7 +40,7 @@ fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), Error> 
     Ok(())
 }
 
-pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
+pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, interner: &LineInterner) -> Result<(), io::Error> {
     let filename = filename.as_ref();
 
 //     println!("Saving modified file: {:?}: exited: {:?} deleted: {:?} len: {}", filename, file.existed, file.deleted, file.content.len());
@@ -50,9 +49,18 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
         // If the file file existed, delete it. Whether we want to overwrite it
         // or really delete it - the file may be a hard link and we must replace
         // it with a new one, not edit the shared content.
-        // We ignore the result, because it is ok if it wasn't there.
-        // TODO: Do not ignore other errors, e.g. from permissions.
-        let _ = fs::remove_file(filename);
+        match fs::remove_file(filename) {
+            Ok(_) => {
+                // All is good.
+            },
+            Err(ref err) if err.kind() == io::ErrorKind::NotFound => {
+                // It wasn't there since beginning, that is fine.
+            },
+            Err(err) => {
+                // Some other error, report it
+                return Err(err);
+            }
+        }
     }
 
     if file.deleted {
@@ -76,14 +84,14 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
     Ok(())
 }
 
-pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
+pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), io::Error> {
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
-    path.push(&filename);
+    path.push(&filename); // Note that this may add multiple directories plus filename
 
 //     println!("Saving backup file {:?}", path);
 
-    fs::create_dir_all(&path.parent().unwrap())?;
+    fs::create_dir_all(&path.parent().unwrap())?; // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
     original_file.write_to(interner, &mut File::create(path)?)?;
 
     Ok(())
@@ -208,7 +216,7 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
     };
 
     {
-        let mut file = modified_files.get_mut(filename).unwrap(); // It must be there, we must have loaded it when applying the patch.
+        let mut file = modified_files.get_mut(filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
 
         applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
@@ -218,17 +226,17 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
 
     if let Some(new_filename) = applied_patch.file_patch.new_filename() {
         // Now we have to do the rename backwards
-        let file = modified_files.get_mut(new_filename).unwrap();
+        let file = modified_files.get_mut(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
         let mut tmp_file = file.move_out();
         drop(file);
 
-        let old_file = modified_files.get_mut(applied_patch.file_patch.filename()).unwrap();
+        let old_file = modified_files.get_mut(applied_patch.file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
         let ok = old_file.move_in(&mut tmp_file);
         assert!(ok); // It must be ok during rollback, otherwise we made mistake during applying
 
         old_file
     } else {
-        modified_files.get(filename).unwrap()
+        modified_files.get(filename).unwrap() // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
     }
 }
 
@@ -237,7 +245,7 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     rejected_patch_index: usize,
     interner: &LineInterner)
-    -> Result<(), Error>
+    -> Result<(), io::Error>
 {
     while let Some(applied_patch) = applied_patches.last() {
         assert!(applied_patch.index <= rejected_patch_index);
@@ -267,7 +275,7 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     interner: &LineInterner,
     down_to_index: usize)
-    -> Result<(), Error>
+    -> Result<(), io::Error>
 {
     for applied_patch in applied_patches.iter().rev() {
         if applied_patch.index < down_to_index {
@@ -280,7 +288,7 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
 
         if let Some(new_filename) = applied_patch.file_patch.new_filename() {
             // If it was a rename, we also have to backup the new file (it will be empty file).
-            let new_file = modified_files.get(new_filename).unwrap();
+            let new_file = modified_files.get(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
             save_backup_file(applied_patch.patch_filename, new_filename, &new_file, &interner)?;
         }
     }
