@@ -356,6 +356,7 @@ impl<'a, Line> FilePatch<'a, Line> {
     pub fn filename(&self) -> &PathBuf { &self.filename }
     pub fn new_filename(&self) -> Option<&PathBuf> { self.new_filename.as_ref() }
 
+    #[allow(dead_code)]
     pub fn is_rename(&self) -> bool { self.new_filename.is_some() }
 }
 
