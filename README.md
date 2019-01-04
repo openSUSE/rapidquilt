@@ -35,5 +35,4 @@ The goal is to be very fast.
 * only patches in unified format
 * file permissions in patch files are ignored
 * date in patch files is ignored
-* empty directories after deleting files are not deleted
 * ... probably more that I don't know about

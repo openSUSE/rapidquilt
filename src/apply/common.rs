@@ -24,6 +24,23 @@ pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
     }
 }
 
+fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), Error> {
+    let mut path = path.as_ref();
+
+    while let Some(parent) = path.parent() {
+        if fs::read_dir(parent)?.next().is_some() {
+            // Not empty, we are done.
+            return Ok(());
+        }
+
+        fs::remove_dir(parent)?;
+
+        path = parent;
+    }
+
+    Ok(())
+}
+
 pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
     let filename = filename.as_ref();
 
@@ -38,8 +55,13 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
         let _ = fs::remove_file(filename);
     }
 
-    // If the file is not tracked as deleted, re-create it with the next content.
-    if !file.deleted {
+    if file.deleted {
+        // If the file was deleted and existed before, clean empty parent directories
+        if file.existed {
+            clean_empty_parent_directories(filename)?;
+        }
+    } else {
+        // If the file is not tracked as deleted, re-create it with the next content.
         if !file.existed {
             // If the file is new, the directory may be new as well. Let's
             // create it now.
