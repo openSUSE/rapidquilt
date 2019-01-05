@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hash};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, Mutex};
 
 use failure::{Error, ResultExt};
 use seahash;
@@ -86,6 +86,153 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
 enum Message {
     NewEarliestBrokenPatchIndex,
     ThreadDoneApplying,
+    TerminatingEarly,
+}
+
+fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
+    config: &'a ApplyConfig,
+    arena: &FileArena<'a>,
+    thread_id: usize,
+    threads: usize,
+    thread_file_patches: Vec<(usize, TextFilePatch)>,
+    receiver: mpsc::Receiver<Message>,
+    broadcast_message: BroadcastFn,
+    earliest_broken_patch_index: &AtomicUsize)
+    -> Result<(), Error>
+{
+    let mut interner = LineInterner::new();
+    let mut applied_patches = Vec::<PatchStatus>::new();
+    let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+
+    // First we go forward and apply patches until we apply all of them or get pass the `earliest_broken_patch_index`
+    for (index, text_file_patch) in thread_file_patches {
+        if index > earliest_broken_patch_index.load(Ordering::Acquire) {
+            // We are past the earliest broken patch. Time to stop applying.
+            // Note that we DO WANT to apply the last broken patch itself.
+            break;
+        }
+
+//         println!("TID {} - Applying patch #{} file {:?}", thread_id, index, text_file_patch.filename());
+
+        match apply_one_file_patch(config,
+                                   index,
+                                   text_file_patch,
+                                   &mut applied_patches,
+                                   &mut modified_files,
+                                   &arena,
+                                   &mut interner) {
+            Ok(false) => {
+//                 println!("TID {} - Patch #{} failed to apply, signaling everyone!", thread_id, index);
+
+                // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
+                let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
+                while index < current {
+                    current = earliest_broken_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
+                }
+
+                broadcast_message(Message::NewEarliestBrokenPatchIndex);
+            }
+            Err(err) => {
+                broadcast_message(Message::TerminatingEarly);
+                return Err(err);
+            }
+            _ => {}
+        }
+    }
+
+    // Signal that we are done applying
+    broadcast_message(Message::ThreadDoneApplying);
+
+    let mut received_done_applying_count = 0;
+    loop {
+        // Rollback if there is anything to rollback
+        while let Some(applied_patch) = applied_patches.last() {
+            if applied_patch.index <= earliest_broken_patch_index.load(Ordering::Acquire) {
+                break;
+            }
+
+            let file_patch = &applied_patch.file_patch;
+
+//             println!("TID {} - Rolling back #{} file {:?}", thread_id, applied_patch.index, file_patch.filename());
+
+            let mut file = modified_files.get_mut(file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+            file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+
+            applied_patches.pop();
+        }
+
+        if received_done_applying_count == threads {
+            // Everybody is done applying => nobody will be able to find
+            // earlier failed patch. Since we already rollbacked everything,
+            // it is time to proceed with next step.
+            break;
+        }
+
+        // Wait until everybody is done or someone finds that earlier patch failed
+        match receiver.recv().unwrap() { // NOTE(unwrap): Receive can only fail if the receiving side is disconnected, which can not happen in our case - it is held by everybody including us.
+            Message::NewEarliestBrokenPatchIndex => {
+//                 println!("TID {} - Received NewEarliestBrokenPatchIndex", thread_id);
+
+                // Ok, time to rollback some more...
+                continue;
+            },
+
+            Message::ThreadDoneApplying => {
+//                 println!("TID {} - Received ThreadDoneApplying", thread_id);
+
+                received_done_applying_count += 1;
+                // Time to rollback some more TODO: Is this needed? It won't hurt much, but still...
+                continue;
+            },
+
+            Message::TerminatingEarly => {
+//                 println!("TID {} - Received TerminatingEarly", thread_id);
+
+                // Some other thread gave up early because of error, if we
+                // proceed we may end up waiting for them forever. Lets quit
+                // early too. Their error will be reported to the user.
+                return Ok(());
+            }
+        }
+    }
+
+    // Make a last atomic load. From now on it won't be changing.
+    let earliest_broken_patch_index = earliest_broken_patch_index.load(Ordering::Acquire);
+
+    // Rollback the last applied patch and generate .rej files if any
+    rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner)?;
+
+//     println!("TID {} - Saving result...", thread_id);
+
+    if thread_id == 0 {
+        println!("Saving modified files...");
+    }
+
+    save_modified_files(&modified_files, &interner)?;
+
+    if config.do_backups == ApplyConfigDoBackups::Always ||
+    (config.do_backups == ApplyConfigDoBackups::OnFail &&
+        earliest_broken_patch_index != std::usize::MAX)
+    {
+        if thread_id == 0 {
+            println!("Saving quilt backup files ({})...", config.backup_count);
+        }
+
+        let final_patch = if earliest_broken_patch_index == std::usize::MAX {
+            config.patch_filenames.len() - 1
+        } else {
+            earliest_broken_patch_index
+        };
+
+        let down_to_index = match config.backup_count {
+            ApplyConfigBackupCount::All => 0,
+            ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+        };
+
+        rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+    }
+
+    Ok(())
 }
 
 pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Error> {
@@ -138,6 +285,9 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         mpsc::sync_channel::<Message>(threads * 2) // At the moment every thread can send at most 2 messages, so lets use fixed size channel.
     }).unzip();
 
+    // This will record errors from the threads.
+    let thread_errors: &Mutex<Vec<Error>> = &Mutex::new(Vec::new());
+
     // Run the applying threads
     rayon::scope(move |scope| {
         for ((thread_id, thread_file_patches), receiver) in text_file_patches_per_thread.drain(..).enumerate().zip(receivers) {
@@ -145,134 +295,34 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                 let senders = senders.clone();
                 move |message: Message| {
                     for sender in &senders {
-                        sender.send(message.clone()).unwrap(); // NOTE(unwrap): Send can only fail if the receiving side is disconnected, which can not happen in our case.
+                        let _ = sender.send(message.clone()); // The only error this can return is when the receiving thread disconnected - i.e. terminated early. That could happen if it terminated because of error (e.g. permissions error when reading file), we can ignore that.
                     }
                 }
             };
 
             scope.spawn(move |_| {
-                let mut interner = LineInterner::new();
-                let mut applied_patches = Vec::<PatchStatus>::new();
-                let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+                let result = apply_worker_task(
+                    config,
+                    arena,
+                    thread_id,
+                    threads,
+                    thread_file_patches,
+                    receiver,
+                    broadcast_message,
+                    earliest_broken_patch_index);
 
-                // First we go forward and apply patches until we apply all of them or get pass the `earliest_broken_patch_index`
-                for (index, text_file_patch) in thread_file_patches {
-                    if index > earliest_broken_patch_index.load(Ordering::Acquire) {
-                        // We are past the earliest broken patch. Time to stop applying.
-                        // Note that we DO WANT to apply the last broken patch itself.
-                        break;
-                    }
-
-//                     println!("TID {} - Applying patch #{} file {:?}", thread_id, index, text_file_patch.filename());
-
-                    if !apply_one_file_patch(config,
-                                             index,
-                                             text_file_patch,
-                                             &mut applied_patches,
-                                             &mut modified_files,
-                                             &arena,
-                                             &mut interner)
-                    {
-//                         println!("TID {} - Patch #{} failed to apply, signaling everyone! Report: {:?}", thread_id, index, report);
-
-                        // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
-                        let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
-                        while index < current {
-                            current = earliest_broken_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
-                        }
-
-                        broadcast_message(Message::NewEarliestBrokenPatchIndex);
-                    }
-                }
-
-                // Signal that we are done applying
-                broadcast_message(Message::ThreadDoneApplying);
-
-                let mut received_done_applying_count = 0;
-                loop {
-                    // Rollback if there is anything to rollback
-                    while let Some(applied_patch) = applied_patches.last() {
-                        if applied_patch.index <= earliest_broken_patch_index.load(Ordering::Acquire) {
-                            break;
-                        }
-
-                        let file_patch = &applied_patch.file_patch;
-
-//                         println!("TID {} - Rolling back #{} file {:?}", thread_id, applied_patch.index, file_patch.filename());
-
-                        let mut file = modified_files.get_mut(file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-                        file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
-
-                        applied_patches.pop();
-                    }
-
-                    if received_done_applying_count == threads {
-                        // Everybody is done applying => nobody will be able to find
-                        // earlier failed patch. Since we already rollbacked everything,
-                        // it is time to proceed with next step.
-                        break;
-                    }
-
-                    // Wait until everybody is done or someone finds that earlier patch failed
-                    match receiver.recv().unwrap() { // NOTE(unwrap): Receive can only fail if the receiving side is disconnected, which can not happen in our case.
-                        Message::NewEarliestBrokenPatchIndex => {
-//                             println!("TID {} - Received NewEarliestBrokenPatchIndex", thread_id);
-
-                            // Ok, time to rollback some more...
-                            continue;
-                        },
-
-                        Message::ThreadDoneApplying => {
-//                             println!("TID {} - Received ThreadDoneApplying", thread_id);
-
-                            received_done_applying_count += 1;
-                            // Time to rollback some more TODO: Is this needed? It won't hurt much, but still...
-                            continue;
-                        },
-                    }
-                }
-
-                // Make a last atomic load. From now on it won't be changing.
-                let earliest_broken_patch_index = earliest_broken_patch_index.load(Ordering::Acquire);
-
-                // Rollback the last applied patch and generate .rej files if any
-                rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner).unwrap(); // TODO: Handle error better...
-
-//                 println!("TID {} - Saving result...", thread_id);
-
-                if thread_id == 0 {
-                    println!("Saving modified files...");
-                }
-
-                for (filename, file) in &modified_files {
-                    save_modified_file(filename, file, &interner).unwrap(); // TODO: Handle error better...
-                }
-
-                if config.do_backups == ApplyConfigDoBackups::Always ||
-                   (config.do_backups == ApplyConfigDoBackups::OnFail &&
-                    earliest_broken_patch_index != std::usize::MAX)
-                {
-                    if thread_id == 0 {
-                        println!("Saving quilt backup files ({})...", config.backup_count);
-                    }
-
-                    let final_patch = if earliest_broken_patch_index == std::usize::MAX {
-                        config.patch_filenames.len() - 1
-                    } else {
-                        earliest_broken_patch_index
-                    };
-
-                    let down_to_index = match config.backup_count {
-                        ApplyConfigBackupCount::All => 0,
-                        ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
-                    };
-
-                    rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index).unwrap(); // TODO: Handle error better...
+                if let Err(error) = result {
+                    thread_errors.lock().unwrap().push(error); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
                 }
             });
         }
     });
 
+    // If there was error in any of the applying threads, report the first one out
+    // TODO: Should we report all of them?
+    for error in thread_errors.lock().unwrap().drain(..) { // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
+        return Err(error);
+    }
 
     let mut final_patch = earliest_broken_patch_index.load(Ordering::Acquire);
     if final_patch == std::usize::MAX {

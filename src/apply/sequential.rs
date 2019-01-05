@@ -47,7 +47,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                                      &mut applied_patches,
                                      &mut modified_files,
                                      &arena,
-                                     &mut interner)
+                                     &mut interner)?
             {
                 any_report_failed = true;
             }
@@ -61,9 +61,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
     println!("Saving modified files...");
 
-    for (filename, file) in &modified_files {
-        save_modified_file(filename, file, &interner)?;
-    }
+    save_modified_files(&modified_files, &interner)?;
 
     if config.do_backups == ApplyConfigDoBackups::Always ||
        (config.do_backups == ApplyConfigDoBackups::OnFail &&

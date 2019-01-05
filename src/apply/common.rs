@@ -1,10 +1,12 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::collections::HashMap;
+use std::collections::{HashMap, hash_map::Entry};
 use std::fs::{self, File};
 use std::io;
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
+
+use failure::{Error, ResultExt};
 
 use crate::apply::*;
 use crate::interned_file::InternedFile;
@@ -84,15 +86,36 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
     Ok(())
 }
 
-pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), io::Error> {
+pub fn save_modified_files<
+    'arena: 'interner,
+    'interner,
+    H: BuildHasher>
+(
+    modified_files: &HashMap<PathBuf, InternedFile, H>,
+    interner: &'interner LineInterner<'arena>)
+    -> Result<(), Error>
+{
+    for (filename, file) in modified_files {
+        save_modified_file(filename, file, &interner)
+            .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.clone() })?;
+    }
+
+    Ok(())
+}
+
+pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
     path.push(&filename); // Note that this may add multiple directories plus filename
 
 //     println!("Saving backup file {:?}", path);
 
-    fs::create_dir_all(&path.parent().unwrap())?; // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
-    original_file.write_to(interner, &mut File::create(path)?)?;
+    (|| -> Result<(), io::Error> { // TODO: Replace me with try-block when stable.
+        let path_parent = &path.parent().unwrap();
+
+        fs::create_dir_all(path_parent)?; // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
+        original_file.write_to(interner, &mut File::create(&path)?)
+    })().with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
 
     Ok(())
 }
@@ -114,15 +137,26 @@ pub fn get_interned_file<
     modified_files: &'modified_files mut HashMap<PathBuf, InternedFile, H>,
     arena: &'arena FileArena,
     interner: &'interner mut LineInterner<'arena>)
-    -> &'modified_files mut InternedFile
+    -> Result<&'modified_files mut InternedFile, io::Error>
 {
     // Load the file or create it empty
-    modified_files.entry(filename.clone() /* <-TODO: Avoid clone */).or_insert_with(|| {
-        match arena.load_file(filename) {
-            Ok(data) => InternedFile::new(interner, &data, true),
-            Err(_) => InternedFile::new_non_existent(), // If the file doesn't exist, make empty one. TODO: Differentiate between "doesn't exist" and other errors!
+    let item = match modified_files.entry(filename.clone() /* <-TODO: Avoid clone */) {
+        Entry::Occupied(entry) => entry.into_mut(),
+
+        Entry::Vacant(entry) => {
+            match arena.load_file(filename) {
+                Ok(data) => entry.insert(InternedFile::new(interner, &data, true)),
+
+                // If the file doesn't exist, make empty one.
+                Err(ref error) if error.kind() == io::ErrorKind::NotFound =>
+                    entry.insert(InternedFile::new_non_existent()),
+
+                Err(error) => return Err(error),
+            }
         }
-    })
+    };
+
+    Ok(item)
 }
 
 pub fn apply_one_file_patch<
@@ -139,11 +173,12 @@ pub fn apply_one_file_patch<
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     arena: &'arena FileArena,
     interner: &'interner mut LineInterner<'arena>)
-    -> bool
+    -> Result<bool, Error>
 {
     let file_patch = text_file_patch.intern(interner);
 
-    let file = get_interned_file(file_patch.filename(), modified_files, arena, interner);
+    let file = get_interned_file(file_patch.filename(), modified_files, arena, interner)
+        .with_context(|_| ApplyError::LoadFileToPatch { filename: file_patch.filename().clone() })?;
 
     // If the patch renames the file...
     let mut file = if let Some(new_filename) = file_patch.new_filename() {
@@ -152,7 +187,8 @@ pub fn apply_one_file_patch<
         let mut tmp_file = file.move_out();
         drop(file); // We can't hold mutable references to two items from modified_files...
 
-        let new_file = get_interned_file(new_filename, modified_files, arena, interner);
+        let new_file = get_interned_file(new_filename, modified_files, arena, interner)
+            .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.clone() })?;
 
         if !new_file.move_in(&mut tmp_file) {
             // Regular patch will just happily overwrite existing file if there is any...
@@ -166,12 +202,13 @@ pub fn apply_one_file_patch<
 
             // Put the content back to the old file.
             drop(new_file); // We can't hold mutable references to two items from modified_files...
-            let file = get_interned_file(file_patch.filename(), modified_files, arena, interner);
+            let file = get_interned_file(file_patch.filename(), modified_files, arena, interner)
+                .with_context(|_| ApplyError::LoadFileToPatch { filename: file_patch.filename().clone() })?;
             file.move_in(&mut tmp_file);
 
             // Note that we don't place anything into applied_patches - the patch
             // was not applied at all.
-            return false;
+            return Ok(false);
         }
 
 //         println!("Patch {} is renaming file {} to {}!",
@@ -202,7 +239,7 @@ pub fn apply_one_file_patch<
         patch_filename: &config.patch_filenames[index],
     });
 
-    report_ok
+    Ok(report_ok)
 }
 
 pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
@@ -245,7 +282,7 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     rejected_patch_index: usize,
     interner: &LineInterner)
-    -> Result<(), io::Error>
+    -> Result<(), Error>
 {
     while let Some(applied_patch) = applied_patches.last() {
         assert!(applied_patch.index <= rejected_patch_index);
@@ -260,8 +297,10 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
                 applied_patch.file_patch.new_filename().unwrap_or(applied_patch.file_patch.filename())
             );
             println!("Saving rejects to {:?}", rej_filename);
-            let mut output = File::create(rej_filename)?;
-            applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)?;
+
+            File::create(&rej_filename).and_then(|mut output| {
+                applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)
+            }).with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
         }
 
         applied_patches.pop();
@@ -275,7 +314,7 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     interner: &LineInterner,
     down_to_index: usize)
-    -> Result<(), io::Error>
+    -> Result<(), Error>
 {
     for applied_patch in applied_patches.iter().rev() {
         if applied_patch.index < down_to_index {

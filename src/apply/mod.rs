@@ -53,4 +53,16 @@ pub struct ApplyResult<'a> {
 pub enum ApplyError {
     #[fail(display = "Failed to load patch {:?}", patch_filename)]
     PatchLoad { patch_filename: PathBuf },
+
+    #[fail(display = "Failed to load file for patching: {:?}", filename)]
+    LoadFileToPatch { filename: PathBuf },
+
+    #[fail(display = "Failed to save modified file: {:?}", filename)]
+    SaveModifiedFile { filename: PathBuf },
+
+    #[fail(display = "Failed to save rejects file: {:?}", filename)]
+    SaveRejectFile { filename: PathBuf },
+
+    #[fail(display = "Failed to save quilt backup file: {:?}", filename)]
+    SaveQuiltBackupFile { filename: PathBuf },
 }
