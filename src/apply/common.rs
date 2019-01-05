@@ -111,9 +111,9 @@ pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &
 //     println!("Saving backup file {:?}", path);
 
     (|| -> Result<(), io::Error> { // TODO: Replace me with try-block when stable.
-        let path_parent = &path.parent().unwrap();
+        let path_parent = &path.parent().unwrap(); // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
 
-        fs::create_dir_all(path_parent)?; // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
+        fs::create_dir_all(path_parent)?;
         original_file.write_to(interner, &mut File::create(&path)?)
     })().with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
 

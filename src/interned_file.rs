@@ -79,7 +79,7 @@ impl InternedFile {
         let mut writer = BufWriter::new(writer);
 
         for line_id in &self.content {
-            writer.write(interner.get(*line_id).unwrap())?;
+            writer.write(interner.get(*line_id).unwrap())?; // NOTE(unwrap): It must be in the interner, otherwise we panick
         }
 
         Ok(())

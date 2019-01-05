@@ -36,7 +36,7 @@ impl<'a> FileArena<'a> {
             transmute::<&[u8], &'a [u8]>(&data)
         };
 
-        self.files.lock().unwrap().push(data);
+        self.files.lock().unwrap().push(data); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
 
         Ok(slice)
     }
