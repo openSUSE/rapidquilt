@@ -20,9 +20,10 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
+use colored;
 use failure::Error;
-
 use getopts::Options;
+use isatty::{stdout_isatty, stderr_isatty};
 
 use crate::apply::{
     ApplyConfig,
@@ -135,6 +136,10 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
 }
 
 fn main() {
+    if !stdout_isatty() || !stderr_isatty() {
+        colored::control::set_override(false);
+    }
+
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
@@ -144,6 +149,8 @@ fn main() {
     opts.optopt("b", "backup", "create backup files for `quilt pop` (default: onfail)", "always|onfail|never");
     opts.optopt("", "backup-count", "amount of backup files for `quilt pop` to create (default: 100)", "all|<n>");
     opts.optopt("F", "fuzz", "maximal allowed fuzz (default: 0)", "<n>");
+    opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
+
     opts.optflag("h", "help", "print this help menu");
 
     if args.len() < 2 || args[1] != "push" {
@@ -157,6 +164,19 @@ fn main() {
         usage(&opts);
         process::exit(1);
     }
+
+    match matches.opt_str("color") {
+        Some(ref s) if s == "always" => colored::control::set_override(true),
+        Some(ref s) if s == "never"  => colored::control::set_override(false),
+        Some(ref s) if s != "auto" => Err(format_err!("Bad value given to \"color\" parameter!")).unwrap(),
+        _ /* auto */ => {
+            // Force it off if either of the outputs is not terminal. Otherwise leave on default,
+            // which uses some env variables.
+            if !stdout_isatty() || !stderr_isatty() {
+                colored::control::set_override(false);
+            }
+        }
+    };
 
     if let Some(directory) = matches.opt_str("directory") {
         env::set_current_dir(directory).unwrap();

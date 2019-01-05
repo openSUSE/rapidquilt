@@ -27,6 +27,9 @@ The goal is to be very fast.
 
         -F, --fuzz <n>      maximal allowed fuzz (default: 0)
 
+            --color always|auto|never
+                            use colors in output (default: auto)
+
         -h, --help          print this help menu
 
 
