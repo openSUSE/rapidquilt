@@ -8,6 +8,7 @@ edition = '2018'
 lto = true
 
 [dependencies]
+colored = "1.6"
 rayon = "1.0"
 getopts = "0.2"
 failure = "0.1"

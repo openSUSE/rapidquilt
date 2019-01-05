@@ -2,10 +2,11 @@
 
 use std::collections::{HashMap, hash_map::Entry};
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Write};
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 
+use colored::*;
 use failure::{Error, ResultExt};
 
 use crate::apply::*;
@@ -224,13 +225,6 @@ pub fn apply_one_file_patch<
     let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz);
 
     let report_ok = report.ok();
-    if !report_ok {
-        // TODO: Proper reporting, instead of just printing it here...
-        println!("Patch {} failed on file {} hunks {:?}.",
-            config.patch_filenames[index].display(),
-            file_patch.filename().display(),
-            report.hunk_reports().iter().enumerate().filter(|r| *r.1 == HunkApplyReport::Failed).map(|r| r.0 + 1).collect::<Vec<_>>());
-    }
 
     applied_patches.push(PatchStatus {
         index,
@@ -329,6 +323,126 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
             // If it was a rename, we also have to backup the new file (it will be empty file).
             let new_file = modified_files.get(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
             save_backup_file(applied_patch.patch_filename, new_filename, &new_file, &interner)?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn test_apply_with_fuzzes<H: BuildHasher>(
+    patch_status: &PatchStatus,
+    modified_files: &HashMap<PathBuf, InternedFile, H>)
+    -> Option<usize>
+{
+    let file = modified_files.get(patch_status.file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
+
+    // Make our own copy for experiments
+    let mut file = file.clone();
+
+    // Rollback the failed application
+    patch_status.file_patch.rollback(&mut file, PatchDirection::Forward, &patch_status.report);
+
+    let current_fuzz = patch_status.report.fuzz();
+    let max_fuzz = patch_status.file_patch.max_useable_fuzz();
+
+    if current_fuzz >= max_fuzz {
+        return None;
+    }
+
+    for fuzz in (current_fuzz + 1)..=max_fuzz {
+        // Make another copy for test application
+        let mut file = file.clone();
+
+        let report = patch_status.file_patch.apply(&mut file, PatchDirection::Forward, fuzz);
+
+        if report.ok() {
+            return Some(fuzz);
+        }
+    }
+
+    None
+}
+
+pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
+    broken_patch_index: usize,
+    applied_patches: &Vec<PatchStatus>,
+    modified_files: &HashMap<PathBuf, InternedFile, H>,
+    _interner: &LineInterner,
+    writer: &mut W)
+    -> Result<(), io::Error>
+{
+    for patch_status in applied_patches.iter().rev() {
+        if patch_status.index != broken_patch_index {
+            break;
+        }
+
+        write!(writer, "  {} {} ", "File".yellow(), patch_status.file_patch.filename().display())?;
+
+        if patch_status.report.ok() {
+            writeln!(writer, "{}", "ok".bright_green().bold())?;
+        } else {
+            writeln!(writer, "{}", "failed".bright_red().bold())?;
+
+            for (i, hunk_report) in patch_status.report.hunk_reports().iter().enumerate() {
+                write!(writer, "    {} #{}: ", "Hunk".yellow(), i + 1)?;
+
+                match hunk_report {
+                    HunkApplyReport::Applied { offset, .. } => {
+                        write!(writer, "{}", "ok".bright_green().bold())?;
+
+                        if *offset != 0 {
+                            write!(writer, " with offset {}", offset)?;
+                        }
+                    }
+
+                    HunkApplyReport::Failed => {
+                        write!(writer, "{}", "failed".bright_red().bold())?;
+                    }
+
+                    HunkApplyReport::Skipped => {
+                        write!(writer, "{}", "skipped".blue().bold())?;
+                    }
+                }
+
+                writeln!(writer, )?;
+            }
+
+            // Find which other patches touched this file
+            let mut other_patches = Vec::<&Path>::new();
+            for other_patch_status in applied_patches.iter() {
+                if other_patch_status.index >= broken_patch_index {
+                    break;
+                }
+
+                if other_patch_status.file_patch.filename() == patch_status.file_patch.filename() {
+                    other_patches.push(other_patch_status.patch_filename);
+                }
+            }
+
+            // Fuzz hint
+            writeln!(writer)?;
+            if let Some(working_fuzz) = test_apply_with_fuzzes(patch_status, modified_files) {
+                write!(writer, "    {} Patch would apply on this file with fuzz {}", "hint:".purple(), working_fuzz)?;
+            } else {
+                write!(writer, "    {} Patch would not apply on this file with any fuzz", "hint:".purple())?;
+            }
+            writeln!(writer)?;
+
+            // Other patches hint
+            writeln!(writer)?;
+            write!(writer, "{}", "    hint: ".purple())?;
+
+            if other_patches.len() == 0 {
+                writeln!(writer, "No previous patches touched this file.")?;
+            } else {
+                writeln!(writer, "{} previous patches touched this file:", other_patches.len())?;
+
+                for other_patch in other_patches {
+                    writeln!(writer, "      {}", other_patch.display())?;
+                }
+            }
+
+            writeln!(writer)?;
         }
     }
 

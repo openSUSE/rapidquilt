@@ -2,11 +2,13 @@
 
 use std;
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::hash::{BuildHasherDefault, Hash};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Mutex};
 
+use colored::*;
 use failure::{Error, ResultExt};
 use seahash;
 use rayon;
@@ -89,6 +91,11 @@ enum Message {
     TerminatingEarly,
 }
 
+#[derive(Default)]
+struct WorkerReport {
+    failure_analysis: Vec<u8>,
+}
+
 fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     config: &'a ApplyConfig,
     arena: &FileArena<'a>,
@@ -98,7 +105,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     receiver: mpsc::Receiver<Message>,
     broadcast_message: BroadcastFn,
     earliest_broken_patch_index: &AtomicUsize)
-    -> Result<(), Error>
+    -> Result<WorkerReport, Error>
 {
     let mut interner = LineInterner::new();
     let mut applied_patches = Vec::<PatchStatus>::new();
@@ -191,13 +198,17 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                 // Some other thread gave up early because of error, if we
                 // proceed we may end up waiting for them forever. Lets quit
                 // early too. Their error will be reported to the user.
-                return Ok(());
+                return Ok(WorkerReport::default());
             }
         }
     }
 
     // Make a last atomic load. From now on it won't be changing.
     let earliest_broken_patch_index = earliest_broken_patch_index.load(Ordering::Acquire);
+
+    // Analyze failure, in case there was any
+    let mut failure_analysis = Vec::<u8>::new();
+    analyze_patch_failure(earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
     // Rollback the last applied patch and generate .rej files if any
     rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner)?;
@@ -232,7 +243,9 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
         rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
     }
 
-    Ok(())
+    Ok(WorkerReport {
+        failure_analysis,
+    })
 }
 
 pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Error> {
@@ -285,8 +298,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         mpsc::sync_channel::<Message>(threads * 2) // At the moment every thread can send at most 2 messages, so lets use fixed size channel.
     }).unzip();
 
-    // This will record errors from the threads.
-    let thread_errors: &Mutex<Vec<Error>> = &Mutex::new(Vec::new());
+    // This will record results from the threads.
+    let thread_results: Mutex<Vec<Result<WorkerReport, Error>>> = Mutex::new(Vec::new());
+
+    let thread_results_ref = &thread_results;
 
     // Run the applying threads
     rayon::scope(move |scope| {
@@ -311,22 +326,38 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                     broadcast_message,
                     earliest_broken_patch_index);
 
-                if let Err(error) = result {
-                    thread_errors.lock().unwrap().push(error); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
-                }
+                thread_results_ref.lock().unwrap().push(result); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
             });
         }
     });
 
+    let thread_results = thread_results.into_inner().unwrap(); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
+
+    let (thread_reports, mut thread_errors): (_, Vec<Result<WorkerReport, Error>>) = thread_results.into_iter().partition(|r| {
+        if let Ok(_) = r { true } else { false }
+    });
+
     // If there was error in any of the applying threads, report the first one out
     // TODO: Should we report all of them?
-    for error in thread_errors.lock().unwrap().drain(..) { // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
+    if let Some(Err(error)) = thread_errors.drain(..).next() {
         return Err(error);
     }
 
     let mut final_patch = earliest_broken_patch_index.load(Ordering::Acquire);
     if final_patch == std::usize::MAX {
         final_patch = config.patch_filenames.len();
+    }
+
+    // Print out failure analysis if there was any
+    if final_patch != config.patch_filenames.len() {
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+
+        writeln!(out, "{} {} {}", "Patch".yellow(), config.patch_filenames[final_patch].display(), "failed".bright_red().bold())?;
+
+        for result in thread_reports {
+            out.write(&result.unwrap().failure_analysis)?; // NOTE(unwrap): We already tested for errors above.
+        }
     }
 
     Ok(ApplyResult {

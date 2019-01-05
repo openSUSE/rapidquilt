@@ -1,9 +1,11 @@
 // Licensed under the MIT license. See LICENSE.md
 
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::hash::BuildHasherDefault;
 use std::path::PathBuf;
 
+use colored::*;
 use failure::{Error, ResultExt};
 use seahash;
 
@@ -24,6 +26,8 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
     let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     let mut final_patch = 0;
+
+    let mut failure_analysis = Vec::<u8>::new();
 
     println!("Applying {} patches single-threaded...", config.patch_filenames.len());
 
@@ -54,6 +58,9 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         }
 
         if any_report_failed {
+            // Analyze failure, in case there was any
+            analyze_patch_failure(index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
+
             rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner)?;
             break;
         }
@@ -75,6 +82,14 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         };
 
         rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+    }
+
+    if final_patch != config.patch_filenames.len() - 1 {
+        let stderr = io::stderr();
+        let mut out = stderr.lock();
+
+        writeln!(out, "{} {} {}", "Patch".yellow(), config.patch_filenames[final_patch].display(), "failed".bright_red().bold())?;
+        out.write(&failure_analysis)?;
     }
 
     Ok(ApplyResult {

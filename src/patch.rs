@@ -239,7 +239,7 @@ impl<'a> Hunk<'a, LineId> {
 
         interned_file.content.splice(range.clone(), part_add.content.clone());
 
-        return HunkApplyReport::Applied { line: target_line, offset: target_line - part_add.target_line, fuzz: 0 };
+        return HunkApplyReport::Applied { line: target_line, offset: target_line - part_add.target_line };
 
     }
 }
@@ -268,7 +268,7 @@ impl PatchDirection {
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum HunkApplyReport {
-    Applied { line: isize, offset: isize, fuzz: usize },
+    Applied { line: isize, offset: isize },
     Failed,
 
     /// Used when rolling back and skipping hunks that previously failed
@@ -279,27 +279,31 @@ pub enum HunkApplyReport {
 pub struct FilePatchApplyReport {
     any_failed: bool,
     hunk_reports: Vec<HunkApplyReport>,
+    fuzz: usize,
 }
 
 impl FilePatchApplyReport {
-    fn new() -> Self {
+    fn new(fuzz: usize) -> Self {
         FilePatchApplyReport {
             hunk_reports: Vec::new(),
             any_failed: false,
+            fuzz,
         }
     }
 
     fn single_hunk_success(line: isize, offset: isize, fuzz: usize) -> Self {
         FilePatchApplyReport {
-            hunk_reports: vec![HunkApplyReport::Applied { line, offset, fuzz }],
+            hunk_reports: vec![HunkApplyReport::Applied { line, offset }],
             any_failed: false,
+            fuzz,
         }
     }
 
-    fn single_hunk_failure() -> Self {
+    fn single_hunk_failure(fuzz: usize) -> Self {
         FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Failed],
             any_failed: true,
+            fuzz,
         }
     }
 
@@ -313,6 +317,8 @@ impl FilePatchApplyReport {
     pub fn ok(&self) -> bool { !self.any_failed }
     pub fn failed(&self) -> bool { self.any_failed }
     pub fn hunk_reports(&self) -> &[HunkApplyReport] { &self.hunk_reports }
+
+    pub fn fuzz(&self) -> usize { self.fuzz }
 }
 
 #[derive(Clone, Debug)]
@@ -358,6 +364,10 @@ impl<'a, Line> FilePatch<'a, Line> {
 
     #[allow(dead_code)]
     pub fn is_rename(&self) -> bool { self.new_filename.is_some() }
+
+    pub fn max_useable_fuzz(&self) -> usize {
+        self.hunks.iter().map(|hunk| hunk.max_useable_fuzz()).max().unwrap_or(0)
+    }
 }
 
 pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
@@ -401,19 +411,19 @@ impl<'a> InternedFilePatch<'a> {
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
-                self.apply_create(interned_file, direction),
+                self.apply_create(interned_file, direction, fuzz),
 
             (FilePatchKind::Delete, PatchDirection::Forward) |
             (FilePatchKind::Create, PatchDirection::Revert) =>
-                self.apply_delete(interned_file, direction),
+                self.apply_delete(interned_file, direction, fuzz),
         }
     }
 
-    fn apply_create(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> FilePatchApplyReport {
+    fn apply_create(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
         assert!(self.hunks.len() == 1);
 
         if interned_file.content.len() > 0 {
-            return FilePatchApplyReport::single_hunk_failure();
+            return FilePatchApplyReport::single_hunk_failure(fuzz);
         }
 
         let new_content = match direction {
@@ -424,10 +434,10 @@ impl<'a> InternedFilePatch<'a> {
         interned_file.content = new_content.clone();
         interned_file.deleted = false;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, 0)
+        FilePatchApplyReport::single_hunk_success(0, 0, fuzz)
     }
 
-    fn apply_delete(&self, interned_file: &mut InternedFile, direction: PatchDirection) -> FilePatchApplyReport {
+    fn apply_delete(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
         assert!(self.hunks.len() == 1);
 
         let expected_content = match direction {
@@ -436,17 +446,17 @@ impl<'a> InternedFilePatch<'a> {
         };
 
         if *expected_content != interned_file.content {
-            return FilePatchApplyReport::single_hunk_failure();
+            return FilePatchApplyReport::single_hunk_failure(fuzz);
         }
 
         interned_file.content.clear();
         interned_file.deleted = true;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, 0)
+        FilePatchApplyReport::single_hunk_success(0, 0, fuzz)
     }
 
     fn apply_modify(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
-        let mut report = FilePatchApplyReport::new();
+        let mut report = FilePatchApplyReport::new(fuzz);
 
         let mut last_hunk_offset = 0isize;
 
@@ -461,8 +471,8 @@ impl<'a> InternedFilePatch<'a> {
                 // In rollback mode use what worked in normal mode
                 ApplyMode::Rollback(ref report) => match report.hunk_reports[i] {
                     // If the hunk applied, pick the specific fuzz level
-                    HunkApplyReport::Applied { fuzz, ..} =>
-                        fuzz..(fuzz + 1),
+                    HunkApplyReport::Applied { .. } =>
+                        report.fuzz()..(report.fuzz() + 1),
 
                     // If the hunk failed to apply, skip it now.
                     HunkApplyReport::Failed |
@@ -481,8 +491,8 @@ impl<'a> InternedFilePatch<'a> {
 
                 if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
                     if current_fuzz > 0 {
-                        println!("Patch ? applied with fuzz {}.", current_fuzz); // TODO: Proper warning!
-                        hunk_report = HunkApplyReport::Applied { line, offset, fuzz: current_fuzz, };
+//                         println!("Patch ? applied with fuzz {}.", current_fuzz); // TODO: Proper warning!
+                        hunk_report = HunkApplyReport::Applied { line, offset };
                     }
                     break;
                 }
