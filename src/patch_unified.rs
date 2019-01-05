@@ -348,6 +348,11 @@ pub fn parse_unified<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePa
     Ok(file_patches)
 }
 
+pub trait UnifiedPatchHunkWriter {
+    fn write_header_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error>;
+    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error>;
+}
+
 pub trait UnifiedPatchWriter {
     fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error>;
 }
@@ -356,8 +361,8 @@ pub trait UnifiedPatchRejWriter {
     fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error>;
 }
 
-impl<'a> UnifiedPatchWriter for Hunk<'a, LineId> {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
+impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
+    fn write_header_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
         let add_count = self.add.content.len();
         let remove_count = self.remove.content.len();
 
@@ -375,6 +380,13 @@ impl<'a> UnifiedPatchWriter for Hunk<'a, LineId> {
 
         write!(writer, "@@ -{},{} +{},{} @@", remove_line, remove_count, add_line, add_count)?;
         writer.write(self.place_name)?;
+
+        Ok(())
+    }
+
+    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
+        self.write_header_to(writer)?;
+
         writer.write(b"\n")?;
 
         fn find_closest_match(a: &[LineId], b: &[LineId]) -> (usize, usize) {

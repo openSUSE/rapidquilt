@@ -14,7 +14,7 @@ use crate::interned_file::InternedFile;
 use crate::file_arena::FileArena;
 use crate::line_interner::LineInterner;
 use crate::patch::{FilePatchApplyReport, InternedFilePatch, HunkApplyReport, PatchDirection, TextFilePatch};
-use crate::patch_unified::{UnifiedPatchRejWriter};
+use crate::patch_unified::{UnifiedPatchHunkWriter, UnifiedPatchRejWriter};
 
 
 pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
@@ -379,32 +379,36 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
         write!(writer, "  {} {} ", "File".yellow(), patch_status.file_patch.filename().display())?;
 
         if patch_status.report.ok() {
-            writeln!(writer, "{}", "ok".bright_green().bold())?;
+            writeln!(writer, "{}", "OK".bright_green().bold())?;
         } else {
-            writeln!(writer, "{}", "failed".bright_red().bold())?;
+            writeln!(writer, "{}", "FAILED".bright_red().bold())?;
 
             for (i, hunk_report) in patch_status.report.hunk_reports().iter().enumerate() {
                 write!(writer, "    {} #{}: ", "Hunk".yellow(), i + 1)?;
 
                 match hunk_report {
                     HunkApplyReport::Applied { offset, .. } => {
-                        write!(writer, "{}", "ok".bright_green().bold())?;
+                        write!(writer, "{}", "OK".bright_green().bold())?;
 
                         if *offset != 0 {
                             write!(writer, " with offset {}", offset)?;
+                        } else {
+                            write!(writer, "     ")?; // Spaces to balance width of "failed " and "skipped"
                         }
                     }
 
                     HunkApplyReport::Failed => {
-                        write!(writer, "{}", "failed".bright_red().bold())?;
+                        write!(writer, "{}", "FAILED ".bright_red().bold())?;
                     }
 
                     HunkApplyReport::Skipped => {
-                        write!(writer, "{}", "skipped".blue().bold())?;
+                        unreachable!(); // This should never happen here. Hunk can be skipped only during rollback.
                     }
                 }
 
-                writeln!(writer, )?;
+                let mut buf = Vec::<u8>::new();
+                patch_status.file_patch.hunks[i].write_header_to(&mut buf)?;
+                writeln!(writer, "\t{}", String::from_utf8_lossy(&buf).bright_blue())?;
             }
 
             // Find which other patches touched this file
@@ -430,7 +434,7 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
 
             // Other patches hint
             writeln!(writer)?;
-            write!(writer, "{}", "    hint: ".purple())?;
+            write!(writer, "    {} ", "hint:".purple())?;
 
             if other_patches.len() == 0 {
                 writeln!(writer, "No previous patches touched this file.")?;
