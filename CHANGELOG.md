@@ -1,5 +1,8 @@
 # Unreleased changes
 
+# Version 0.4.1
+
+* Improved error and application failure reporting.
 * Empty directories are deleted after deleting files.
 
 # Version 0.4.0
