@@ -18,8 +18,8 @@ const NO_NEW_LINE_TAG: &[u8] = b"\\ No newline at end of file\n";
 const NULL_FILENAME: &[u8] = b"/dev/null";
 
 lazy_static! {
-    static ref MINUS_FILENAME: Regex = Regex::new(r"^--- ([^\t]+)\n$").unwrap();
-    static ref PLUS_FILENAME: Regex = Regex::new(r"^\+\+\+ ([^\t]+)\n$").unwrap();
+    static ref MINUS_FILENAME: Regex = Regex::new(r"^--- ([^\t]+)(\t[^\n]*)?\n$").unwrap();
+    static ref PLUS_FILENAME: Regex = Regex::new(r"^\+\+\+ ([^\t]+)(\t[^\n]*)?\n$").unwrap();
 
     // Warning: It seems that patch accepts if the second '@' in the second "@@" group is missing!
     static ref CHUNK: Regex = Regex::new(r"^@@ -(?P<remove_line>[\d]+)(?:,(?P<remove_count>[\d]+))? \+(?P<add_line>[\d]+)(?:,(?P<add_count>[\d]+))? @@?(?P<place_name>.*)\n$").unwrap();
