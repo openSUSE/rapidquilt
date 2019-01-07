@@ -39,3 +39,9 @@ The goal is to be very fast.
 * file permissions in patch files are ignored
 * date in patch files is ignored
 * ... probably more that I don't know about
+
+## Screenshot
+
+Patch application failure:
+
+![example-apply-failure](https://raw.githubusercontent.com/michalsrb/rapidquilt/master/doc/example-apply-failure.png "Example Apply Failure")
