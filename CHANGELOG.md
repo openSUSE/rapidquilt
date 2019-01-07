@@ -1,5 +1,9 @@
 # Unreleased changes
 
+# Version 0.4.2
+
+* Bugfix: Prevent fail if there is date in patch file.
+
 # Version 0.4.1
 
 * Improved error and application failure reporting.
