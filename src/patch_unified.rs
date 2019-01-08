@@ -379,7 +379,7 @@ impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
         };
 
         write!(writer, "@@ -{},{} +{},{} @@", remove_line, remove_count, add_line, add_count)?;
-        writer.write(self.place_name)?;
+        writer.write_all(self.place_name)?;
 
         Ok(())
     }
@@ -387,7 +387,7 @@ impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
     fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
         self.write_header_to(writer)?;
 
-        writer.write(b"\n")?;
+        writer.write_all(b"\n")?;
 
         fn find_closest_match(a: &[LineId], b: &[LineId]) -> (usize, usize) {
             for i in 0..(a.len() + b.len()) {
@@ -404,14 +404,14 @@ impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
         let mut write_line = |c: u8, line_id: LineId| -> Result<(), io::Error> {
             let line = interner.get(line_id).unwrap(); // NOTE(unwrap): Must succeed, we are printing patch that was already interned. If it is not there, it is a bug.
 
-            writer.write(&[c])?;
-            writer.write(line)?;
+            writer.write_all(&[c])?;
+            writer.write_all(line)?;
             if line.last() != Some(&b'\n') {
                 // If the line doesn't end with newline character, we have to write it ourselves
                 // (otherwise it would not be valid patch file), but we also print the "No newline..."
                 // tag which informs that the newline is not part of the file.
-                writer.write(b"\n")?;
-                writer.write(NO_NEW_LINE_TAG)?;
+                writer.write_all(b"\n")?;
+                writer.write_all(NO_NEW_LINE_TAG)?;
             }
 
             Ok(())
@@ -450,17 +450,17 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, w
     //       what we need for .rej files. But we could add option to configure it?
 
     if filepatch.kind() == FilePatchKind::Create {
-        writer.write(b"--- ")?;
-        writer.write(&NULL_FILENAME)?;
-        writer.write(b"\n")?;
+        writer.write_all(b"--- ")?;
+        writer.write_all(&NULL_FILENAME)?;
+        writer.write_all(b"\n")?;
     } else {
         writeln!(writer, "--- {}", filepatch.filename().display())?;
     }
 
     if filepatch.kind() == FilePatchKind::Delete {
-        writer.write(b"+++ ")?;
-        writer.write(&NULL_FILENAME)?;
-        writer.write(b"\n")?;
+        writer.write_all(b"+++ ")?;
+        writer.write_all(&NULL_FILENAME)?;
+        writer.write_all(b"\n")?;
     } else {
         writeln!(writer, "+++ {}", filepatch.filename().display())?;
     }

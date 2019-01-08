@@ -102,7 +102,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     thread_id: usize,
     threads: usize,
     thread_file_patches: Vec<(usize, TextFilePatch)>,
-    receiver: mpsc::Receiver<Message>,
+    receiver: &mpsc::Receiver<Message>,
     broadcast_message: BroadcastFn,
     earliest_broken_patch_index: &AtomicUsize)
     -> Result<WorkerReport, Error>
@@ -282,7 +282,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         let mut text_file_patches = text_file_patches.with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
 
         for text_file_patch in text_file_patches.drain(..) {
-            let thread_id = *filename_to_thread_id.get(text_file_patch.filename()).unwrap(); // NOTE(unwrap): We put the filename in there, it must be there.
+            let thread_id = filename_to_thread_id[text_file_patch.filename()];
             text_file_patches_per_thread[thread_id].push((index, text_file_patch));
         }
     }
@@ -322,7 +322,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                     thread_id,
                     threads,
                     thread_file_patches,
-                    receiver,
+                    &receiver,
                     broadcast_message,
                     earliest_broken_patch_index);
 
@@ -334,7 +334,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
     let thread_results = thread_results.into_inner().unwrap(); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
 
     let (thread_reports, mut thread_errors): (_, Vec<Result<WorkerReport, Error>>) = thread_results.into_iter().partition(|r| {
-        if let Ok(_) = r { true } else { false }
+        r.is_ok()
     });
 
     // If there was error in any of the applying threads, report the first one out
@@ -356,7 +356,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         writeln!(out, "{} {} {}", "Patch".yellow(), config.patch_filenames[final_patch].display(), "FAILED".bright_red().bold())?;
 
         for result in thread_reports {
-            out.write(&result.unwrap().failure_analysis)?; // NOTE(unwrap): We already tested for errors above.
+            out.write_all(&result.unwrap().failure_analysis)?; // NOTE(unwrap): We already tested for errors above.
         }
     }
 

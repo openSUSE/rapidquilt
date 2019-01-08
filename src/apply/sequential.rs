@@ -89,7 +89,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         let mut out = stderr.lock();
 
         writeln!(out, "{} {} {}", "Patch".yellow(), config.patch_filenames[final_patch].display(), "FAILED".bright_red().bold())?;
-        out.write(&failure_analysis)?;
+        out.write_all(&failure_analysis)?;
     }
 
     Ok(ApplyResult {

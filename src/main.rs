@@ -46,7 +46,7 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<PathBuf>, Erro
     let patch_filenames = file
         .lines()
         .map(|line| line.unwrap() /* <- TODO: Propagate up. */)
-        .filter(|line| line.len() > 0 && !line.starts_with('#')) // man quilt says that comment lines start with '#', it does not mention any whitespace before that (TODO: Verify)
+        .filter(|line| !line.is_empty() && !line.starts_with('#')) // man quilt says that comment lines start with '#', it does not mention any whitespace before that (TODO: Verify)
         .map(|line| {
             // TODO: Handle comments after the patch name
 
@@ -132,7 +132,7 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
         writeln!(file_applied_patches, "{}", applied_patch.display())?;
     }
 
-    Ok(apply_result.skipped_patches.len() == 0)
+    Ok(apply_result.skipped_patches.is_empty())
 }
 
 fn main() {
@@ -196,7 +196,7 @@ fn main() {
         None                      => ApplyConfigBackupCount::Last(100),
     };
 
-    let patches_path = matches.opt_str("p").unwrap_or("patches".to_string());
+    let patches_path = matches.opt_str("p").unwrap_or_else(|| "patches".to_string());
 
     let fuzz = matches.opt_str("fuzz").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
 
@@ -205,10 +205,11 @@ fn main() {
         process::exit(1);
     }
 
-    let mut goal = PushGoal::Count(1);
-    if matches.opt_present("a") {
-        goal = PushGoal::All;
-    }
+    let mut goal = if matches.opt_present("a") {
+        PushGoal::All
+    } else {
+        PushGoal::Count(1)
+    };
     if let Some(first_free_arg) = matches.free.first() {
         if let Ok(number) = first_free_arg.parse::<usize>() {
             goal = PushGoal::Count(number);

@@ -12,7 +12,7 @@ struct LinesWithEndings<'a> {
 impl<'a> LinesWithEndings<'a> {
     fn new(input: &'a [u8]) -> LinesWithEndings<'a> {
         LinesWithEndings {
-            input: input,
+            input,
             previous_offset: 0,
             iter: memchr_iter(b'\n', input),
         }

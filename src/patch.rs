@@ -200,7 +200,7 @@ impl<'a> Hunk<'a, LineId> {
             if last_hunk_offset != 0 && target_line + last_hunk_offset >= 0 &&
                 matches(&part_remove.content, &interned_file.content, target_line + last_hunk_offset) {
 //                     println!("... matched!");
-                target_line = target_line + last_hunk_offset;
+                target_line += last_hunk_offset;
             } else {
 //                     println!("... did not match! Will search for place closest to {}", part_add.target_line);
 
@@ -239,8 +239,7 @@ impl<'a> Hunk<'a, LineId> {
 
         interned_file.content.splice(range.clone(), part_add.content.clone());
 
-        return HunkApplyReport::Applied { line: target_line, offset: target_line - part_add.target_line };
-
+        HunkApplyReport::Applied { line: target_line, offset: target_line - part_add.target_line }
     }
 }
 
@@ -422,7 +421,7 @@ impl<'a> InternedFilePatch<'a> {
     fn apply_create(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
         assert!(self.hunks.len() == 1);
 
-        if interned_file.content.len() > 0 {
+        if !interned_file.content.is_empty() {
             return FilePatchApplyReport::single_hunk_failure(fuzz);
         }
 
@@ -463,6 +462,7 @@ impl<'a> InternedFilePatch<'a> {
         let mut for_each_hunk = |i, hunk: &Hunk<LineId>| {
             let mut hunk_report = HunkApplyReport::Skipped;
 
+            #[allow(clippy::range_plus_one)] // We need all ranges to be the same type and the last one has to be empty
             let possible_fuzz_levels = match apply_mode {
                 // In normal mode consider fuzz 0 up to given maximum fuzz or what is useable for this hunk
                 ApplyMode::Normal =>

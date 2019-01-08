@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::hash::BuildHasherDefault;
-use std::str;
 use std::vec::Vec;
 
 use seahash;
@@ -35,7 +34,7 @@ impl<'a> LineInterner<'a> {
         // There is nothing like empty line. Each line has at least '\n'. If the
         // last line in file is not terminated by '\n', it still has some characters,
         // otherwise it would not exist.
-        assert!(bytes.len() > 0);
+        assert!(!bytes.is_empty());
 
         // This is written strangely because of borrow checker limitation
         // It could be done nicely with entry and or_insert_with if we had NLL
@@ -47,20 +46,15 @@ impl<'a> LineInterner<'a> {
     }
 
     pub fn get(&self, id: LineId) -> Option<&'a [u8]> {
-        self.vec.get(id.0 as usize).map(|bytes| *bytes)
+        self.vec.get(id.0 as usize).cloned() // Cloned for Option<&&[u8]> -> Option<&[u8]>
     }
 }
 
 impl<'a> fmt::Debug for LineInterner<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "LineInterner {{ vec:\n")?;
+        writeln!(f, "LineInterner {{ vec:")?;
         for (i, item) in self.vec.iter().enumerate() {
-            write!(f, "{}:\t", i)?;
-            match str::from_utf8(item) {
-                Ok(string) => write!(f, "\"{}\"", string)?,
-                Err(error) => write!(f, "<{}>", error)?,
-            }
-            write!(f, "\n")?
+            writeln!(f, "{}:\t\"{}\"", i, String::from_utf8_lossy(item))?;
         }
         write!(f, ", map: {:?} }}", self.map)
     }

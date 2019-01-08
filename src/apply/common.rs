@@ -186,7 +186,6 @@ pub fn apply_one_file_patch<
         // Move out its content, but keep it among modified_files - we need a record on what
         // to do later - unless something else changes it, we will need to delete it from disk.
         let mut tmp_file = file.move_out();
-        drop(file); // We can't hold mutable references to two items from modified_files...
 
         let new_file = get_interned_file(new_filename, modified_files, arena, interner)
             .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.clone() })?;
@@ -202,7 +201,6 @@ pub fn apply_one_file_patch<
                 new_filename.display());
 
             // Put the content back to the old file.
-            drop(new_file); // We can't hold mutable references to two items from modified_files...
             let file = get_interned_file(file_patch.filename(), modified_files, arena, interner)
                 .with_context(|_| ApplyError::LoadFileToPatch { filename: file_patch.filename().clone() })?;
             file.move_in(&mut tmp_file);
@@ -259,7 +257,6 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
         // Now we have to do the rename backwards
         let file = modified_files.get_mut(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
         let mut tmp_file = file.move_out();
-        drop(file);
 
         let old_file = modified_files.get_mut(applied_patch.file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
         let ok = old_file.move_in(&mut tmp_file);
@@ -288,7 +285,7 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
 
         if applied_patch.report.failed() {
             let rej_filename = make_rej_filename(
-                applied_patch.file_patch.new_filename().unwrap_or(applied_patch.file_patch.filename())
+                applied_patch.file_patch.new_filename().unwrap_or_else(|| applied_patch.file_patch.filename())
             );
             println!("Saving rejects to {:?}", rej_filename);
 
@@ -436,7 +433,7 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
             writeln!(writer)?;
             write!(writer, "    {} ", "hint:".purple())?;
 
-            if other_patches.len() == 0 {
+            if other_patches.is_empty() {
                 writeln!(writer, "No previous patches touched this file.")?;
             } else {
                 writeln!(writer, "{} previous patches touched this file:", other_patches.len())?;

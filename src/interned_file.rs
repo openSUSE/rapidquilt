@@ -60,7 +60,7 @@ impl InternedFile {
     /// The content of this interned file is replaced by the `other` one, but
     /// only if this one was empty. Otherwise false is returned.
     pub fn move_in(&mut self, other: &mut InternedFile) -> bool {
-        if self.content.len() > 0 && !self.deleted {
+        if !self.content.is_empty() && !self.deleted {
             return false;
         }
 
@@ -79,7 +79,7 @@ impl InternedFile {
         let mut writer = BufWriter::new(writer);
 
         for line_id in &self.content {
-            writer.write(interner.get(*line_id).unwrap())?; // NOTE(unwrap): It must be in the interner, otherwise we panick
+            writer.write_all(interner.get(*line_id).unwrap())?; // NOTE(unwrap): It must be in the interner, otherwise we panick
         }
 
         Ok(())
