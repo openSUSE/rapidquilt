@@ -16,7 +16,7 @@ mod tests;
 
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -127,7 +127,7 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
     };
 
     fs::create_dir_all(".pc")?;
-    let mut file_applied_patches = fs::OpenOptions::new().create(true).append(true).open(".pc/applied-patches")?;
+    let mut file_applied_patches = BufWriter::new(fs::OpenOptions::new().create(true).append(true).open(".pc/applied-patches")?);
     for applied_patch in apply_result.applied_patches {
         writeln!(file_applied_patches, "{}", applied_patch.display())?;
     }
