@@ -69,7 +69,8 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
                             fuzz: usize,
                             strip: usize,
                             do_backups: ApplyConfigDoBackups,
-                            backup_count: ApplyConfigBackupCount)
+                            backup_count: ApplyConfigBackupCount,
+                            stats: bool)
                             -> Result<bool, Error>
 {
     let patch_filenames = read_series_file("series").unwrap();
@@ -110,6 +111,7 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
         strip,
         do_backups,
         backup_count,
+        stats
     };
 
     let threads = match env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
@@ -152,6 +154,7 @@ fn main() {
     opts.optopt("", "backup-count", "amount of backup files for `quilt pop` to create (default: 100)", "all|<n>");
     opts.optopt("F", "fuzz", "maximal allowed fuzz (default: 0)", "<n>");
     opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
+    opts.optflag("", "stats", "print statistics in the end");
 
     opts.optflag("h", "help", "print this help menu");
 
@@ -207,6 +210,8 @@ fn main() {
         process::exit(1);
     }
 
+    let stats = matches.opt_present("stats");
+
     let mut goal = if matches.opt_present("a") {
         PushGoal::All
     } else {
@@ -220,7 +225,7 @@ fn main() {
         }
     }
 
-    match cmd_push(patches_path, goal, fuzz, 1, do_backups, backup_count) {
+    match cmd_push(patches_path, goal, fuzz, 1, do_backups, backup_count, stats) {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {
                 eprintln!("{}{}", "  ".repeat(i), cause);

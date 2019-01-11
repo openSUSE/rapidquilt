@@ -92,6 +92,11 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         out.write_all(&failure_analysis)?;
     }
 
+    if config.stats {
+        println!("{}", interner.stats());
+        println!("{}", arena.stats());
+    }
+
     Ok(ApplyResult {
         applied_patches: &config.patch_filenames[0..=final_patch],
         skipped_patches: &config.patch_filenames[(final_patch + 1)..],

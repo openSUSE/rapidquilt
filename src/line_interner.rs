@@ -8,6 +8,16 @@ use std::vec::Vec;
 use seahash;
 
 
+pub struct Stats {
+    lines: usize,
+}
+
+impl fmt::Display for Stats {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "LineInterner Statistics (lines: {})", self.lines)
+    }
+}
+
 #[derive(Clone, Copy, PartialEq)]
 pub struct LineId(u32); // 4G interned slices ought to be enough for everybody...
 
@@ -47,6 +57,12 @@ impl<'a> LineInterner<'a> {
 
     pub fn get(&self, id: LineId) -> Option<&'a [u8]> {
         self.vec.get(id.0 as usize).cloned() // Cloned for Option<&&[u8]> -> Option<&[u8]>
+    }
+
+    pub fn stats(&self) -> Stats {
+        Stats {
+            lines: self.vec.len(),
+        }
     }
 }
 

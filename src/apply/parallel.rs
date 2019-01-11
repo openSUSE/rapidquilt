@@ -243,6 +243,10 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
         rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
     }
 
+    if config.stats {
+        println!("{}", interner.stats());
+    }
+
     Ok(WorkerReport {
         failure_analysis,
     })
@@ -358,6 +362,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         for result in thread_reports {
             out.write_all(&result.unwrap().failure_analysis)?; // NOTE(unwrap): We already tested for errors above.
         }
+    }
+
+    if config.stats {
+        println!("{}", arena.stats());
     }
 
     Ok(ApplyResult {

@@ -30,6 +30,8 @@ The goal is to be very fast.
             --color always|auto|never
                             use colors in output (default: auto)
 
+            --stats         print statistics in the end
+
         -h, --help          print this help menu
 
 

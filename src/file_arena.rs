@@ -3,11 +3,23 @@
 use std::marker::PhantomData;
 use std::vec::Vec;
 use std::io;
+use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 use std::mem::transmute;
 
+
+pub struct Stats {
+    loaded_files: usize,
+    total_size: usize,
+}
+
+impl fmt::Display for Stats {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "FileArena Statistics (loaded files: {}, total size: {} B)", self.loaded_files, self.total_size)
+    }
+}
 
 /// Utility that reads files and keeps them loaded in immovable place in memory
 /// for its lifetime. So the returned byte slices can be used as long as the
@@ -39,5 +51,14 @@ impl<'a> FileArena<'a> {
         self.files.lock().unwrap().push(data); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
 
         Ok(slice)
+    }
+
+    pub fn stats(&self) -> Stats {
+        let files = self.files.lock().unwrap(); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
+
+        Stats {
+            loaded_files: files.len(),
+            total_size: files.iter().map(|f| f.len()).sum(),
+        }
     }
 }
