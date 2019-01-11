@@ -1,5 +1,9 @@
 // Licensed under the MIT license. See LICENSE.md
 
+#![cfg_attr(feature = "bencher", feature(test))]
+#[cfg(feature = "bencher")]
+extern crate test;
+
 #[macro_use] extern crate failure;
 
 mod apply;

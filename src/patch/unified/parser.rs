@@ -1189,3 +1189,19 @@ rename to filename7
     assert_eq!(file_patches[3].new_filename(), Some(&PathBuf::from("filename8")));
     assert_eq!(file_patches[3].hunks.len(), 0);
 }
+
+#[cfg(test)]
+#[cfg(feature = "bencher")]
+mod tests {
+    use super::*;
+    use test::{Bencher, black_box};
+
+    #[bench]
+    fn bench_parse_big_patch(b: &mut Bencher) {
+        let data = include_bytes!("../../../testdata/big.patch");
+
+        b.iter(|| {
+            black_box(parse_patch(data, 1).unwrap());
+        });
+    }
+}
