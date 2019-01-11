@@ -98,10 +98,10 @@ struct WorkerReport {
 
 fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     config: &'a ApplyConfig,
-    arena: &FileArena<'a>,
+    arena: &'a FileArena<'a>,
     thread_id: usize,
     threads: usize,
-    thread_file_patches: Vec<(usize, TextFilePatch)>,
+    thread_file_patches: Vec<(usize, TextFilePatch<'a>)>,
     receiver: &mpsc::Receiver<Message>,
     broadcast_message: BroadcastFn,
     earliest_broken_patch_index: &AtomicUsize)

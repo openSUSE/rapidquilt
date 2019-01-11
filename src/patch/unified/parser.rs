@@ -703,7 +703,29 @@ xxxxx
     assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
 }
 
-named!(parse_hunks<CompleteByteSlice, Vec<TextHunk>>, many1!(parse_hunk)); // FIXME: many1 will hide even nom::Err::Failure errors, so any failure from inside is not propagated up. :-(
+// named!(parse_hunks<CompleteByteSlice, SmallVec<[TextHunk; 4]>>, many1!(parse_hunk)); // FIXME: many1 will hide even nom::Err::Failure errors, so any failure from inside is not propagated up. :-(
+
+fn parse_hunks(mut input: CompleteByteSlice) -> IResult<CompleteByteSlice, HunksVec<&[u8]>> {
+    let mut hunks = HunksVec::<&[u8]>::new();
+    loop {
+        match parse_hunk(input) {
+            Ok((input_, hunk)) => {
+                hunks.push(hunk);
+                input = input_;
+            }
+            Err(nom::Err::Incomplete(_)) => {
+                unreachable!();
+            }
+            Err(nom::Err::Error(nom::Context::Code(input_, _))) => {
+                // TODO: Do anything for the case of not even one hunk?
+                return Ok((input_, hunks));
+            }
+            Err(err @ nom::Err::Failure(_)) => {
+                return Err(err);
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 #[test]

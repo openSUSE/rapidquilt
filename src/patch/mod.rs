@@ -4,6 +4,8 @@ use std::borrow::Cow;
 use std::vec::Vec;
 use std::path::{Path, PathBuf};
 
+use smallvec::SmallVec;
+
 use crate::line_interner::{LineId, LineInterner};
 use crate::interned_file::InternedFile;
 
@@ -345,6 +347,8 @@ impl FilePatchApplyReport {
     pub fn fuzz(&self) -> usize { self.fuzz }
 }
 
+pub type HunksVec<'a, Line> = SmallVec<[Hunk<'a, Line>; 2]>; // Optimzal size found empirically on SUSE's kernel patches. It may change in future.
+
 #[derive(Clone, Debug)]
 pub struct FilePatch<'a, Line> {
     // TODO: Review if those can be safely public
@@ -354,7 +358,7 @@ pub struct FilePatch<'a, Line> {
     filename: PathBuf,
     new_filename: Option<PathBuf>,
 
-    pub hunks: Vec<Hunk<'a, Line>>,
+    pub hunks: HunksVec<'a, Line>,
 }
 
 impl<'a, Line> FilePatch<'a, Line> {
@@ -373,7 +377,7 @@ impl<'a, Line> FilePatch<'a, Line> {
             filename,
             new_filename,
 
-            hunks: Vec::new(),
+            hunks: SmallVec::new(),
         }
     }
 
@@ -407,7 +411,7 @@ impl<'a, Line> FilePatch<'a, Line> {
 
 // TODO: Derive PartialEq conditionally?
 impl<'a, Line> PartialEq for FilePatch<'a, Line> where Line: PartialEq {
-    fn eq(&self, other: &FilePatch<Line>) -> bool {
+    fn eq(&self, other: &FilePatch<'a, Line>) -> bool {
         self.kind == other.kind &&
         self.filename == other.filename &&
         self.new_filename == other.new_filename &&
@@ -426,7 +430,7 @@ impl<'a> TextFilePatch<'a> {
             filename: self.filename,
             new_filename: self.new_filename,
 
-            hunks: self.hunks.drain(..).map(|hunk| hunk.intern(interner)).collect(),
+            hunks: self.hunks.drain().map(|hunk| hunk.intern(interner)).collect(),
         }
     }
 }
