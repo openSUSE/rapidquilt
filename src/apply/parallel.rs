@@ -34,11 +34,11 @@ pub struct FilenameDistributor<T: Hash + Eq> {
 }
 
 impl<T: Hash + Eq> FilenameDistributor<T> {
-    pub fn new(thread_count: usize) -> Self {
+    pub fn new(thread_count: usize, approximate_independent_file_count: usize) -> Self {
         FilenameDistributor {
             thread_count,
-            filename_to_index: HashMap::default(),
-            connected_components: Vec::new(), // TODO: Could we determine the capacity in advance?
+            filename_to_index: HashMap::with_capacity_and_hasher(approximate_independent_file_count, BuildHasherDefault::<seahash::SeaHasher>::default()),
+            connected_components: Vec::with_capacity(approximate_independent_file_count),
         }
     }
 
@@ -267,7 +267,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
     }).collect();
 
     // Distribute the patches to queues for worker threads
-    let mut filename_distributor = FilenameDistributor::<PathBuf>::new(threads);
+    let mut filename_distributor = FilenameDistributor::<PathBuf>::new(threads, text_patches.len()); // There is typically just few amount of file-renaming patches, so lets use the total amount of patches as estimation for amount of independent filenames.
     for text_file_patches in &text_patches {
         // Error checking later, here we'll look at the ok ones
         if let Ok(text_file_patches) = text_file_patches {
