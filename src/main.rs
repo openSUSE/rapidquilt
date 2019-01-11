@@ -1,14 +1,12 @@
 // Licensed under the MIT license. See LICENSE.md
 
 #[macro_use] extern crate failure;
-#[macro_use] extern crate lazy_static;
 
 mod apply;
 mod line_interner;
 mod file_arena;
 mod interned_file;
 mod patch;
-mod patch_unified;
 mod util;
 
 #[cfg(test)]

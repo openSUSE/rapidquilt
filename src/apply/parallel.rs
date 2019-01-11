@@ -18,7 +18,7 @@ use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
 use crate::patch::{PatchDirection, TextFilePatch};
-use crate::patch_unified::parse_unified;
+use crate::patch::unified::parser::parse_patch;
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
@@ -258,7 +258,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
     // Load all patches multi-threaded.
     let mut text_patches: Vec<_> = config.patch_filenames.par_iter().map(|patch_filename| -> Result<_, Error> {
         let raw_patch_data = arena.load_file(config.patches_path.join(patch_filename))?;
-        let text_file_patches = parse_unified(raw_patch_data, config.strip)?;
+        let text_file_patches = parse_patch(raw_patch_data, config.strip)?;
         Ok(text_file_patches)
     }).collect();
 

@@ -14,7 +14,7 @@ use crate::interned_file::InternedFile;
 use crate::file_arena::FileArena;
 use crate::line_interner::LineInterner;
 use crate::patch::{FilePatchApplyReport, InternedFilePatch, HunkApplyReport, PatchDirection, TextFilePatch};
-use crate::patch_unified::{UnifiedPatchHunkWriter, UnifiedPatchRejWriter};
+use crate::patch::unified::writer::{UnifiedPatchHunkWriter, UnifiedPatchRejWriter};
 
 
 pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {

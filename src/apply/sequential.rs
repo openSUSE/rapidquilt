@@ -12,7 +12,7 @@ use seahash;
 use crate::apply::*;
 use crate::apply::common::*;
 use crate::file_arena::FileArena;
-use crate::patch_unified::parse_unified;
+use crate::patch::unified::parser::parse_patch;
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
@@ -38,7 +38,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
         let text_file_patches = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
             let data = arena.load_file(config.patches_path.join(patch_filename))?;
-            let text_file_patches = parse_unified(&data, config.strip)?;
+            let text_file_patches = parse_patch(&data, config.strip)?;
             Ok(text_file_patches)
         })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
 

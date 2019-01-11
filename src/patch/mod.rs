@@ -2,10 +2,12 @@
 
 use std::borrow::Cow;
 use std::vec::Vec;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::line_interner::{LineId, LineInterner};
 use crate::interned_file::InternedFile;
+
+pub mod unified;
 
 
 #[derive(Clone, Debug)]
@@ -23,6 +25,14 @@ impl<Line> HunkPart<Line> where Line: Clone {
             content: self.content[fuzz_before..(self.content.len() - fuzz_after)].to_vec(),
             target_line: self.target_line + fuzz_before as isize,
         }
+    }
+}
+
+// TODO: Derive PartialEq conditionally?
+impl<Line> PartialEq for HunkPart<Line> where Line: PartialEq {
+    fn eq(&self, other: &HunkPart<Line>) -> bool {
+        self.content == other.content &&
+        self.target_line == other.target_line
     }
 }
 
@@ -106,8 +116,23 @@ impl<'a, Line> Hunk<'a, Line> where Line: Clone {
     }
 }
 
-impl<'a> Hunk<'a, &'a [u8]> {
-    pub fn intern(self, interner: &mut LineInterner<'a>) -> Hunk<'a, LineId> {
+// TODO: Derive PartialEq conditionally?
+impl<'a, Line> PartialEq for Hunk<'a, Line> where Line: PartialEq {
+    fn eq(&self, other: &Hunk<Line>) -> bool {
+        self.remove == other.remove &&
+        self.add == other.add &&
+        self.context_before == other.context_before &&
+        self.context_after == other.context_after &&
+        self.position == other.position &&
+        self.place_name == other.place_name
+    }
+}
+
+pub type TextHunk<'a> = Hunk<'a, &'a [u8]>;
+pub type InternedHunk<'a> = Hunk<'a, LineId>;
+
+impl<'a> TextHunk<'a> {
+    pub fn intern(self, interner: &mut LineInterner<'a>) -> InternedHunk<'a> {
         Hunk {
             remove: self.remove.intern(interner),
             add: self.add.intern(interner),
@@ -119,7 +144,7 @@ impl<'a> Hunk<'a, &'a [u8]> {
     }
 }
 
-impl<'a> Hunk<'a, LineId> {
+impl<'a> InternedHunk<'a> {
     fn apply_modify(&self,
                     my_index: usize,
                     interned_file: &mut InternedFile,
@@ -354,18 +379,39 @@ impl<'a, Line> FilePatch<'a, Line> {
 
     pub fn kind(&self) -> FilePatchKind { self.kind }
 
-    pub fn change_kind(&mut self, kind: FilePatchKind) {
-        self.kind = kind;
-    }
-
     pub fn filename(&self) -> &PathBuf { &self.filename }
     pub fn new_filename(&self) -> Option<&PathBuf> { self.new_filename.as_ref() }
 
     #[allow(dead_code)]
     pub fn is_rename(&self) -> bool { self.new_filename.is_some() }
 
+    pub fn strip(&mut self, strip: usize) {
+        fn strip_path(path: &Path, strip: usize) -> PathBuf {
+            let mut components = path.components();
+            for _ in 0..strip { components.next(); }
+            components.as_path().to_path_buf()
+
+            // TODO: Handle error if it is too short!
+        }
+
+        self.filename = strip_path(&self.filename, strip);
+        if let Some(ref mut new_filename) = self.new_filename {
+            *new_filename = strip_path(new_filename, strip);
+        }
+    }
+
     pub fn max_useable_fuzz(&self) -> usize {
         self.hunks.iter().map(|hunk| hunk.max_useable_fuzz()).max().unwrap_or(0)
+    }
+}
+
+// TODO: Derive PartialEq conditionally?
+impl<'a, Line> PartialEq for FilePatch<'a, Line> where Line: PartialEq {
+    fn eq(&self, other: &FilePatch<Line>) -> bool {
+        self.kind == other.kind &&
+        self.filename == other.filename &&
+        self.new_filename == other.new_filename &&
+        self.hunks == other.hunks
     }
 }
 
