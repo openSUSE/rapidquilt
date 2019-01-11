@@ -307,9 +307,9 @@ pub struct FilePatchApplyReport {
 }
 
 impl FilePatchApplyReport {
-    fn new(fuzz: usize) -> Self {
+    fn new_with_capacity(fuzz: usize, capacity: usize) -> Self {
         FilePatchApplyReport {
-            hunk_reports: Vec::new(),
+            hunk_reports: Vec::with_capacity(capacity),
             any_failed: false,
             fuzz,
         }
@@ -501,7 +501,7 @@ impl<'a> InternedFilePatch<'a> {
     }
 
     fn apply_modify(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
-        let mut report = FilePatchApplyReport::new(fuzz);
+        let mut report = FilePatchApplyReport::new_with_capacity(fuzz, self.hunks.len());
 
         let mut last_hunk_offset = 0isize;
 
