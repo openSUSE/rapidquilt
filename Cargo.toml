@@ -8,17 +8,17 @@ edition = '2018'
 lto = true
 
 [dependencies]
-colored = "1.6"
-indexmap = "1.0"
-isatty = "0.1"
-rayon = "1.0"
-getopts = "0.2"
+colored = "1"
 failure = "0.1"
-memchr = "2.1"
-seahash = "3.0"
-smallvec = "0.6"
+getopts = "0.2"
+indexmap = "1"
+atty = "0.2"
 libc = "0.2"
-nom = "4.1"
+memchr = "2"
+nom = "4"
+rayon = "1"
+seahash = "3"
+smallvec = "0.6"
 
 [features]
 # Enable this feature to enable benchmarks using the (currently) unstable

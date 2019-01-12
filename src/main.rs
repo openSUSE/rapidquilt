@@ -25,7 +25,6 @@ use std::process;
 use colored;
 use failure::Error;
 use getopts::Options;
-use isatty::{stdout_isatty, stderr_isatty};
 
 use crate::apply::{
     ApplyConfig,
@@ -140,10 +139,6 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
 }
 
 fn main() {
-    if !stdout_isatty() || !stderr_isatty() {
-        colored::control::set_override(false);
-    }
-
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
@@ -177,7 +172,7 @@ fn main() {
         _ /* auto */ => {
             // Force it off if either of the outputs is not terminal. Otherwise leave on default,
             // which uses some env variables.
-            if !stdout_isatty() || !stderr_isatty() {
+            if atty::isnt(atty::Stream::Stdout) || atty::isnt(atty::Stream::Stderr) {
                 colored::control::set_override(false);
             }
         }
