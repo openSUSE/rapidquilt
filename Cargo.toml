@@ -15,7 +15,7 @@ getopts = "0.2"
 failure = "0.1"
 memchr = "2.1"
 seahash = "3.0"
-smallvec = "0.4"
+smallvec = "0.6"
 libc = "0.2"
 nom = "4.1"
 

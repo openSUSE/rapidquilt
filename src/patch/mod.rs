@@ -12,19 +12,21 @@ use crate::interned_file::InternedFile;
 pub mod unified;
 
 
+type ContentVec<Line> = SmallVec<[Line; 13]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
+
 #[derive(Clone, Debug)]
 pub struct HunkPart<Line> {
-    pub content: Vec<Line>,
+    pub content: ContentVec<Line>,
 
     /// Numbered from zero. Could be usize, but this makes calculating
     /// offsets easier.
     pub target_line: isize,
 }
 
-impl<Line> HunkPart<Line> where Line: Clone {
+impl<Line> HunkPart<Line> where Line: Copy {
     fn clone_with_fuzz(&self, fuzz_before: usize, fuzz_after: usize) -> HunkPart<Line> {
         HunkPart {
-            content: self.content[fuzz_before..(self.content.len() - fuzz_after)].to_vec(),
+            content: SmallVec::from_slice(&self.content[fuzz_before..(self.content.len() - fuzz_after)]),
             target_line: self.target_line + fuzz_before as isize,
         }
     }
@@ -41,7 +43,7 @@ impl<Line> PartialEq for HunkPart<Line> where Line: PartialEq {
 impl<'a> HunkPart<&'a [u8]> {
     pub fn intern(mut self, interner: &mut LineInterner<'a>) -> HunkPart<LineId> {
         HunkPart {
-            content: self.content.drain(..).map(|line| interner.add(line)).collect(),
+            content: self.content.drain().map(|line| interner.add(line)).collect(),
 
             target_line: self.target_line,
         }
@@ -74,12 +76,12 @@ impl<'a, Line> Hunk<'a, Line> {
     pub fn new(remove_line: isize, add_line: isize, place_name: &'a [u8]) -> Self {
         Hunk {
             remove: HunkPart {
-                content: Vec::new(),
+                content: ContentVec::new(),
                 target_line: remove_line,
             },
 
             add: HunkPart {
-                content: Vec::new(),
+                content: ContentVec::new(),
                 target_line: add_line,
             },
 
@@ -98,7 +100,7 @@ impl<'a, Line> Hunk<'a, Line> {
 }
 
 
-impl<'a, Line> Hunk<'a, Line> where Line: Clone {
+impl<'a, Line> Hunk<'a, Line> where Line: Copy {
     // XXX: This function is relatively costly, but it shouldn't be needed too often
     pub fn clone_with_fuzz(&self, fuzz: usize) -> Hunk<'a, Line> {
         let fuzz_before = std::cmp::min(self.context_before, fuzz);
@@ -347,7 +349,7 @@ impl FilePatchApplyReport {
     pub fn fuzz(&self) -> usize { self.fuzz }
 }
 
-pub type HunksVec<'a, Line> = SmallVec<[Hunk<'a, Line>; 2]>; // Optimzal size found empirically on SUSE's kernel patches. It may change in future.
+pub type HunksVec<'a, Line> = SmallVec<[Hunk<'a, Line>; 2]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
 
 #[derive(Clone, Debug)]
 pub struct FilePatch<'a, Line> {
@@ -480,7 +482,7 @@ impl<'a> InternedFilePatch<'a> {
             PatchDirection::Revert => &self.hunks[0].remove.content,
         };
 
-        interned_file.content = new_content.clone();
+        interned_file.content = new_content.clone().into_vec();
         interned_file.deleted = false;
 
         FilePatchApplyReport::single_hunk_success(0, 0, fuzz)
@@ -494,7 +496,7 @@ impl<'a> InternedFilePatch<'a> {
             PatchDirection::Revert => &self.hunks[0].add.content,
         };
 
-        if *expected_content != interned_file.content {
+        if &expected_content[..] != &interned_file.content[..] {
             return FilePatchApplyReport::single_hunk_failure(fuzz);
         }
 

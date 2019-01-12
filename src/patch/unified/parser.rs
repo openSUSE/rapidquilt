@@ -675,8 +675,8 @@ fn test_parse_hunk() {
     assert_eq!(h.remove.target_line, 99);
     assert_eq!(h.add.target_line, 109);
 
-    assert_eq!(h.add.content, vec![b"aaa\n", b"bbb\n", b"ccc\n", b"eee\n", b"fff\n", b"ggg\n", b"hhh\n"]);
-    assert_eq!(h.remove.content, vec![b"aaa\n", b"bbb\n", b"ccc\n", b"ddd\n", b"ggg\n", b"hhh\n"]);
+    assert_eq!(&h.add.content[..], [b"aaa\n", b"bbb\n", b"ccc\n", b"eee\n", b"fff\n", b"ggg\n", b"hhh\n"]);
+    assert_eq!(&h.remove.content[..], [b"aaa\n", b"bbb\n", b"ccc\n", b"ddd\n", b"ggg\n", b"hhh\n"]);
 
     assert_eq!(h.context_before, 3);
     assert_eq!(h.context_after, 2);
@@ -960,7 +960,7 @@ garbage3
     assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
     assert_eq!(file_patch.new_filename(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-    assert_eq!(file_patch.hunks[0].add.content, vec![s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
+    assert_eq!(&file_patch.hunks[0].add.content[..], [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
 
 
     // Creating filepatch without /dev/null
@@ -980,7 +980,7 @@ garbage3
     assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
     assert_eq!(file_patch.new_filename(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-    assert_eq!(file_patch.hunks[0].add.content, vec![s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
+    assert_eq!(&file_patch.hunks[0].add.content[..], [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
 
 
     // Deleting filepatch
@@ -1000,7 +1000,7 @@ garbage3
     assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
     assert_eq!(file_patch.new_filename(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-    assert_eq!(file_patch.hunks[0].remove.content, vec![s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
+    assert_eq!(&file_patch.hunks[0].remove.content[..], [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
 
 
     // Deleting filepatch without /dev/null
@@ -1020,7 +1020,7 @@ garbage3
     assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
     assert_eq!(file_patch.new_filename(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-    assert_eq!(file_patch.hunks[0].remove.content, vec![s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
+    assert_eq!(&file_patch.hunks[0].remove.content[..], [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
 
 
     // Renaming filepatch
