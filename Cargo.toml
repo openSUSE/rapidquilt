@@ -9,6 +9,7 @@ lto = true
 
 [dependencies]
 colored = "1.6"
+indexmap = "1.0"
 isatty = "0.1"
 rayon = "1.0"
 getopts = "0.2"

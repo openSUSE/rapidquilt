@@ -1,11 +1,9 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::collections::HashMap;
 use std::fmt;
 use std::hash::BuildHasherDefault;
-use std::vec::Vec;
 
-use seahash;
+use indexmap::IndexSet;
 
 
 pub struct Stats {
@@ -28,15 +26,13 @@ impl<'a> fmt::Debug for LineId {
 }
 
 pub struct LineInterner<'a> {
-    vec: Vec<&'a [u8]>,
-    map: HashMap<&'a [u8], LineId, BuildHasherDefault<seahash::SeaHasher>>,
+    set: IndexSet<&'a [u8], BuildHasherDefault<seahash::SeaHasher>>,
 }
 
 impl<'a> LineInterner<'a> {
     pub fn new() -> Self {
         Self {
-            vec: Vec::new(),
-            map: HashMap::default(),
+            set: IndexSet::default(),
         }
     }
 
@@ -44,35 +40,29 @@ impl<'a> LineInterner<'a> {
         // There is nothing like empty line. Each line has at least '\n'. If the
         // last line in file is not terminated by '\n', it still has some characters,
         // otherwise it would not exist.
-        assert!(!bytes.is_empty());
+        debug_assert!(!bytes.is_empty());
 
-        // This is written strangely because of borrow checker limitation
-        // It could be done nicely with entry and or_insert_with if we had NLL
-        let id = self.map.entry(bytes).or_insert(LineId(self.vec.len() as u32));
-        if id.0 as usize == self.vec.len() {
-            self.vec.push(bytes);
-        }
-        *id
+        LineId(self.set.insert_full(bytes).0 as u32)
     }
 
     pub fn get(&self, id: LineId) -> Option<&'a [u8]> {
-        self.vec.get(id.0 as usize).cloned() // Cloned for Option<&&[u8]> -> Option<&[u8]>
+        self.set.get_index(id.0 as usize).cloned() // Cloned for Option<&&[u8]> -> Option<&[u8]>
     }
 
     pub fn stats(&self) -> Stats {
         Stats {
-            lines: self.vec.len(),
+            lines: self.set.len(),
         }
     }
 }
 
 impl<'a> fmt::Debug for LineInterner<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "LineInterner {{ vec:")?;
-        for (i, item) in self.vec.iter().enumerate() {
+        writeln!(f, "LineInterner {{ set:")?;
+        for (i, item) in self.set.iter().enumerate() {
             writeln!(f, "{}:\t\"{}\"", i, String::from_utf8_lossy(item))?;
         }
-        write!(f, ", map: {:?} }}", self.map)
+        write!(f, " }}")
     }
 }
 
