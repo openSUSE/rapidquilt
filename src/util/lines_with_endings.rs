@@ -1,5 +1,3 @@
-// Licensed under the MIT license. See LICENSE.md
-
 use memchr::{memchr_iter, Memchr};
 
 
@@ -104,3 +102,4 @@ mod tests {
         assert!(l.next() == None);
     }
 }
+
