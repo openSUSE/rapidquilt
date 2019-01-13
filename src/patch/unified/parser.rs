@@ -319,8 +319,8 @@ named!(parse_metadata_line<CompleteByteSlice, MetadataLine>,
     alt!(
         do_parse!(tag!(s!(b"diff --git ")) >> old_filename: parse_filename >> new_filename: parse_filename >> take_until_newline_incl >> (MetadataLine::GitDiffSeparator(old_filename, new_filename))) |
 
-        do_parse!(tag!(s!(b"--- ")) >> filename: parse_filename >> newline >> (MetadataLine::MinusFilename(filename))) |
-        do_parse!(tag!(s!(b"+++ ")) >> filename: parse_filename >> newline >> (MetadataLine::PlusFilename(filename))) |
+        do_parse!(tag!(s!(b"--- ")) >> filename: parse_filename >> take_until_newline_incl >> (MetadataLine::MinusFilename(filename))) |
+        do_parse!(tag!(s!(b"+++ ")) >> filename: parse_filename >> take_until_newline_incl >> (MetadataLine::PlusFilename(filename))) |
 
         // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
         do_parse!(tag!(s!(b"rename from ")) >> take_until_newline_incl >> (MetadataLine::RenameFrom)) |
@@ -343,6 +343,7 @@ named!(parse_metadata_line<CompleteByteSlice, MetadataLine>,
 fn test_parse_metadata_line() {
     use self::MetadataLine::*;
 
+    // All of them in basic form
     assert_parsed!(parse_metadata_line, b"diff --git aaa bbb\n", GitDiffSeparator(Filename::Real(PathBuf::from("aaa")), Filename::Real(PathBuf::from("bbb"))));
 
     assert_parsed!(parse_metadata_line, b"--- aaa\n", MinusFilename(Filename::Real(PathBuf::from("aaa"))));
@@ -360,6 +361,10 @@ fn test_parse_metadata_line() {
     assert_parsed!(parse_metadata_line, b"copy to blabla\n", CopyTo);
 
     assert_parsed!(parse_metadata_line, b"GIT binary patch ???\n", GitBinaryPatch);
+
+    // Filename with date
+    assert_parsed!(parse_metadata_line, b"--- a/bla/ble.c	2013-09-23 18:41:09.000000000 -0400\n", MinusFilename(Filename::Real(PathBuf::from("a/bla/ble.c"))));
+
 }
 
 #[derive(Debug, PartialEq)]
