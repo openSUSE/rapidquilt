@@ -1,5 +1,10 @@
 # Unreleased changes
 
+# Version 0.4.3
+
+* Faster patch parsing
+* Support quoted filenames
+
 # Version 0.4.2
 
 * Bugfix: Prevent fail if there is date in patch file.
