@@ -16,7 +16,7 @@ impl fmt::Display for Stats {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 pub struct LineId(u32); // 4G interned slices ought to be enough for everybody...
 
 impl<'a> fmt::Debug for LineId {

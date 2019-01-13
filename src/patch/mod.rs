@@ -8,6 +8,7 @@ use smallvec::SmallVec;
 
 use crate::line_interner::{LineId, LineInterner};
 use crate::interned_file::InternedFile;
+use crate::util::Searcher;
 
 pub mod unified;
 
@@ -236,15 +237,21 @@ impl<'a> InternedHunk<'a> {
                 // man patch: "If that is not the correct place, patch scans both forwards and backwards for a
                 //             set of lines matching the context given in the hunk."
 
-                // XXX: This needs to be done better! More optimized!
                 let benchmark_target_line = target_line + last_hunk_offset;
                 let mut best_target_line: Option<isize> = None;
-                for possible_target_line in 0..=(interned_file.content.len() as isize - part_remove.content.len() as isize) {
-                    if matches(&part_remove.content, &interned_file.content, possible_target_line) {
-//                             println!("... found match at {}", possible_target_line);
-                        if best_target_line.is_none() || (possible_target_line - benchmark_target_line).abs() < (best_target_line.unwrap() - benchmark_target_line).abs() {
-                            best_target_line = Some(possible_target_line);
-                        }
+
+                for possible_target_line in Searcher::new(&part_remove.content).search_in(&interned_file.content) {
+                    let possible_target_line = possible_target_line as isize;
+
+//                     println!("... found match at {}", possible_target_line);
+
+                    if best_target_line.is_none() || (possible_target_line - benchmark_target_line).abs() < (best_target_line.unwrap() - benchmark_target_line).abs() {
+                        best_target_line = Some(possible_target_line);
+                    } else {
+                        // We are searching the file from start to end, so the possible_target_line will be getting closer and closer to the
+                        // benchmark_target_line until we pass it and it will start getting worse. At that point we can cut off the search.
+                        // So we'll find the closest one before or after the benchmark_target_line.
+                        break;
                     }
                 }
 
