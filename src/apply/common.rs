@@ -1,5 +1,8 @@
 // Licensed under the MIT license. See LICENSE.md
 
+//! This module contains functions shared between the `parallel` and
+//! `sequential` modules.
+
 use std::collections::{HashMap, hash_map::Entry};
 use std::fs::{self, File};
 use std::io::{self, Write};
@@ -17,6 +20,7 @@ use crate::patch::{FilePatchApplyReport, InternedFilePatch, HunkApplyReport, Pat
 use crate::patch::unified::writer::{UnifiedPatchHunkWriter, UnifiedPatchRejWriter};
 
 
+/// Build a ".rej" filename for given path.
 pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
     let path = path.as_ref();
 
@@ -26,6 +30,8 @@ pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
     }
 }
 
+/// Delete the directory containing the `path` and every parent directory as
+/// long as they are empty.
 fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), io::Error> {
     let mut path = path.as_ref();
 
@@ -43,6 +49,8 @@ fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), io::Err
     Ok(())
 }
 
+/// Save the `file` to disk. It also takes care of creating/deleting the file
+/// and containing directories.
 pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, interner: &LineInterner) -> Result<(), io::Error> {
     let filename = filename.as_ref();
 
@@ -87,6 +95,8 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
     Ok(())
 }
 
+/// Save all `modified_files` to disk. It also takes care of creating/deleting
+/// the files and containing directories.
 pub fn save_modified_files<
     'arena: 'interner,
     'interner,
@@ -104,6 +114,7 @@ pub fn save_modified_files<
     Ok(())
 }
 
+/// Write the `original_file` as a quilt backup file.
 pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
@@ -128,6 +139,8 @@ pub struct PatchStatus<'a, 'b> {
     pub patch_filename: &'b Path,
 }
 
+/// Gets an `InternedFile` from `modified_files` if it was already there,
+/// or loads it from disk if it exists, or creates new one.
 pub fn get_interned_file<
     'arena: 'interner,
     'interner,
@@ -160,6 +173,17 @@ pub fn get_interned_file<
     Ok(item)
 }
 
+/// Applies single `FilePatch` to the appropriate file.
+///
+/// `config`: The configuration of the task.
+/// `index`: Index of the **patch** in the configuration.
+/// `text_file_patch`: A `FilePatch` before interning.
+/// `applied_patches`: Vector of `PatchStatus`es with reports of previously applied patches. Report for this one will be appended in.
+/// `modified_files`: HashMap of modified files so far. The currently patched file will be taken from or added to here.
+/// `arena`: For loading files.
+/// `interner`: For interning patches and files.
+///
+/// Returns whether the patch applied successfully, or Err in case some other error happened.
 pub fn apply_one_file_patch<
     'arena: 'interner,
     'interner,
@@ -176,12 +200,14 @@ pub fn apply_one_file_patch<
     interner: &'interner mut LineInterner<'arena>)
     -> Result<bool, Error>
 {
+    // Intern the `FilePatch`
     let file_patch = text_file_patch.intern(interner);
 
+    // Get the file to patch
     let file = get_interned_file(file_patch.filename(), modified_files, arena, interner)
         .with_context(|_| ApplyError::LoadFileToPatch { filename: file_patch.filename().clone() })?;
 
-    // If the patch renames the file...
+    // If the patch renames the file. do it now...
     let mut file = if let Some(new_filename) = file_patch.new_filename() {
         // Move out its content, but keep it among modified_files - we need a record on what
         // to do later - unless something else changes it, we will need to delete it from disk.
@@ -220,6 +246,7 @@ pub fn apply_one_file_patch<
         file
     };
 
+    // Apply the `FilePatch` on it.
     let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz);
 
     let report_ok = report.ok();
@@ -234,6 +261,7 @@ pub fn apply_one_file_patch<
     Ok(report_ok)
 }
 
+/// Rolls back single applied `FilePatch`
 pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
     applied_patch: &PatchStatus,
     modified_files: &'a mut HashMap<PathBuf, InternedFile, H>)
@@ -268,6 +296,8 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
     }
 }
 
+/// Rolls back all `FilePatch`es belonging to the `rejected_patch_index` and save
+/// ".rej" files for each `FilePatch` that failed applying
 pub fn rollback_and_save_rej_files<H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus>,
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
@@ -300,6 +330,8 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
     Ok(())
 }
 
+/// Rolls back all `FilePatch`es up to the one belonging to patch with
+/// `down_to_index` index and generates quilt backup files for all of them.
 pub fn rollback_and_save_backup_files<H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus>,
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
@@ -326,6 +358,7 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
     Ok(())
 }
 
+/// Try if the patch would apply with some fuzz. It doesn't do any permanent changes.
 pub fn test_apply_with_fuzzes<H: BuildHasher>(
     patch_status: &PatchStatus,
     modified_files: &HashMap<PathBuf, InternedFile, H>)
@@ -360,6 +393,8 @@ pub fn test_apply_with_fuzzes<H: BuildHasher>(
     None
 }
 
+/// Render a report into `writer` about why the `broken_patch_index` failed to
+/// apply.
 pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
     broken_patch_index: usize,
     applied_patches: &Vec<PatchStatus>,

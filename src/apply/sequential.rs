@@ -1,5 +1,9 @@
 // Licensed under the MIT license. See LICENSE.md
 
+//! This module contains function to apply the patches sequentially in single thread.
+//!
+//! Patches are read, parsed and applied one by one.
+
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::hash::BuildHasherDefault;

@@ -1,5 +1,47 @@
 // Licensed under the MIT license. See LICENSE.md
 
+//! This module contains function to apply the patches parallel.
+//!
+//! The algorithm is:
+//!
+//! # Step 1 - multi-threaded
+//!
+//! First all patches are read and parsed in parallel. This can be done easily
+//! because reading and parsing of one patch has no effect on reading and parsing
+//! other patches.
+//!
+//! # Step 2 - single-threaded
+//!
+//! Patches are checked for reading/parsing errors. The list of affected files
+//! is extracted.
+//!
+//! The affected files are assigned to threads. The assignment ensures that:
+//! 1) The files are roughly equally distributed.
+//! 2) If a filename A was ever renamed to filename B, both of them must be
+//! processed by the same thread.
+//!
+//! The `FilePatch`es are distributed to the threads based on the filenames
+//! assigned to them.
+//!
+//! # Step 3 - multi-threaded
+//!
+//! The threads then each independently apply their `FilePatch`es to their files.
+//! The `FilePatch`es are interned by the threads, each using their own interner.
+//! The affected files are loaded and interned there as well. Then the `FilePatch`
+//! is applied.
+//!
+//! If any application fails, the thread signals the others. At that point the
+//! others may be ahead or behind. They will either catch up, or rollback to
+//! reach the point of failure. If any of them fails on earlier patch while
+//! catching up, it signals again. Once everybody meets on the first failed
+//! patch, or on the last patch, they save their results. Saving is done again
+//! in parallel independently of each other.
+//!
+//! # Step 4 - single-threaded
+//!
+//! Collect results and print reports.
+
+
 use std;
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -84,18 +126,44 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
     }
 }
 
+/// Messages passed between threads
 #[derive(Clone, Debug)]
 enum Message {
+    /// "I found new, earlier patch that fails to apply". The actual index
+    /// is saved in `earliest_broken_patch_index` atomic variable, but this
+    /// message is sent to wake up threads that may have been done and waiting
+    /// for messages.
     NewEarliestBrokenPatchIndex,
+
+    /// "I applied everything, I am done applying, I may only rollback if anyone
+    /// else failed => I will not signal apply failure anymore"
+    /// Once everyone receives this message `threads`-times, everyone knows
+    /// that everything is done.
     ThreadDoneApplying,
+
+    /// "Something really bad happened, I am quiting, don't wait for me."
+    /// Used when there was any error other than patch-application error,
+    /// e.g. IO error reading the files.
     TerminatingEarly,
 }
 
+/// Contains rendered report from the worker
 #[derive(Default)]
 struct WorkerReport {
     failure_analysis: Vec<u8>,
 }
 
+/// This function is executed by every thread during the "Step 3" phase - when
+/// applying all patches in parallel.
+///
+/// `config`: The configuration of the task.
+/// `arena`: This arena is used for loading files.
+/// `thread_id`: Id of this thread. (Only used for logging)
+/// `threads`: The total amount of threads. Needed to count `Message::ThreadDoneApplying` messages.
+/// `thread_file_patches`: The `FilePatch`es for this thread and the indexes of the original patch files they came from.
+/// `receiver`: Receiving part for `Message`s.
+/// `broadcast_message`: Function that sends given `Message` to all threads (including self).
+/// `earliest_broken_patch_index`: Atomic variable for sharing the index of the earlier patch that failed to apply.
 fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     config: &'a ApplyConfig,
     arena: &'a FileArena<'a>,
@@ -111,7 +179,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     let mut applied_patches = Vec::<PatchStatus>::new();
     let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
-    // First we go forward and apply patches until we apply all of them or get pass the `earliest_broken_patch_index`
+    // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
     for (index, text_file_patch) in thread_file_patches {
         if index > earliest_broken_patch_index.load(Ordering::Acquire) {
             // We are past the earliest broken patch. Time to stop applying.
@@ -119,8 +187,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
             break;
         }
 
-//         println!("TID {} - Applying patch #{} file {:?}", thread_id, index, text_file_patch.filename());
-
+        // Try to apply this one `FilePatch`
         match apply_one_file_patch(config,
                                    index,
                                    text_file_patch,
@@ -129,7 +196,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                                    &arena,
                                    &mut interner) {
             Ok(false) => {
-//                 println!("TID {} - Patch #{} failed to apply, signaling everyone!", thread_id, index);
+                // Patch failed to apply...
 
                 // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
                 let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
@@ -137,19 +204,27 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                     current = earliest_broken_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
                 }
 
+                // Signal everyone
                 broadcast_message(Message::NewEarliestBrokenPatchIndex);
             }
             Err(err) => {
+                // There was some other error! Signal everyone and terminate.
                 broadcast_message(Message::TerminatingEarly);
                 return Err(err);
             }
-            _ => {}
+            _ => {
+                // All good
+            }
         }
     }
+
+    // At this point we applied all `FilePatch`es (or stopped applying because
+    // we are past the earliest broken patch)
 
     // Signal that we are done applying
     broadcast_message(Message::ThreadDoneApplying);
 
+    // Now we'll be rollbacking (if needed) and receiving messages...
     let mut received_done_applying_count = 0;
     loop {
         // Rollback if there is anything to rollback
@@ -159,8 +234,6 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
             }
 
             let file_patch = &applied_patch.file_patch;
-
-//             println!("TID {} - Rolling back #{} file {:?}", thread_id, applied_patch.index, file_patch.filename());
 
             let mut file = modified_files.get_mut(file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
             file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
@@ -178,23 +251,17 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
         // Wait until everybody is done or someone finds that earlier patch failed
         match receiver.recv().unwrap() { // NOTE(unwrap): Receive can only fail if the receiving side is disconnected, which can not happen in our case - it is held by everybody including us.
             Message::NewEarliestBrokenPatchIndex => {
-//                 println!("TID {} - Received NewEarliestBrokenPatchIndex", thread_id);
-
                 // Ok, time to rollback some more...
                 continue;
             },
 
             Message::ThreadDoneApplying => {
-//                 println!("TID {} - Received ThreadDoneApplying", thread_id);
-
                 received_done_applying_count += 1;
                 // Time to rollback some more TODO: Is this needed? It won't hurt much, but still...
                 continue;
             },
 
             Message::TerminatingEarly => {
-//                 println!("TID {} - Received TerminatingEarly", thread_id);
-
                 // Some other thread gave up early because of error, if we
                 // proceed we may end up waiting for them forever. Lets quit
                 // early too. Their error will be reported to the user.
@@ -202,6 +269,8 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
             }
         }
     }
+
+    // So at this point everybody has met on the same patch (last one or the first failed)
 
     // Make a last atomic load. From now on it won't be changing.
     let earliest_broken_patch_index = earliest_broken_patch_index.load(Ordering::Acquire);
@@ -213,14 +282,14 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     // Rollback the last applied patch and generate .rej files if any
     rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner)?;
 
-//     println!("TID {} - Saving result...", thread_id);
-
     if thread_id == 0 {
         println!("Saving modified files...");
     }
 
+    // Save all the files we modified
     save_modified_files(&modified_files, &interner)?;
 
+    // Maybe save some backup files
     if config.do_backups == ApplyConfigDoBackups::Always ||
     (config.do_backups == ApplyConfigDoBackups::OnFail &&
         earliest_broken_patch_index != std::usize::MAX)
@@ -252,6 +321,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     })
 }
 
+/// Apply all patches from the `config` in parallel
 pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Error> {
     let threads = rayon::current_num_threads();
 
@@ -259,7 +329,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
     let arena = &FileArena::new();
 
-    // Load all patches multi-threaded.
+    // Load all patches multi-threaded using rayon's parallel iterator.
     let mut text_patches: Vec<_> = config.patch_filenames.par_iter().map(|patch_filename| -> Result<_, Error> {
         let raw_patch_data = arena.load_file(config.patches_path.join(patch_filename))?;
         let text_file_patches = parse_patch(raw_patch_data, config.strip)?;
@@ -309,7 +379,9 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
 
     // Run the applying threads
     rayon::scope(move |scope| {
+        // Combine the thread_id, the patches for the thread and the receiving part of the channel
         for ((thread_id, thread_file_patches), receiver) in text_file_patches_per_thread.drain(..).enumerate().zip(receivers) {
+            // Build the broadcast_message lambda
             let broadcast_message = {
                 let senders = senders.clone();
                 move |message: Message| {
@@ -319,6 +391,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                 }
             };
 
+            // Start the thread
             scope.spawn(move |_| {
                 let result = apply_worker_task(
                     config,
@@ -335,24 +408,27 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         }
     });
 
+    // Get rid of the thread_results Mutex, we are back to single-threaded again
     let thread_results = thread_results.into_inner().unwrap(); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
 
+    // Split successfull reports and errors
     let (thread_reports, mut thread_errors): (_, Vec<Result<WorkerReport, Error>>) = thread_results.into_iter().partition(|r| {
         r.is_ok()
     });
 
-    // If there was error in any of the applying threads, report the first one out
-    // TODO: Should we report all of them?
+    // If there was error in any of the applying threads, return the first one out
+    // TODO: Should we return all of them?
     if let Some(Err(error)) = thread_errors.drain(..).next() {
         return Err(error);
     }
 
+    // Check if we actually applied everything
     let mut final_patch = earliest_broken_patch_index.load(Ordering::Acquire);
     if final_patch == std::usize::MAX {
         final_patch = config.patch_filenames.len();
     }
 
-    // Print out failure analysis if there was any
+    // Print out failure analysis if we didn't apply everything
     if final_patch != config.patch_filenames.len() {
         let stderr = io::stderr();
         let mut out = stderr.lock();

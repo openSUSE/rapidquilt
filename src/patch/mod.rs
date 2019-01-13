@@ -1,5 +1,36 @@
 // Licensed under the MIT license. See LICENSE.md
 
+//! This module defines the structures representing a patch and algorithms for
+//! applying them on `InternedFile`s.
+//!
+//! The hierarchy is:
+//! Top: `Vec<FilePatch>`     ... a single "blabla.patch" file
+//!   Has many: `FilePatch`   ... a part of patch that changes single file
+//!     Has many: `Hunk`      ... a single hunk
+//!       Has two: `HunkPart` ... one for content to be added, one to be removed
+//!         Has many: `Line`  ... a line
+//!
+//! All structures are generic over the representation of line. Currently used
+//! ones are:
+//!
+//! * `Line = &[u8]`: The line is a slice of some external buffer. This is how
+//!                   patches come from parser.
+//!                   Type alliases `TextFilePatch` and `TextHunk` can be used
+//!                   as shortcut.
+//!
+//! * `Line = LineId`: The line is a unique 32-bit ID. This is how patches look
+//!                    after interning.
+//!                    Type alliases `InternedFilePatch` and `InternedHunk` can
+//!                    be used as shortcut.
+//!
+//! Other line representations would be possible, for example one where
+//! `Line = String` for a patch that owns its data.
+//!
+//! Hunks are not represented using remove-lines, add-lines and context-lines,
+//! but only using remove-lines and add-lines. Every context-line is used as
+//! remove-line and add-line.
+
+
 use std::borrow::Cow;
 use std::vec::Vec;
 use std::path::{Path, PathBuf};
@@ -15,6 +46,8 @@ pub mod unified;
 
 type ContentVec<Line> = SmallVec<[Line; 13]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
 
+/// This is part of hunk representing the lines to be added or removed together
+/// with the target line.
 #[derive(Clone, Debug)]
 pub struct HunkPart<Line> {
     pub content: ContentVec<Line>,
@@ -25,6 +58,8 @@ pub struct HunkPart<Line> {
 }
 
 impl<Line> HunkPart<Line> where Line: Copy {
+    /// Create a copy of the hunk part with given fuzz, i.e. cutting away
+    /// context lines from start and end.
     fn clone_with_fuzz(&self, fuzz_before: usize, fuzz_after: usize) -> HunkPart<Line> {
         HunkPart {
             content: SmallVec::from_slice(&self.content[fuzz_before..(self.content.len() - fuzz_after)]),
@@ -42,6 +77,7 @@ impl<Line> PartialEq for HunkPart<Line> where Line: PartialEq {
 }
 
 impl<'a> HunkPart<&'a [u8]> {
+    /// Consumes this text-based HunkPart and produces interned HunkPart.
     pub fn intern(mut self, interner: &mut LineInterner<'a>) -> HunkPart<LineId> {
         HunkPart {
             content: self.content.drain().map(|line| interner.add(line)).collect(),
@@ -51,21 +87,35 @@ impl<'a> HunkPart<&'a [u8]> {
     }
 }
 
+/// Represents the expected relative placement of the hunk.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum HunkPosition {
+    /// The hunk must be placed at the start of the file.
     Start,
+
+    /// The hunk must be placed at the end of the file.
     End,
+
+    /// The hunk can be placed anywhere in the file based on the target line.
     Middle,
 }
 
+/// Represents single hunk from a patch
 #[derive(Clone, Debug)]
 pub struct Hunk<'a, Line> {
+    /// Content to be removed from the file (including context)
     pub remove: HunkPart<Line>,
+    /// Content to be added to the file (including context)
     pub add: HunkPart<Line>,
 
+    /// How many lines at start of both `remove` and `add` are actually context
+    /// lines. (Useful for fuzzy patching.)
     pub context_before: usize,
+    /// How many lines at the end of both `remove` and `add` are actually context
+    /// lines. (Useful for fuzzy patching.)
     pub context_after: usize,
 
+    /// Expected placement of this hunk
     pub position: HunkPosition,
 
     // TODO: Better name?
@@ -74,6 +124,7 @@ pub struct Hunk<'a, Line> {
 }
 
 impl<'a, Line> Hunk<'a, Line> {
+    /// Create new hunk for given parameters.
     pub fn new(remove_line: isize, add_line: isize, place_name: &'a [u8]) -> Self {
         Hunk {
             remove: HunkPart {
@@ -95,6 +146,8 @@ impl<'a, Line> Hunk<'a, Line> {
         }
     }
 
+    /// Return the maximum fuzz that can be applied to this hunk. Applying more
+    /// has no effect because there would be no more context lines to ignore.
     pub fn max_useable_fuzz(&self) -> usize {
         std::cmp::max(self.context_before, self.context_after)
     }
@@ -102,6 +155,8 @@ impl<'a, Line> Hunk<'a, Line> {
 
 
 impl<'a, Line> Hunk<'a, Line> where Line: Copy {
+    /// Create a copy of the hunk part with given fuzz, i.e. cutting away
+    /// context lines from start and end.
     // XXX: This function is relatively costly, but it shouldn't be needed too often
     pub fn clone_with_fuzz(&self, fuzz: usize) -> Hunk<'a, Line> {
         let fuzz_before = std::cmp::min(self.context_before, fuzz);
@@ -137,6 +192,7 @@ pub type TextHunk<'a> = Hunk<'a, &'a [u8]>;
 pub type InternedHunk<'a> = Hunk<'a, LineId>;
 
 impl<'a> TextHunk<'a> {
+    /// Consumes this text-based Hunk and produces interned Hunk.
     pub fn intern(self, interner: &mut LineInterner<'a>) -> InternedHunk<'a> {
         Hunk {
             remove: self.remove.intern(interner),
@@ -150,6 +206,17 @@ impl<'a> TextHunk<'a> {
 }
 
 impl<'a> InternedHunk<'a> {
+    /// Applies this `InternedHunk` onto the `InternedFile`.
+    ///
+    /// `my_index`: the index of this hunk in the `FilePatch`
+    ///
+    /// `interned_file`: the changes are done to this file
+    ///
+    /// `direction`: whether the patch is being applied forward (normally) or reverted
+    ///
+    /// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
+    ///
+    /// `last_hunk_offset`: the offset on which the previous hunk applied
     fn apply_modify(&self,
                     my_index: usize,
                     interned_file: &mut InternedFile,
@@ -158,15 +225,19 @@ impl<'a> InternedHunk<'a> {
                     last_hunk_offset: isize)
                     -> HunkApplyReport
     {
+        // If the file doesn't exist, fail immediatelly
         if interned_file.deleted {
             return HunkApplyReport::Failed;
         }
 
+        // Decide which part of the hunk should be added and which should be
+        // deleted depending on the direction of applying.
         let (part_add, part_remove) = match direction {
             PatchDirection::Forward => (&self.add, &self.remove),
             PatchDirection::Revert => (&self.remove, &self.add),
         };
 
+        // Determine the target line.
         let mut target_line = match apply_mode {
             // In normal mode, pick what is in the hunk
             ApplyMode::Normal => match self.position {
@@ -185,14 +256,13 @@ impl<'a> InternedHunk<'a> {
             }
         };
 
-//             println!("Hunk intended for line {} (add: {}, remove: {})", target_line, part_add.target_line, part_remove.target_line);
-
         // If the hunk tries to remove more than the file has, reject it now.
         // So in the following code we can assume that it is smaller or equal.
         if part_remove.content.len() > interned_file.content.len() {
             return HunkApplyReport::Failed;
         }
 
+        // Helper function to decide if the needle matches haystack at give offset.
         fn matches(needle: &[LineId], haystack: &[LineId], at: isize) -> bool {
             assert!(at >= 0);
             let at = at as usize;
@@ -200,64 +270,62 @@ impl<'a> InternedHunk<'a> {
                 return false;
             }
 
-//                 println!("{:?} == {:?} ?", &haystack[at..(at + needle.len())], needle);
-
             &haystack[at..(at + needle.len())] == needle
         }
 
-        // Check if it matches on the originally intended target_line
+        // Check if the part we want to remove is at the originally intended target_line
         if !matches(&part_remove.content, &interned_file.content, target_line) {
-            // If it failed to apply in rollback mode, do not try to search for better place.
+            // It is not on the indended target_line...
+
+            // If we are in rollback mode, we are in big trouble. Fail early.
             if let ApplyMode::Rollback(_) = apply_mode {
                 return HunkApplyReport::Failed;
             }
 
             // Only hunks that are intended for somewhere in the middle of the code
-            // can be applied somewhere else based on context.
+            // can be applied somewhere else based on context. I.e. if the hunk is
+            // targeting the start or the end of the file and it did not match, we
+            // can not try to find any better offset.
             if self.position != HunkPosition::Middle {
                 return HunkApplyReport::Failed;
             }
-
-//                 if last_hunk_offset != 0 {
-//                     println!("... did not match! Will test offset of previous: {} + {} = {}!", target_line, last_hunk_offset, target_line + last_hunk_offset);
-//                 }
 
             // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
             //             when the line numbers mentioned in the patch are incorrect, and attempts to find
             //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
             //             line number mentioned for the hunk, plus or minus any offset used in applying the
             //             previous hunk.."
+
+            // If the last hunk applied with some offset, try if we could apply with the same offset
             if last_hunk_offset != 0 && target_line + last_hunk_offset >= 0 &&
                 matches(&part_remove.content, &interned_file.content, target_line + last_hunk_offset) {
-//                     println!("... matched!");
                 target_line += last_hunk_offset;
             } else {
-//                     println!("... did not match! Will search for place closest to {}", part_add.target_line);
-
                 // man patch: "If that is not the correct place, patch scans both forwards and backwards for a
                 //             set of lines matching the context given in the hunk."
 
+                // We'll find every occurence of `part_remove.content` in the file and pick the one that is closest
+                // to the `benchmark_target_line`
                 let benchmark_target_line = target_line + last_hunk_offset;
                 let mut best_target_line: Option<isize> = None;
 
                 for possible_target_line in Searcher::new(&part_remove.content).search_in(&interned_file.content) {
                     let possible_target_line = possible_target_line as isize;
 
-//                     println!("... found match at {}", possible_target_line);
-
                     if best_target_line.is_none() || (possible_target_line - benchmark_target_line).abs() < (best_target_line.unwrap() - benchmark_target_line).abs() {
+                        // We found a position that is better (or there was no best position yet), remember it.
                         best_target_line = Some(possible_target_line);
                     } else {
-                        // We are searching the file from start to end, so the possible_target_line will be getting closer and closer to the
-                        // benchmark_target_line until we pass it and it will start getting worse. At that point we can cut off the search.
-                        // So we'll find the closest one before or after the benchmark_target_line.
+                        // We found a position that is worse than the best one so far. We are searching the file from start to end, so the
+                        // possible_target_line will be getting closer and closer to the benchmark_target_line until we pass it and it will
+                        // start getting worse. At that point we can cut off the search.
                         break;
                     }
                 }
 
+                // Did we find the line or not?
                 match best_target_line {
                     Some(new_target_line) => {
-//                             println!("... best match is {}", new_target_line);
                         target_line = new_target_line;
                     },
                     None => {
@@ -269,16 +337,16 @@ impl<'a> InternedHunk<'a> {
 
         assert!(target_line >= 0);
 
+        // Replace that part of the `interned_file` with the new one!
         let range = (target_line as usize)..(target_line as usize + part_remove.content.len());
-
-//             println!("Hunk applied on line {}", target_line);
-
         interned_file.content.splice(range.clone(), part_add.content.clone());
 
+        // Report success
         HunkApplyReport::Applied { line: target_line, offset: target_line - part_add.target_line }
     }
 }
 
+/// Whether the `FilePatch` is creating, deleting or modifying existing file.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum FilePatchKind {
     Modify,
@@ -286,6 +354,7 @@ pub enum FilePatchKind {
     Delete,
 }
 
+/// Is the patch being applied forward = normally, or reverted.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PatchDirection {
     Forward,
@@ -301,15 +370,21 @@ impl PatchDirection {
     }
 }
 
+/// The result of applying a `Hunk`.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum HunkApplyReport {
+    /// It was applied on given line, with given offset.
     Applied { line: isize, offset: isize },
+
+    /// It failed to apply.
     Failed,
 
-    /// Used when rolling back and skipping hunks that previously failed
+    /// It was skipped. Used when rolling back and skipping hunks that
+    /// previously failed.
     Skipped,
 }
 
+/// The result of applying a `FilePatch`
 #[derive(Debug)]
 pub struct FilePatchApplyReport {
     any_failed: bool,
@@ -318,6 +393,7 @@ pub struct FilePatchApplyReport {
 }
 
 impl FilePatchApplyReport {
+    /// Create a report for given amount of hunks
     fn new_with_capacity(fuzz: usize, capacity: usize) -> Self {
         FilePatchApplyReport {
             hunk_reports: Vec::with_capacity(capacity),
@@ -326,6 +402,7 @@ impl FilePatchApplyReport {
         }
     }
 
+    /// Create a report with single hunk that succeeded
     fn single_hunk_success(line: isize, offset: isize, fuzz: usize) -> Self {
         FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Applied { line, offset }],
@@ -334,6 +411,7 @@ impl FilePatchApplyReport {
         }
     }
 
+    /// Create a report with single hunk that failed
     fn single_hunk_failure(fuzz: usize) -> Self {
         FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Failed],
@@ -342,6 +420,7 @@ impl FilePatchApplyReport {
         }
     }
 
+    /// Add a hunk report
     fn push_hunk_report(&mut self, hunk_report: HunkApplyReport) {
         self.hunk_reports.push(hunk_report);
         if hunk_report == HunkApplyReport::Failed {
@@ -349,32 +428,43 @@ impl FilePatchApplyReport {
         }
     }
 
+    /// Did the applying went ok? All hunks succeeded?
     pub fn ok(&self) -> bool { !self.any_failed }
+
+    /// Did the applying failed? Any hunk failed?
     pub fn failed(&self) -> bool { self.any_failed }
+
+    /// Get the reports for the individual hunks.
     pub fn hunk_reports(&self) -> &[HunkApplyReport] { &self.hunk_reports }
 
+    /// Fuzz level used during the applying.
     pub fn fuzz(&self) -> usize { self.fuzz }
 }
 
 pub type HunksVec<'a, Line> = SmallVec<[Hunk<'a, Line>; 2]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
 
+/// This represents all changes done to single file.
 #[derive(Clone, Debug)]
 pub struct FilePatch<'a, Line> {
-    // TODO: Review if those can be safely public
-
+    /// Does it create, delete or modify a file?
     kind: FilePatchKind,
 
+    /// The target filename
     filename: PathBuf,
+
+    /// A new filename in case this FilePatch also renames a file
     new_filename: Option<PathBuf>,
 
     pub hunks: HunksVec<'a, Line>,
 }
 
 impl<'a, Line> FilePatch<'a, Line> {
+    /// Create new `FilePatch` of given kind for given filename
     pub fn new(kind: FilePatchKind, filename: PathBuf) -> Self {
         Self::new_internal(kind, filename, None)
     }
 
+    /// Create new `FilePatch` of given kind that renames a file
     pub fn new_renamed(kind: FilePatchKind, filename: PathBuf, new_filename: PathBuf) -> Self {
         Self::new_internal(kind, filename, Some(new_filename))
     }
@@ -398,6 +488,7 @@ impl<'a, Line> FilePatch<'a, Line> {
     #[allow(dead_code)]
     pub fn is_rename(&self) -> bool { self.new_filename.is_some() }
 
+    /// Strip the leading path from the filename and new_filename
     pub fn strip(&mut self, strip: usize) {
         fn strip_path(path: &Path, strip: usize) -> PathBuf {
             let mut components = path.components();
@@ -413,6 +504,8 @@ impl<'a, Line> FilePatch<'a, Line> {
         }
     }
 
+    /// Return the maximum fuzz that can be applied to this file patch. Applying
+    /// more has no effect because there would be no more context lines to ignore.
     pub fn max_useable_fuzz(&self) -> usize {
         self.hunks.iter().map(|hunk| hunk.max_useable_fuzz()).max().unwrap_or(0)
     }
@@ -432,6 +525,7 @@ pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
 pub type InternedFilePatch<'a> = FilePatch<'a, LineId>;
 
 impl<'a> TextFilePatch<'a> {
+    /// Consumes this text-based FilePatch and produces interned FilePatch.
     pub fn intern(mut self, interner: &mut LineInterner<'a>) -> InternedFilePatch<'a> {
         FilePatch {
             kind: self.kind,
@@ -444,17 +538,27 @@ impl<'a> TextFilePatch<'a> {
     }
 }
 
+/// The mode of application. This is different from `PatchDirection`.
 #[derive(Copy, Clone, Debug)]
 enum ApplyMode<'a> {
+    /// In normal mode, the patch is applied (or reverted) the way patch does
+    /// it - first it will try the target line, then various offsets.
     Normal,
+
+    /// In rollback mode, the patch was already applied (successfully or not)
+    /// and now it has to be rolled back. It will be reverted (or applied) at
+    /// the exact same lines where it was applied (or reverted) before.
     Rollback(&'a FilePatchApplyReport),
 }
 
 impl<'a> InternedFilePatch<'a> {
+    /// Apply (or revert - based on `direction`) this patch to the `interned_file` using the given `fuzz`.
     pub fn apply(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
         self.apply_internal(interned_file, direction, fuzz, ApplyMode::Normal)
     }
 
+    /// Rollback the application (or the revertion - based on direction) of this patch from the `interned_file`
+    /// using the information from the `apply_report`.
     pub fn rollback(&self, interned_file: &mut InternedFile, direction: PatchDirection, apply_report: &FilePatchApplyReport) {
         assert!(self.hunks.len() == apply_report.hunk_reports().len());
 
@@ -462,6 +566,7 @@ impl<'a> InternedFilePatch<'a> {
         assert!(result.ok()); // Rollback must apply cleanly. If not, we have a bug somewhere.
     }
 
+    /// Internal function that does the function of both `apply` and `rollback`.
     fn apply_internal(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
         match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
@@ -477,9 +582,11 @@ impl<'a> InternedFilePatch<'a> {
         }
     }
 
+    /// Apply this `FilePatchKind::Create` patch on the file.
     fn apply_create(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
         assert!(self.hunks.len() == 1);
 
+        // If we are creating it, it must be empty.
         if !interned_file.content.is_empty() {
             return FilePatchApplyReport::single_hunk_failure(fuzz);
         }
@@ -489,12 +596,14 @@ impl<'a> InternedFilePatch<'a> {
             PatchDirection::Revert => &self.hunks[0].remove.content,
         };
 
+        // Just copy in it the content of our single hunk and we are done.
         interned_file.content = new_content.clone().into_vec();
         interned_file.deleted = false;
 
         FilePatchApplyReport::single_hunk_success(0, 0, fuzz)
     }
 
+    /// Apply this `FilePatchKind::Delete` patch on the file.
     fn apply_delete(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
         assert!(self.hunks.len() == 1);
 
@@ -503,27 +612,33 @@ impl<'a> InternedFilePatch<'a> {
             PatchDirection::Revert => &self.hunks[0].add.content,
         };
 
+        // If we are deleting it, it must contain exactly what we want to remove.
         if &expected_content[..] != &interned_file.content[..] {
             return FilePatchApplyReport::single_hunk_failure(fuzz);
         }
 
+        // Just delete everything and we are done
         interned_file.content.clear();
         interned_file.deleted = true;
 
         FilePatchApplyReport::single_hunk_success(0, 0, fuzz)
     }
 
+    /// Apply this `FilePatchKind::Modify` patch on the file.
     fn apply_modify(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
         let mut report = FilePatchApplyReport::new_with_capacity(fuzz, self.hunks.len());
 
         let mut last_hunk_offset = 0isize;
 
+        // This function is applied on every hunk one by one, either from beginning
+        // to end, or the opposite way (depends if we are applying or reverting)
         let mut for_each_hunk = |i, hunk: &Hunk<LineId>| {
             let mut hunk_report = HunkApplyReport::Skipped;
 
+            // Decide which fuzz levels we should try
             #[allow(clippy::range_plus_one)] // We need all ranges to be the same type and the last one has to be empty
             let possible_fuzz_levels = match apply_mode {
-                // In normal mode consider fuzz 0 up to given maximum fuzz or what is useable for this hunk
+                // In normal mode consider fuzz 0 up to given maximum fuzz, but no more than what is useable for this hunk
                 ApplyMode::Normal =>
                     0..(std::cmp::min(fuzz, hunk.max_useable_fuzz()) + 1),
 
@@ -536,27 +651,30 @@ impl<'a> InternedFilePatch<'a> {
                     // If the hunk failed to apply, skip it now.
                     HunkApplyReport::Failed |
                     HunkApplyReport::Skipped =>
-                        0..0,
+                        0..0, // Empty interval = it won't try at all
                 }
             };
 
             for current_fuzz in possible_fuzz_levels {
+                // If we are at fuzz 0, borrow the hunk, otherwise make a copy
+                // for the fuzz level.
                 let hunk = match current_fuzz {
                     0 => Cow::Borrowed(hunk),
                     _ => Cow::Owned(hunk.clone_with_fuzz(current_fuzz)),
                 };
 
+                // Attempt to apply the hunk...
                 hunk_report = hunk.apply_modify(i, interned_file, direction, apply_mode, last_hunk_offset);
 
-                if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
-                    if current_fuzz > 0 {
-//                         println!("Patch ? applied with fuzz {}.", current_fuzz); // TODO: Proper warning!
-                        hunk_report = HunkApplyReport::Applied { line, offset };
-                    }
+                // If it succeeded, we are done with this hunk, do not try any
+                // more fuzz levels.
+                if let HunkApplyReport::Applied { .. } = hunk_report {
                     break;
                 }
             }
 
+            // If it applied, remember the offset, so we can use it for the
+            // next hunk.
             if let HunkApplyReport::Applied { offset, .. } = hunk_report {
                 last_hunk_offset = offset;
             }

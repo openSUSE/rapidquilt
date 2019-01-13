@@ -6,6 +6,9 @@ use crate::line_interner::{LineId, LineInterner};
 use crate::util::split_lines_with_endings;
 
 
+/// This represents a file that had lines interned by an interner.
+/// Additionally it keeps information on whether the file originally existed
+/// on disk and whether it was deleted.
 #[derive(Clone, Debug)]
 pub struct InternedFile {
     pub content: Vec<LineId>,
@@ -16,6 +19,7 @@ pub struct InternedFile {
 const AVG_LINE_LENGTH: usize = 30; // Heuristics, for initial estimation of line count.
 
 impl InternedFile {
+    /// Create new `InternedFile` by interning given `bytes` using the `interner`.
     pub fn new<'a, 'b: 'a>(interner: &mut LineInterner<'a>, bytes: &'b [u8], existed: bool) -> Self {
         let mut content = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
 
@@ -31,6 +35,7 @@ impl InternedFile {
         }
     }
 
+    /// Create new empty `InternedFile`
     pub fn new_non_existent() -> Self {
         InternedFile {
             content: Vec::new(),
@@ -40,7 +45,7 @@ impl InternedFile {
     }
 
     /// Intended to be used when renaming files.
-    /// This InternedFile must stay as record that the original was deleted,
+    /// This InternedFile must stay as a record that the original was deleted,
     /// but the content is taken away.
     pub fn move_out(&mut self) -> Self {
         let mut out_content = Vec::new();
@@ -72,6 +77,12 @@ impl InternedFile {
         true
     }
 
+    /// Write this file into given `writer` using lines from the `interner`.
+    ///
+    /// # Panic
+    ///
+    /// Panics if the interner is not the one originally used for creating
+    /// this file.
     pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
         // Note: Even self.deleted files can be saved - quilt backup file for a file
         //       that did not exist is an empty file.

@@ -37,6 +37,8 @@ impl<'a> FileArena<'a> {
         }
     }
 
+    /// Load the file and return byte slice of its complete content. The slice
+    /// is valid as long as this object is alive. (Same lifetimes.)
     pub fn load_file<P: AsRef<Path>>(&self, path: P) -> Result<&'a [u8], io::Error> {
         let data = fs::read(path.as_ref())?.into_boxed_slice();
 
@@ -53,6 +55,7 @@ impl<'a> FileArena<'a> {
         Ok(slice)
     }
 
+    /// Get statistics
     pub fn stats(&self) -> Stats {
         let files = self.files.lock().unwrap(); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
 
