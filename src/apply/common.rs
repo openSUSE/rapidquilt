@@ -14,7 +14,7 @@ use failure::{Error, ResultExt};
 
 use crate::apply::*;
 use crate::interned_file::InternedFile;
-use crate::file_arena::FileArena;
+use crate::arena::Arena;
 use crate::line_interner::LineInterner;
 use crate::patch::{FilePatchApplyReport, InternedFilePatch, HunkApplyReport, PatchDirection, TextFilePatch};
 use crate::patch::unified::writer::{UnifiedPatchHunkWriter, UnifiedPatchRejWriter};
@@ -149,7 +149,7 @@ pub fn get_interned_file<
 (
     filename: &PathBuf,
     modified_files: &'modified_files mut HashMap<PathBuf, InternedFile, H>,
-    arena: &'arena FileArena,
+    arena: &'arena dyn Arena,
     interner: &'interner mut LineInterner<'arena>)
     -> Result<&'modified_files mut InternedFile, io::Error>
 {
@@ -196,7 +196,7 @@ pub fn apply_one_file_patch<
     text_file_patch: TextFilePatch<'arena>,
     applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
-    arena: &'arena FileArena,
+    arena: &'arena dyn Arena,
     interner: &'interner mut LineInterner<'arena>)
     -> Result<bool, Error>
 {

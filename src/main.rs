@@ -7,8 +7,8 @@ extern crate test;
 #[macro_use] extern crate failure;
 
 mod apply;
+mod arena;
 mod line_interner;
-mod file_arena;
 mod interned_file;
 mod patch;
 mod util;
@@ -33,6 +33,8 @@ use crate::apply::{
     apply_patches,
     apply_patches_parallel
 };
+use crate::arena::{Arena, FileArena, MmapArena};
+
 
 
 fn usage(opts: &Options) {
@@ -63,7 +65,8 @@ enum PushGoal {
     UpTo(PathBuf),
 }
 
-fn cmd_push<P: AsRef<Path>>(patches_path: P,
+fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
+                            patches_path: P,
                             goal: PushGoal,
                             fuzz: usize,
                             strip: usize,
@@ -124,9 +127,9 @@ fn cmd_push<P: AsRef<Path>>(patches_path: P,
     };
 
     let apply_result = if threads <= 1 {
-        apply_patches(&config)?
+        apply_patches(&config, arena)?
     } else {
-        apply_patches_parallel(&config)?
+        apply_patches_parallel(&config, arena)?
     };
 
     fs::create_dir_all(".pc")?;
@@ -150,6 +153,9 @@ fn main() {
     opts.optopt("F", "fuzz", "maximal allowed fuzz (default: 0)", "<n>");
     opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
     opts.optflag("", "stats", "print statistics in the end");
+    opts.optflag("", "mmap", "mmap files instead of reading into buffers. This may reduce memory usage and improve \
+                              performance in some cases. Warning: You must ensure that no external program will modify the \
+                              files while rapidquilt is running, otherwise you may get incorrect results or even crash.");
 
     opts.optflag("h", "help", "print this help menu");
 
@@ -207,6 +213,12 @@ fn main() {
 
     let stats = matches.opt_present("stats");
 
+    let arena: Box<Arena> = if matches.opt_present("mmap") {
+        Box::new(MmapArena::new())
+    } else {
+        Box::new(FileArena::new())
+    };
+
     let mut goal = if matches.opt_present("a") {
         PushGoal::All
     } else {
@@ -220,7 +232,7 @@ fn main() {
         }
     }
 
-    match cmd_push(patches_path, goal, fuzz, 1, do_backups, backup_count, stats) {
+    match cmd_push(&*arena, patches_path, goal, fuzz, 1, do_backups, backup_count, stats) {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {
                 eprintln!("{}{}", "  ".repeat(i), cause);

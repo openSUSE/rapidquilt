@@ -15,14 +15,13 @@ use seahash;
 
 use crate::apply::*;
 use crate::apply::common::*;
-use crate::file_arena::FileArena;
+use crate::arena::Arena;
 use crate::patch::unified::parser::parse_patch;
 use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 
 
-pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Error> {
-    let arena = FileArena::new();
+pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<ApplyResult<'a>, Error> {
     let mut interner = LineInterner::new();
 
     let mut applied_patches = Vec::<PatchStatus>::new();
@@ -41,7 +40,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
         final_patch = index;
 
         let text_file_patches = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
-            let data = arena.load_file(config.patches_path.join(patch_filename))?;
+            let data = arena.load_file(&config.patches_path.join(patch_filename))?;
             let text_file_patches = parse_patch(&data, config.strip)?;
             Ok(text_file_patches)
         })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
@@ -54,7 +53,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Err
                                      text_file_patch,
                                      &mut applied_patches,
                                      &mut modified_files,
-                                     &arena,
+                                     arena,
                                      &mut interner)?
             {
                 any_report_failed = true;

@@ -32,6 +32,13 @@ The goal is to be very fast.
 
             --stats         print statistics in the end
 
+            --mmap          mmap files instead of reading into buffers. This may
+                            reduce memory usage and improve performance in some
+                            cases. Warning: You must ensure that no external
+                            program will modify the files while rapidquilt is
+                            running, otherwise you may get incorrect results or
+                            even crash.
+
         -h, --help          print this help menu
 
 

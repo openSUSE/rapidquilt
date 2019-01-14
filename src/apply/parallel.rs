@@ -58,7 +58,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::apply::*;
 use crate::apply::common::*;
-use crate::file_arena::FileArena;
+use crate::arena::Arena;
 use crate::patch::{PatchDirection, TextFilePatch};
 use crate::patch::unified::parser::parse_patch;
 use crate::line_interner::LineInterner;
@@ -166,7 +166,7 @@ struct WorkerReport {
 /// `earliest_broken_patch_index`: Atomic variable for sharing the index of the earlier patch that failed to apply.
 fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     config: &'a ApplyConfig,
-    arena: &'a FileArena<'a>,
+    arena: &'a dyn Arena,
     thread_id: usize,
     threads: usize,
     thread_file_patches: Vec<(usize, TextFilePatch<'a>)>,
@@ -193,7 +193,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                                    text_file_patch,
                                    &mut applied_patches,
                                    &mut modified_files,
-                                   &arena,
+                                   arena,
                                    &mut interner) {
             Ok(false) => {
                 // Patch failed to apply...
@@ -322,16 +322,14 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 }
 
 /// Apply all patches from the `config` in parallel
-pub fn apply_patches<'a>(config: &'a ApplyConfig) -> Result<ApplyResult<'a>, Error> {
+pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<ApplyResult<'a>, Error> {
     let threads = rayon::current_num_threads();
 
     println!("Applying {} patches using {} threads...", config.patch_filenames.len(), threads);
 
-    let arena = &FileArena::new();
-
     // Load all patches multi-threaded using rayon's parallel iterator.
     let mut text_patches: Vec<_> = config.patch_filenames.par_iter().map(|patch_filename| -> Result<_, Error> {
-        let raw_patch_data = arena.load_file(config.patches_path.join(patch_filename))?;
+        let raw_patch_data = arena.load_file(&config.patches_path.join(patch_filename))?;
         let text_file_patches = parse_patch(raw_patch_data, config.strip)?;
         Ok(text_file_patches)
     }).collect();
