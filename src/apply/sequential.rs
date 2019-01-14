@@ -15,6 +15,7 @@ use seahash;
 
 use crate::apply::*;
 use crate::apply::common::*;
+use crate::apply::diagnostics::*;
 use crate::arena::Arena;
 use crate::patch::unified::parser::parse_patch;
 use crate::line_interner::LineInterner;

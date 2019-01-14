@@ -58,6 +58,7 @@ use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 
 use crate::apply::*;
 use crate::apply::common::*;
+use crate::apply::diagnostics::*;
 use crate::arena::Arena;
 use crate::patch::{PatchDirection, TextFilePatch};
 use crate::patch::unified::parser::parse_patch;

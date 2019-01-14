@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub mod sequential;
 pub mod parallel;
 mod common;
+mod diagnostics;
 
 pub use self::sequential::apply_patches;
 pub use self::parallel::apply_patches as apply_patches_parallel;
