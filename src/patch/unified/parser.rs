@@ -1,7 +1,5 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::vec::Vec;
@@ -201,6 +199,24 @@ enum Filename {
     DevNull,
 }
 
+#[cfg(unix)]
+fn bytes_to_pathbuf(bytes: &[u8]) -> PathBuf {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    PathBuf::from(OsStr::from_bytes(bytes))
+}
+
+#[cfg(not(unix))]
+fn bytes_to_pathbuf(bytes: &[u8]) -> PathBuf {
+    // XXX: This may not work in case of some really weird paths (control characters
+    //      and what not). But I guess those can not be legaly saved in patch files
+    //      anyway.
+
+    PathBuf::from(String::from_utf8_lossy(bytes).as_ref())
+}
+
+
 /// Parses a filename.
 ///
 /// Either written directly without any whitespace or inside quotation marks.
@@ -216,14 +232,14 @@ named!(parse_filename<CompleteByteSlice, Filename>,
                 if &f[..] == NULL_FILENAME {
                     Filename::DevNull
                 } else {
-                    Filename::Real(PathBuf::from(OsStr::from_bytes(&f[..])))
+                    Filename::Real(bytes_to_pathbuf(&f[..]))
                 }
             }) |
             map!(parse_filename_direct, |f| {
                 if &f[..] == NULL_FILENAME {
                     Filename::DevNull
                 } else {
-                    Filename::Real(PathBuf::from(OsStr::from_bytes(&f[..])))
+                    Filename::Real(bytes_to_pathbuf(&f[..]))
                 }
             })
         ) >>

@@ -33,7 +33,10 @@ use crate::apply::{
     apply_patches,
     apply_patches_parallel
 };
-use crate::arena::{Arena, FileArena, MmapArena};
+use crate::arena::{Arena, FileArena};
+
+#[cfg(unix)]
+use crate::arena::MmapArena;
 
 
 
@@ -141,6 +144,24 @@ fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
     Ok(apply_result.skipped_patches.is_empty())
 }
 
+#[cfg(unix)]
+fn build_arena(use_mmap: bool) -> Box<Arena> {
+    if use_mmap {
+        Box::new(MmapArena::new())
+    } else {
+        Box::new(FileArena::new())
+    }
+}
+
+#[cfg(not(unix))]
+fn build_arena(use_mmap: bool) -> Box<Arena> {
+    if use_mmap {
+        panic!();
+    } else {
+        Box::new(FileArena::new())
+    }
+}
+
 fn main() {
     let args: Vec<_> = env::args().collect();
 
@@ -153,6 +174,8 @@ fn main() {
     opts.optopt("F", "fuzz", "maximal allowed fuzz (default: 0)", "<n>");
     opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
     opts.optflag("", "stats", "print statistics in the end");
+
+    #[cfg(unix)]
     opts.optflag("", "mmap", "mmap files instead of reading into buffers. This may reduce memory usage and improve \
                               performance in some cases. Warning: You must ensure that no external program will modify the \
                               files while rapidquilt is running, otherwise you may get incorrect results or even crash.");
@@ -213,11 +236,7 @@ fn main() {
 
     let stats = matches.opt_present("stats");
 
-    let arena: Box<Arena> = if matches.opt_present("mmap") {
-        Box::new(MmapArena::new())
-    } else {
-        Box::new(FileArena::new())
-    };
+    let arena = build_arena(matches.opt_present("mmap"));
 
     let mut goal = if matches.opt_present("a") {
         PushGoal::All

@@ -3,9 +3,13 @@ use std::fmt;
 use std::path::Path;
 
 mod file_arena;
+
+#[cfg(unix)]
 mod mmap_arena;
 
 pub use self::file_arena::FileArena;
+
+#[cfg(unix)]
 pub use self::mmap_arena::MmapArena;
 
 
