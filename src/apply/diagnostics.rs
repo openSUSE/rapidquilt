@@ -128,7 +128,7 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
                 }
 
                 let mut buf = Vec::<u8>::new();
-                patch_status.file_patch.hunks[i].write_header_to(&mut buf)?;
+                patch_status.file_patch.hunks()[i].write_header_to(&mut buf)?;
                 writeln!(writer, "\t{}", String::from_utf8_lossy(&buf).bright_blue())?;
             }
 

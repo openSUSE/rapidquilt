@@ -9,6 +9,7 @@ lto = true
 
 [dependencies]
 colored = "1"
+derive_builder = "0.7"
 failure = "0.1"
 getopts = "0.2"
 indexmap = "1"

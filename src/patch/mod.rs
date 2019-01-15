@@ -32,9 +32,11 @@
 
 
 use std::borrow::Cow;
+use std::fs;
 use std::vec::Vec;
 use std::path::{Path, PathBuf};
 
+use derive_builder::Builder;
 use smallvec::SmallVec;
 
 use crate::line_interner::{LineId, LineInterner};
@@ -444,7 +446,8 @@ impl FilePatchApplyReport {
 pub type HunksVec<'a, Line> = SmallVec<[Hunk<'a, Line>; 2]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
 
 /// This represents all changes done to single file.
-#[derive(Clone, Debug)]
+#[derive(Builder, Clone, Debug)]
+#[builder]
 pub struct FilePatch<'a, Line> {
     /// Does it create, delete or modify a file?
     kind: FilePatchKind,
@@ -453,33 +456,22 @@ pub struct FilePatch<'a, Line> {
     filename: PathBuf,
 
     /// A new filename in case this FilePatch also renames a file
+    #[builder(default)]
     new_filename: Option<PathBuf>,
 
-    pub hunks: HunksVec<'a, Line>,
+    /// The old permissions, if any were mentioned in the patch
+    #[builder(default)]
+    old_permissions: Option<fs::Permissions>,
+
+    /// The new permissions, if any were mentioned in the patch
+    #[builder(default)]
+    new_permissions: Option<fs::Permissions>,
+
+    #[builder(default)]
+    hunks: HunksVec<'a, Line>,
 }
 
 impl<'a, Line> FilePatch<'a, Line> {
-    /// Create new `FilePatch` of given kind for given filename
-    pub fn new(kind: FilePatchKind, filename: PathBuf) -> Self {
-        Self::new_internal(kind, filename, None)
-    }
-
-    /// Create new `FilePatch` of given kind that renames a file
-    pub fn new_renamed(kind: FilePatchKind, filename: PathBuf, new_filename: PathBuf) -> Self {
-        Self::new_internal(kind, filename, Some(new_filename))
-    }
-
-    fn new_internal(kind: FilePatchKind, filename: PathBuf, new_filename: Option<PathBuf>) -> Self {
-        Self {
-            kind,
-
-            filename,
-            new_filename,
-
-            hunks: SmallVec::new(),
-        }
-    }
-
     pub fn kind(&self) -> FilePatchKind { self.kind }
 
     pub fn filename(&self) -> &PathBuf { &self.filename }
@@ -487,6 +479,11 @@ impl<'a, Line> FilePatch<'a, Line> {
 
     #[allow(dead_code)]
     pub fn is_rename(&self) -> bool { self.new_filename.is_some() }
+
+    pub fn old_permissions(&self) -> Option<&fs::Permissions> { self.old_permissions.as_ref() }
+    pub fn new_permissions(&self) -> Option<&fs::Permissions> { self.new_permissions.as_ref() }
+
+    pub fn hunks(&self) -> &[Hunk<'a, Line>] { &self.hunks }
 
     /// Strip the leading path from the filename and new_filename
     pub fn strip(&mut self, strip: usize) {
@@ -517,6 +514,8 @@ impl<'a, Line> PartialEq for FilePatch<'a, Line> where Line: PartialEq {
         self.kind == other.kind &&
         self.filename == other.filename &&
         self.new_filename == other.new_filename &&
+        self.old_permissions == other.old_permissions &&
+        self.new_permissions == other.new_permissions &&
         self.hunks == other.hunks
     }
 }
@@ -532,6 +531,9 @@ impl<'a> TextFilePatch<'a> {
 
             filename: self.filename,
             new_filename: self.new_filename,
+
+            old_permissions: self.old_permissions,
+            new_permissions: self.new_permissions,
 
             hunks: self.hunks.drain().map(|hunk| hunk.intern(interner)).collect(),
         }
