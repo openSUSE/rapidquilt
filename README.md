@@ -47,7 +47,6 @@ The goal is to be very fast.
 ## Limitations compared to quilt & patch
 
 * only patches in unified format
-* file permissions in patch files are ignored
 * date in patch files is ignored
 * ... probably more that I don't know about
 

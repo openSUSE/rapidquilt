@@ -88,6 +88,12 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
             }
         }
         let mut output = File::create(filename)?;
+
+        // If any patch set non-default permission, set them now
+        if let Some(ref permissions) = file.permissions {
+            output.set_permissions(permissions.clone())?;
+        }
+
         file.write_to(&interner, &mut output)?;
     }
 

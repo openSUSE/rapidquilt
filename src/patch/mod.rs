@@ -392,6 +392,7 @@ pub struct FilePatchApplyReport {
     any_failed: bool,
     hunk_reports: Vec<HunkApplyReport>,
     fuzz: usize,
+    previous_permissions: Option<fs::Permissions>,
 }
 
 impl FilePatchApplyReport {
@@ -401,6 +402,7 @@ impl FilePatchApplyReport {
             hunk_reports: Vec::with_capacity(capacity),
             any_failed: false,
             fuzz,
+            previous_permissions: None,
         }
     }
 
@@ -410,6 +412,7 @@ impl FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Applied { line, offset }],
             any_failed: false,
             fuzz,
+            previous_permissions: None,
         }
     }
 
@@ -419,6 +422,7 @@ impl FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Failed],
             any_failed: true,
             fuzz,
+            previous_permissions: None,
         }
     }
 
@@ -480,7 +484,9 @@ impl<'a, Line> FilePatch<'a, Line> {
     #[allow(dead_code)]
     pub fn is_rename(&self) -> bool { self.new_filename.is_some() }
 
+    #[allow(dead_code)]
     pub fn old_permissions(&self) -> Option<&fs::Permissions> { self.old_permissions.as_ref() }
+    #[allow(dead_code)]
     pub fn new_permissions(&self) -> Option<&fs::Permissions> { self.new_permissions.as_ref() }
 
     pub fn hunks(&self) -> &[Hunk<'a, Line>] { &self.hunks }
@@ -570,7 +576,8 @@ impl<'a> InternedFilePatch<'a> {
 
     /// Internal function that does the function of both `apply` and `rollback`.
     fn apply_internal(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
-        match (self.kind, direction) {
+        // Call the appropriate specialized function
+        let mut report = match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
                 self.apply_modify(interned_file, direction, fuzz, apply_mode),
 
@@ -581,7 +588,21 @@ impl<'a> InternedFilePatch<'a> {
             (FilePatchKind::Delete, PatchDirection::Forward) |
             (FilePatchKind::Create, PatchDirection::Revert) =>
                 self.apply_delete(interned_file, direction, fuzz),
-        }
+        };
+
+        // Set new mode to the file, if there is any
+        let change_permissions_to = match (apply_mode, direction) {
+            (ApplyMode::Rollback(report), _) => &report.previous_permissions,
+            (ApplyMode::Normal, PatchDirection::Forward) => &self.new_permissions,
+            (ApplyMode::Normal, PatchDirection::Revert) => &self.old_permissions,
+        };
+        report.previous_permissions = if let Some(change_permissions_to) = change_permissions_to {
+            interned_file.permissions.replace(change_permissions_to.clone())
+        } else {
+            interned_file.permissions.clone()
+        };
+
+        report
     }
 
     /// Apply this `FilePatchKind::Create` patch on the file.

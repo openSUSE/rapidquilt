@@ -1,5 +1,7 @@
 # Unreleased changes
 
+* Support for patches that change file permissions
+
 # Version 0.4.3
 
 * Faster patch parsing

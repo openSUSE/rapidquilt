@@ -1,5 +1,6 @@
 // Licensed under the MIT license. See LICENSE.md
 
+use std::fs::Permissions;
 use std::io::{self, BufWriter, Write};
 
 use crate::line_interner::{LineId, LineInterner};
@@ -14,6 +15,12 @@ pub struct InternedFile {
     pub content: Vec<LineId>,
     pub existed: bool,
     pub deleted: bool,
+
+    /// This tracks the permissions set by patches. It is `None` if no patch
+    /// set any permissions. Note that the "patch" command does not check if
+    /// the old permissions matched, so neither do we, therefore we don't have
+    /// to query the permissions of the original file.
+    pub permissions: Option<Permissions>,
 }
 
 const AVG_LINE_LENGTH: usize = 30; // Heuristics, for initial estimation of line count.
@@ -32,6 +39,7 @@ impl InternedFile {
             content,
             deleted: false,
             existed,
+            permissions: None,
         }
     }
 
@@ -41,6 +49,7 @@ impl InternedFile {
             content: Vec::new(),
             deleted: true,
             existed: false,
+            permissions: None,
         }
     }
 
@@ -58,6 +67,7 @@ impl InternedFile {
             content: out_content,
             deleted: false,
             existed: false,
+            permissions: self.permissions.take(),
         }
     }
 
@@ -73,6 +83,8 @@ impl InternedFile {
         other.deleted = true;
         self.deleted = false;
         // self.existed remains at it was
+
+        self.permissions = other.permissions.take();
 
         true
     }
