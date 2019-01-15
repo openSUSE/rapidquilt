@@ -42,6 +42,7 @@ pub struct ApplyConfig<'a> {
     pub fuzz: usize,
     pub do_backups: ApplyConfigDoBackups,
     pub backup_count: ApplyConfigBackupCount,
+    pub dry_run: bool,
     pub stats: bool,
 }
 

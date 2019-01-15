@@ -280,37 +280,39 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     let mut failure_analysis = Vec::<u8>::new();
     analyze_patch_failure(earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
-    // Rollback the last applied patch and generate .rej files if any
-    rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner)?;
+    if !config.dry_run {
+        // Rollback the last applied patch and generate .rej files if any
+        rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner)?;
 
-    if thread_id == 0 {
-        println!("Saving modified files...");
-    }
-
-    // Save all the files we modified
-    save_modified_files(&modified_files, &interner)?;
-
-    // Maybe save some backup files
-    if config.do_backups == ApplyConfigDoBackups::Always ||
-    (config.do_backups == ApplyConfigDoBackups::OnFail &&
-        earliest_broken_patch_index != std::usize::MAX)
-    {
         if thread_id == 0 {
-            println!("Saving quilt backup files ({})...", config.backup_count);
+            println!("Saving modified files...");
         }
 
-        let final_patch = if earliest_broken_patch_index == std::usize::MAX {
-            config.patch_filenames.len() - 1
-        } else {
-            earliest_broken_patch_index
-        };
+        // Save all the files we modified
+        save_modified_files(&modified_files, &interner)?;
 
-        let down_to_index = match config.backup_count {
-            ApplyConfigBackupCount::All => 0,
-            ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
-        };
+        // Maybe save some backup files
+        if config.do_backups == ApplyConfigDoBackups::Always ||
+        (config.do_backups == ApplyConfigDoBackups::OnFail &&
+            earliest_broken_patch_index != std::usize::MAX)
+        {
+            if thread_id == 0 {
+                println!("Saving quilt backup files ({})...", config.backup_count);
+            }
 
-        rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+            let final_patch = if earliest_broken_patch_index == std::usize::MAX {
+                config.patch_filenames.len() - 1
+            } else {
+                earliest_broken_patch_index
+            };
+
+            let down_to_index = match config.backup_count {
+                ApplyConfigBackupCount::All => 0,
+                ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+            };
+
+            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+        }
     }
 
     if config.stats {

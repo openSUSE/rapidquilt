@@ -75,6 +75,7 @@ fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
                             strip: usize,
                             do_backups: ApplyConfigDoBackups,
                             backup_count: ApplyConfigBackupCount,
+                            dry_run: bool,
                             stats: bool)
                             -> Result<bool, Error>
 {
@@ -116,7 +117,8 @@ fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
         strip,
         do_backups,
         backup_count,
-        stats
+        dry_run,
+        stats,
     };
 
     let threads = match env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
@@ -173,6 +175,7 @@ fn main() {
     opts.optopt("", "backup-count", "amount of backup files for `quilt pop` to create (default: 100)", "all|<n>");
     opts.optopt("F", "fuzz", "maximal allowed fuzz (default: 0)", "<n>");
     opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
+    opts.optflag("", "dry-run", "do not save any changes");
     opts.optflag("", "stats", "print statistics in the end");
 
     #[cfg(unix)]
@@ -234,6 +237,7 @@ fn main() {
         process::exit(1);
     }
 
+    let dry_run = matches.opt_present("dry-run");
     let stats = matches.opt_present("stats");
 
     let arena = build_arena(matches.opt_present("mmap"));
@@ -251,7 +255,7 @@ fn main() {
         }
     }
 
-    match cmd_push(&*arena, patches_path, goal, fuzz, 1, do_backups, backup_count, stats) {
+    match cmd_push(&*arena, patches_path, goal, fuzz, 1, do_backups, backup_count, dry_run, stats) {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {
                 eprintln!("{}{}", "  ".repeat(i), cause);

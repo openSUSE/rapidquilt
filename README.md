@@ -30,6 +30,8 @@ The goal is to be very fast.
             --color always|auto|never
                             use colors in output (default: auto)
 
+            --dry-run       do not save any changes
+
             --stats         print statistics in the end
 
             --mmap          mmap files instead of reading into buffers. This may

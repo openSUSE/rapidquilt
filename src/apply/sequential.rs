@@ -65,27 +65,32 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
             // Analyze failure, in case there was any
             analyze_patch_failure(index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
-            rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner)?;
+            if !config.dry_run {
+                rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner)?;
+            }
+
             break;
         }
     }
 
-    println!("Saving modified files...");
+    if !config.dry_run {
+        println!("Saving modified files...");
 
-    save_modified_files(&modified_files, &interner)?;
+        save_modified_files(&modified_files, &interner)?;
 
-    if config.do_backups == ApplyConfigDoBackups::Always ||
-       (config.do_backups == ApplyConfigDoBackups::OnFail &&
-        final_patch != config.patch_filenames.len() - 1)
-    {
-        println!("Saving quilt backup files ({})...", config.backup_count);
+        if config.do_backups == ApplyConfigDoBackups::Always ||
+          (config.do_backups == ApplyConfigDoBackups::OnFail &&
+            final_patch != config.patch_filenames.len() - 1)
+        {
+            println!("Saving quilt backup files ({})...", config.backup_count);
 
-        let down_to_index = match config.backup_count {
-            ApplyConfigBackupCount::All => 0,
-            ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
-        };
+            let down_to_index = match config.backup_count {
+                ApplyConfigBackupCount::All => 0,
+                ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+            };
 
-        rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+        }
     }
 
     if final_patch != config.patch_filenames.len() - 1 {
