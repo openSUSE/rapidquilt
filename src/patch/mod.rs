@@ -118,14 +118,14 @@ pub struct Hunk<'a, Line> {
     /// Expected placement of this hunk
     pub position: HunkPosition,
 
-    // TODO: Better name?
     /// The string that follows the second "@@"
-    pub place_name: &'a [u8],
+    /// Not necessarily a name of a function, but that's how it is called in diff.
+    pub function: &'a [u8],
 }
 
 impl<'a, Line> Hunk<'a, Line> {
     /// Create new hunk for given parameters.
-    pub fn new(remove_line: isize, add_line: isize, place_name: &'a [u8]) -> Self {
+    pub fn new(remove_line: isize, add_line: isize, function: &'a [u8]) -> Self {
         Hunk {
             remove: HunkPart {
                 content: ContentVec::new(),
@@ -142,7 +142,7 @@ impl<'a, Line> Hunk<'a, Line> {
 
             position: HunkPosition::Middle,
 
-            place_name,
+            function,
         }
     }
 
@@ -171,7 +171,7 @@ impl<'a, Line> Hunk<'a, Line> where Line: Copy {
 
             position: self.position,
 
-            place_name: self.place_name,
+            function: self.function,
         }
     }
 }
@@ -184,7 +184,7 @@ impl<'a, Line> PartialEq for Hunk<'a, Line> where Line: PartialEq {
         self.context_before == other.context_before &&
         self.context_after == other.context_after &&
         self.position == other.position &&
-        self.place_name == other.place_name
+        self.function == other.function
     }
 }
 
@@ -200,7 +200,7 @@ impl<'a> TextHunk<'a> {
             context_before: self.context_before,
             context_after: self.context_after,
             position: self.position,
-            place_name: self.place_name,
+            function: self.function,
         }
     }
 }

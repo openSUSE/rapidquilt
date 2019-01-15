@@ -37,7 +37,10 @@ impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
         };
 
         write!(writer, "@@ -{},{} +{},{} @@", remove_line, remove_count, add_line, add_count)?;
-        writer.write_all(self.place_name)?;
+        if !self.function.is_empty() {
+            writer.write_all(b" ")?;
+            writer.write_all(self.function)?;
+        }
 
         Ok(())
     }

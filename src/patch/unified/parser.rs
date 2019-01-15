@@ -464,10 +464,10 @@ struct HunkHeader<'a> {
     pub remove_line: usize,
     pub remove_count: usize,
 
-    pub place_name: &'a [u8],
+    pub function: &'a [u8],
 }
 
-/// Parses the line like "@@ -3:4 +5:6 @@ place_name\n"
+/// Parses the line like "@@ -3,4 +5,6 @@ function\n"
 named!(parse_hunk_header<CompleteByteSlice, HunkHeader>,
     do_parse!(
         tag!(s!(b"@@ -")) >>
@@ -479,8 +479,8 @@ named!(parse_hunk_header<CompleteByteSlice, HunkHeader>,
         tag!(s!(b" @")) >>
         opt!(tag!(c!(b'@'))) >> // The second "@" is optional. At least that's what patch accepts.
 
-        // TODO: Currently place_name includes the preceding space. We should change that, but the printing must change the same way.
-        place_name: take_until_newline >>
+        opt!(tag!(c!(b' '))) >>
+        function: take_until_newline >>
 
         newline >>
 
@@ -490,7 +490,7 @@ named!(parse_hunk_header<CompleteByteSlice, HunkHeader>,
             remove_line: remove_line_and_count.0,
             remove_count: remove_line_and_count.1,
 
-            place_name: &place_name
+            function: &function
         })
     )
 );
@@ -504,7 +504,7 @@ fn test_parse_hunk_header() {
         remove_line: 1,
         remove_count: 2,
 
-        place_name: &b""[..],
+        function: &b""[..],
     };
 
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@\n", h1);
@@ -516,7 +516,7 @@ fn test_parse_hunk_header() {
         remove_line: 5,
         remove_count: 1,
 
-        place_name: &b""[..],
+        function: &b""[..],
     };
 
     assert_parsed!(parse_hunk_header, b"@@ -5 +6 @@\n", h2);
@@ -528,7 +528,7 @@ fn test_parse_hunk_header() {
         remove_line: 1,
         remove_count: 2,
 
-        place_name: s!(b" function name"),
+        function: s!(b"function name"),
     };
 
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@ function name\n", h3);
@@ -617,7 +617,7 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
     let mut hunk = Hunk::new(
         std::cmp::max(header.remove_line as isize - 1, 0),
         std::cmp::max(header.add_line as isize - 1, 0),
-        header.place_name
+        header.function
     );
 
     hunk.add.content.reserve(header.add_count);
@@ -702,7 +702,7 @@ fn test_parse_hunk() {
     assert_eq!(h.context_before, 3);
     assert_eq!(h.context_after, 2);
 
-    assert_eq!(h.place_name, b" place");
+    assert_eq!(h.function, b"place");
 
 
     // Too short hunk
@@ -771,8 +771,8 @@ Other content.
     assert_eq!(hs[0].remove.target_line, 99);
     assert_eq!(hs[1].remove.target_line, 199);
 
-    assert_eq!(hs[0].place_name, b" place1");
-    assert_eq!(hs[1].place_name, b" place2");
+    assert_eq!(hs[0].function, b"place1");
+    assert_eq!(hs[1].function, b"place2");
 }
 
 #[derive(Debug, Default)]
