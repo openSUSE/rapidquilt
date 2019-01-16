@@ -110,6 +110,40 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, w
     // TODO: Currently we are writing patches with `strip` level 0, which is exactly
     //       what we need for .rej files. But we could add option to configure it?
 
+    // The "diff --git" line always seem to have real filenames, never "/dev/null"
+    writeln!(writer, "diff --git {} {}",
+        filepatch.filename().display(),
+        filepatch.new_filename().unwrap_or(filepatch.filename()).display()
+    )?;
+
+    // Print rename metadata
+    if filepatch.is_rename() {
+        writeln!(writer, "rename from {}", filepatch.filename().display())?;
+        writeln!(writer, "rename to {}", filepatch.new_filename().unwrap().display())?; // NOTE(unwrap): It must be there for renaming patches
+    }
+
+    // Print permissions metadata
+    if cfg!(unix) {
+        use std::os::unix::fs::PermissionsExt;
+
+        if let Some(permissions) = filepatch.old_permissions() {
+            if filepatch.kind() == FilePatchKind::Delete {
+                writeln!(writer, "delete file mode {:o}", permissions.mode())?;
+            } else {
+                writeln!(writer, "old mode {:o}", permissions.mode())?;
+            }
+        }
+
+        if let Some(permissions) = filepatch.new_permissions() {
+            if filepatch.kind() == FilePatchKind::Delete {
+                writeln!(writer, "new file mode {:o}", permissions.mode())?;
+            } else {
+                writeln!(writer, "new mode {:o}", permissions.mode())?;
+            }
+        }
+    }
+
+    // Print --- line
     if filepatch.kind() == FilePatchKind::Create {
         writer.write_all(b"--- ")?;
         writer.write_all(&NULL_FILENAME)?;
@@ -118,12 +152,13 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, w
         writeln!(writer, "--- {}", filepatch.filename().display())?;
     }
 
+    // Print +++ line
     if filepatch.kind() == FilePatchKind::Delete {
         writer.write_all(b"+++ ")?;
         writer.write_all(&NULL_FILENAME)?;
         writer.write_all(b"\n")?;
     } else {
-        writeln!(writer, "+++ {}", filepatch.filename().display())?;
+        writeln!(writer, "+++ {}", filepatch.new_filename().unwrap_or(filepatch.filename()).display())?;
     }
 
     Ok(())
