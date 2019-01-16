@@ -290,7 +290,9 @@ impl<'a> InternedHunk<'a> {
             for possible_target_line in Searcher::new(&part_remove.content).search_in(&interned_file.content) {
                 let possible_target_line = possible_target_line as isize;
 
-                if best_target_line.is_none() || (possible_target_line - target_line).abs() < (best_target_line.unwrap() - target_line).abs() {
+                // WARNING: The "<=" in the comparison below is important! If a hunk can be placed with two offsets that
+                // have the same magnitude, but one positive and the other other negative, patch prefers the positive one!
+                if best_target_line.is_none() || (possible_target_line - target_line).abs() <= (best_target_line.unwrap() - target_line).abs() {
                     // We found a position that is better (or there was no best position yet), remember it.
                     best_target_line = Some(possible_target_line);
                 } else {

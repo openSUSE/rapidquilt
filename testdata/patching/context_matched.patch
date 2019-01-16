@@ -1,0 +1,15 @@
+This patch does not fit exactly, so it has to be matched by context.
+However, the hunk would apply with both offsets +1 and -1. So whichever is
+chosen depends on how it is implemented in both patch and rapidquilt. This
+makes sure that it is the same.
+--- file2.in	2019-01-16 17:24:22.666282007 +0100
++++ context_matched.out	2019-01-16 17:24:47.850355556 +0100
+@@ -12,7 +12,7 @@
+ aaa
+ bbbb
+ aaa
+-bbbb
++bbbb modified
+ aaa
+ bbbb
+ aaa
