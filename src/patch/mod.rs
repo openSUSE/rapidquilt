@@ -70,14 +70,6 @@ impl<Line> HunkPart<Line> where Line: Copy {
     }
 }
 
-// TODO: Derive PartialEq conditionally?
-impl<Line> PartialEq for HunkPart<Line> where Line: PartialEq {
-    fn eq(&self, other: &HunkPart<Line>) -> bool {
-        self.content == other.content &&
-        self.target_line == other.target_line
-    }
-}
-
 impl<'a> HunkPart<&'a [u8]> {
     /// Consumes this text-based HunkPart and produces interned HunkPart.
     pub fn intern(mut self, interner: &mut LineInterner<'a>) -> HunkPart<LineId> {
@@ -175,18 +167,6 @@ impl<'a, Line> Hunk<'a, Line> where Line: Copy {
 
             function: self.function,
         }
-    }
-}
-
-// TODO: Derive PartialEq conditionally?
-impl<'a, Line> PartialEq for Hunk<'a, Line> where Line: PartialEq {
-    fn eq(&self, other: &Hunk<Line>) -> bool {
-        self.remove == other.remove &&
-        self.add == other.add &&
-        self.context_before == other.context_before &&
-        self.context_after == other.context_after &&
-        self.position == other.position &&
-        self.function == other.function
     }
 }
 
@@ -511,18 +491,6 @@ impl<'a, Line> FilePatch<'a, Line> {
     /// more has no effect because there would be no more context lines to ignore.
     pub fn max_useable_fuzz(&self) -> usize {
         self.hunks.iter().map(|hunk| hunk.max_useable_fuzz()).max().unwrap_or(0)
-    }
-}
-
-// TODO: Derive PartialEq conditionally?
-impl<'a, Line> PartialEq for FilePatch<'a, Line> where Line: PartialEq {
-    fn eq(&self, other: &FilePatch<'a, Line>) -> bool {
-        self.kind == other.kind &&
-        self.filename == other.filename &&
-        self.new_filename == other.new_filename &&
-        self.old_permissions == other.old_permissions &&
-        self.new_permissions == other.new_permissions &&
-        self.hunks == other.hunks
     }
 }
 
