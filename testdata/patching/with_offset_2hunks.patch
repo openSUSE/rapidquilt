@@ -1,0 +1,24 @@
+The first hunk is applied with offset which then affects the position
+where the second hunk is applied. The second hunk could be applied to any
+of the "xxx" lines, so the precise position depends on the offset of the
+first hunk.
+--- file.in	2019-01-16 15:02:37.016021405 +0100
++++ with_offset_2hunks.out	2019-01-16 15:03:08.724512747 +0100
+@@ -2,7 +2,7 @@
+ aaa
+ bbb
+ ccc
+-ddd
++ddd modified
+ eee
+ fff
+ ggg
+@@ -29,7 +29,7 @@
+ xxx
+ xxx
+ xxx
+-xxx
++xxx modified
+ xxx
+ xxx
+ xxx
