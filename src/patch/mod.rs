@@ -223,8 +223,15 @@ impl<'a> InternedHunk<'a> {
         let mut target_line = match apply_mode {
             // In normal mode, pick what is in the hunk
             ApplyMode::Normal => match self.position {
-                HunkPosition::Start |
-                HunkPosition::Middle => part_add.target_line,
+                HunkPosition::Start => part_add.target_line,
+
+                // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
+                //             when the line numbers mentioned in the patch are incorrect, and attempts to find
+                //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
+                //             line number mentioned for the hunk, plus or minus any offset used in applying the
+                //             previous hunk.."
+                HunkPosition::Middle => part_add.target_line + last_hunk_offset,
+
                 HunkPosition::End => (interned_file.content.len() as isize - part_remove.content.len() as isize),
             },
 
@@ -272,47 +279,35 @@ impl<'a> InternedHunk<'a> {
                 return HunkApplyReport::Failed;
             }
 
-            // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
-            //             when the line numbers mentioned in the patch are incorrect, and attempts to find
-            //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
-            //             line number mentioned for the hunk, plus or minus any offset used in applying the
-            //             previous hunk.."
+            // man patch (continuation):
+            // "If that is not the correct place, patch scans both forwards and
+            // backwards for a set of lines matching the context given in the hunk."
 
-            // If the last hunk applied with some offset, try if we could apply with the same offset
-            if last_hunk_offset != 0 && target_line + last_hunk_offset >= 0 &&
-                matches(&part_remove.content, &interned_file.content, target_line + last_hunk_offset) {
-                target_line += last_hunk_offset;
-            } else {
-                // man patch: "If that is not the correct place, patch scans both forwards and backwards for a
-                //             set of lines matching the context given in the hunk."
+            // We'll find every occurence of `part_remove.content` in the file and pick the one that is closest
+            // to the `target_line`
+            let mut best_target_line: Option<isize> = None;
 
-                // We'll find every occurence of `part_remove.content` in the file and pick the one that is closest
-                // to the `benchmark_target_line`
-                let benchmark_target_line = target_line + last_hunk_offset;
-                let mut best_target_line: Option<isize> = None;
+            for possible_target_line in Searcher::new(&part_remove.content).search_in(&interned_file.content) {
+                let possible_target_line = possible_target_line as isize;
 
-                for possible_target_line in Searcher::new(&part_remove.content).search_in(&interned_file.content) {
-                    let possible_target_line = possible_target_line as isize;
-
-                    if best_target_line.is_none() || (possible_target_line - benchmark_target_line).abs() < (best_target_line.unwrap() - benchmark_target_line).abs() {
-                        // We found a position that is better (or there was no best position yet), remember it.
-                        best_target_line = Some(possible_target_line);
-                    } else {
-                        // We found a position that is worse than the best one so far. We are searching the file from start to end, so the
-                        // possible_target_line will be getting closer and closer to the benchmark_target_line until we pass it and it will
-                        // start getting worse. At that point we can cut off the search.
-                        break;
-                    }
+                if best_target_line.is_none() || (possible_target_line - target_line).abs() < (best_target_line.unwrap() - target_line).abs() {
+                    // We found a position that is better (or there was no best position yet), remember it.
+                    best_target_line = Some(possible_target_line);
+                } else {
+                    // We found a position that is worse than the best one so far. We are searching the file from start to end, so the
+                    // possible_target_line will be getting closer and closer to the target_line until we pass it and it will
+                    // start getting worse. At that point we can cut off the search.
+                    break;
                 }
+            }
 
-                // Did we find the line or not?
-                match best_target_line {
-                    Some(new_target_line) => {
-                        target_line = new_target_line;
-                    },
-                    None => {
-                        return HunkApplyReport::Failed;
-                    }
+            // Did we find the line or not?
+            match best_target_line {
+                Some(new_target_line) => {
+                    target_line = new_target_line;
+                },
+                None => {
+                    return HunkApplyReport::Failed;
                 }
             }
         }
