@@ -1,0 +1,30 @@
+diff --git filename filename
+--- filename
++++ filename
+@@ -1,1 +1,1 @@ single line
+-aaa
++bbb
+@@ -5,14 +5,14 @@ mixed contexes and lines
+ aaa
+ bbb
+ ccc
+-ddd
++eee
+ fff
+-ggg
+ hhh
++ggg
+ iii
+ jjj
+-kkk
+-mmm
++lll
++nnn
+ ooo
+ ppp
+ qqq
+@@ -1,2 +3,4 @@ <- single at character
+ aaa
++bbb
++ccc
+ ddd

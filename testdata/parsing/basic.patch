@@ -1,0 +1,12 @@
+This is basic simple patch.
+--- filename
++++ filename
+@@ -5,7 +5,7 @@ foo
+ aaa
+ bbb
+ ccc
+-ddd
++eee
+ fff
+ ggg
+ hhh

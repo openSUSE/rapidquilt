@@ -1,0 +1,41 @@
+This tests no newline markers in various positions.
+--- in_context
++++ in_context
+@@ -5,7 +5,7 @@ foo
+ aaa
+ bbb
+ ccc
+-ddd
++eee
+ fff
+ ggg
+ hhh
+\ No newline at end of file
+--- in_removed_and_added_line
++++ in_removed_and_added_line
+@@ -5,4 +5,4 @@ foo
+ aaa
+ bbb
+ ccc
+-ddd
+\ No newline at end of file
++eee
+\ No newline at end of file
+--- in_removed_line
++++ in_removed_line
+@@ -5,4 +5,4 @@ foo
+ aaa
+ bbb
+ ccc
+-ddd
+\ No newline at end of file
++eee
+--- in_added_line
++++ in_added_line
+@@ -5,4 +5,4 @@ foo
+ aaa
+ bbb
+ ccc
+-ddd
++eee
+\ No newline at end of file
