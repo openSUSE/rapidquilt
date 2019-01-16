@@ -25,7 +25,7 @@ pub fn test_apply_with_fuzzes<H: BuildHasher>(
     modified_files: &HashMap<PathBuf, InternedFile, H>)
     -> Option<usize>
 {
-    let file = modified_files.get(patch_status.file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
+    let file = modified_files.get(&patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
 
     // Make our own copy for experiments
     let mut file = file.clone();
@@ -60,7 +60,7 @@ pub fn test_apply_after_reverting_other<H: BuildHasher>(
     modified_files: &HashMap<PathBuf, InternedFile, H>)
     -> bool
 {
-    let file = modified_files.get(failed_patch_status.file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
+    let file = modified_files.get(&failed_patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
 
     // Make our own copy for experiments
     let mut file = file.clone();
@@ -97,7 +97,7 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
             break;
         }
 
-        write!(writer, "  {} {} ", "File".yellow(), patch_status.file_patch.filename().display())?;
+        write!(writer, "  {} {} ", "File".yellow(), patch_status.target_filename.display())?;
 
         if patch_status.report.ok() {
             writeln!(writer, "{}", "OK".bright_green().bold())?;
@@ -139,7 +139,9 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
                     break;
                 }
 
-                if other_patch_status.file_patch.filename() == patch_status.file_patch.filename() {
+                // TODO: Follow thru renames?
+
+                if other_patch_status.target_filename == patch_status.target_filename {
                     let is_suspect = test_apply_after_reverting_other(patch_status, other_patch_status, modified_files);
 
                     other_patches.push((other_patch_status.patch_filename, is_suspect));

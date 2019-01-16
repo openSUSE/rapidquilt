@@ -842,31 +842,32 @@ impl FilePatchMetadata {
         // Set the kind
         builder.kind(self.recognize_kind(&hunks));
 
-        // Set the filename
+        // Set the filenames
+        let old_filename = match self.old_filename {
+            Some(Filename::Real(old_filename)) => Some(old_filename),
+            _ => None,
+        };
+        let new_filename = match self.new_filename {
+            Some(Filename::Real(new_filename)) => Some(new_filename),
+            _ => None,
+        };
+
         if self.rename_from && self.rename_to {
-            // If it is renaming, we must have both
-            if let (Some(Filename::Real(new_filename)), Some(Filename::Real(old_filename))) =
-                (self.new_filename, self.old_filename)
-            {
-                builder.filename(old_filename);
-                builder.new_filename(Some(new_filename));
-            } else {
+            // If it is renaming patch, we must have both filenames
+            if old_filename.is_none() || new_filename.is_none() {
                 return None;
             }
+
+            builder.is_rename(true);
         } else {
-            // If it is not renaming, we just need one of them
-            match (self.old_filename, self.new_filename) {
-                // First try the new one, then the old one. This works for us now,
-                // but real patch logic is more complicated.
-                (_, Some(Filename::Real(filename))) |
-                (Some(Filename::Real(filename)), _) => {
-                    builder.filename(filename);
-                },
-                _ => {
-                    return None;
-                }
+            // If it is non-renaming patch, we must have at least one filename
+            if old_filename.is_none() && new_filename.is_none() {
+                return None;
             }
         }
+
+        builder.old_filename(old_filename);
+        builder.new_filename(new_filename);
 
         // Set the permissions
         builder.old_permissions(self.old_permissions);
@@ -1012,8 +1013,8 @@ Other content.
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
-    assert_eq!(file_patch.new_filename(), None);
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1034,8 +1035,8 @@ garbage3
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
-    assert_eq!(file_patch.new_filename(), None);
+    assert_eq!(file_patch.old_filename(), None);
+    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1056,8 +1057,8 @@ garbage3
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
-    assert_eq!(file_patch.new_filename(), None);
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1078,7 +1079,7 @@ garbage3
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), None);
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
@@ -1100,8 +1101,8 @@ garbage3
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
-    assert_eq!(file_patch.new_filename(), None);
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1131,7 +1132,7 @@ Other content.
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
@@ -1151,7 +1152,7 @@ rename to filename2
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
@@ -1174,7 +1175,7 @@ rename to filename2
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
@@ -1214,7 +1215,8 @@ new mode 100755
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
     assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1239,7 +1241,8 @@ diff --git filename2 filename2
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
     assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
     assert_eq!(file_patch.hunks.len(), 0);
@@ -1256,7 +1259,8 @@ new mode 100755
 
     let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.filename(), &PathBuf::from("filename1"));
+    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
     assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
     assert_eq!(file_patch.hunks.len(), 0);
@@ -1318,13 +1322,13 @@ garbage5
 
     assert_eq!(file_patches.len(), 2);
 
-    assert_eq!(file_patches[0].filename(), &PathBuf::from("filename1"));
-    assert_eq!(file_patches[0].new_filename(), None);
+    assert_eq!(file_patches[0].old_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patches[0].new_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patches[0].hunks.len(), 1);
     assert_eq!(file_patches[0].hunks[0].add.content[0], s!(b"mmm\n"));
 
-    assert_eq!(file_patches[1].filename(), &PathBuf::from("filename2"));
-    assert_eq!(file_patches[1].new_filename(), None);
+    assert_eq!(file_patches[1].old_filename(), Some(&PathBuf::from("filename2")));
+    assert_eq!(file_patches[1].new_filename(), Some(&PathBuf::from("filename2")));
     assert_eq!(file_patches[1].hunks.len(), 1);
     assert_eq!(file_patches[1].hunks[0].add.content[0], s!(b"aaa\n"));
 
@@ -1356,19 +1360,19 @@ rename to filename7
 
     assert_eq!(file_patches.len(), 4);
 
-    assert_eq!(file_patches[0].filename(), &PathBuf::from("filename1"));
+    assert_eq!(file_patches[0].old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patches[0].new_filename(), Some(&PathBuf::from("filename2")));
     assert_eq!(file_patches[0].hunks.len(), 0);
 
-    assert_eq!(file_patches[1].filename(), &PathBuf::from("filename3"));
+    assert_eq!(file_patches[1].old_filename(), Some(&PathBuf::from("filename3")));
     assert_eq!(file_patches[1].new_filename(), Some(&PathBuf::from("filename4")));
     assert_eq!(file_patches[1].hunks.len(), 0);
 
-    assert_eq!(file_patches[2].filename(), &PathBuf::from("filename5"));
+    assert_eq!(file_patches[2].old_filename(), Some(&PathBuf::from("filename5")));
     assert_eq!(file_patches[2].new_filename(), Some(&PathBuf::from("filename6")));
     assert_eq!(file_patches[2].hunks.len(), 1);
 
-    assert_eq!(file_patches[3].filename(), &PathBuf::from("filename7"));
+    assert_eq!(file_patches[3].old_filename(), Some(&PathBuf::from("filename7")));
     assert_eq!(file_patches[3].new_filename(), Some(&PathBuf::from("filename8")));
     assert_eq!(file_patches[3].hunks.len(), 0);
 }

@@ -431,12 +431,16 @@ pub struct FilePatch<'a, Line> {
     /// Does it create, delete or modify a file?
     kind: FilePatchKind,
 
-    /// The target filename
-    filename: PathBuf,
+    /// The old filename (e.g. after --- line)
+    #[builder(default)]
+    old_filename: Option<PathBuf>,
 
-    /// A new filename in case this FilePatch also renames a file
+    /// The new filename (e.g. after +++ line)
     #[builder(default)]
     new_filename: Option<PathBuf>,
+
+    #[builder(default)]
+    is_rename: bool,
 
     /// The old permissions, if any were mentioned in the patch
     #[builder(default)]
@@ -453,11 +457,11 @@ pub struct FilePatch<'a, Line> {
 impl<'a, Line> FilePatch<'a, Line> {
     pub fn kind(&self) -> FilePatchKind { self.kind }
 
-    pub fn filename(&self) -> &PathBuf { &self.filename }
+    pub fn old_filename(&self) -> Option<&PathBuf> { self.old_filename.as_ref() }
     pub fn new_filename(&self) -> Option<&PathBuf> { self.new_filename.as_ref() }
 
     #[allow(dead_code)]
-    pub fn is_rename(&self) -> bool { self.new_filename.is_some() }
+    pub fn is_rename(&self) -> bool { self.is_rename }
 
     #[allow(dead_code)]
     pub fn old_permissions(&self) -> Option<&fs::Permissions> { self.old_permissions.as_ref() }
@@ -476,9 +480,11 @@ impl<'a, Line> FilePatch<'a, Line> {
             // TODO: Handle error if it is too short!
         }
 
-        self.filename = strip_path(&self.filename, strip);
-        if let Some(ref mut new_filename) = self.new_filename {
-            *new_filename = strip_path(new_filename, strip);
+        if let Some(old_filename) = &self.old_filename {
+            self.old_filename = Some(strip_path(old_filename, strip));
+        }
+        if let Some(new_filename) = &self.new_filename {
+            self.new_filename = Some(strip_path(new_filename, strip));
         }
     }
 
@@ -498,8 +504,10 @@ impl<'a> TextFilePatch<'a> {
         FilePatch {
             kind: self.kind,
 
-            filename: self.filename,
+            old_filename: self.old_filename,
             new_filename: self.new_filename,
+
+            is_rename: self.is_rename,
 
             old_permissions: self.old_permissions,
             new_permissions: self.new_permissions,

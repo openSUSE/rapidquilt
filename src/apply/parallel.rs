@@ -234,10 +234,8 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                 break;
             }
 
-            let file_patch = &applied_patch.file_patch;
-
-            let mut file = modified_files.get_mut(file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-            file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+            let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+            applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
             applied_patches.pop();
         }
@@ -343,7 +341,21 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
         // Error checking later, here we'll look at the ok ones
         if let Ok(text_file_patches) = text_file_patches {
             for text_file_patch in text_file_patches {
-                filename_distributor.add(text_file_patch.filename().clone(), text_file_patch.new_filename().cloned()); // TODO: Get rid of clone?
+                // This sucks, but the `FilePatch` may have different `old_filename` and `new_filename`
+                // and we don't know which one will be used. It is decided based on which files
+                // exist at the moment when the `FilePatch` will be applied. So for scheduling
+                // purposes we act like if any `FilePatch` that has `old_filename != new_filename`
+                // is renaming, so that both of them will be scheduled to the same thread.
+
+                let (filename, rename_to_filename) = match (text_file_patch.old_filename(), text_file_patch.new_filename()) {
+                    (Some(old_filename), None) => (old_filename, None),
+                    (None, Some(new_filename)) => (new_filename, None),
+                    (Some(old_filename), Some(new_filename)) if old_filename == new_filename => (old_filename, None),
+                    (Some(old_filename), Some(new_filename)) => (old_filename, Some(new_filename)),
+                    (None, None) => unreachable!(), // Such patch should not come from parser
+                };
+
+                filename_distributor.add(filename.clone(), rename_to_filename.cloned()); // TODO: Get rid of clone?
             }
         }
     }
@@ -357,7 +369,9 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
         let mut text_file_patches = text_file_patches.with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
 
         for text_file_patch in text_file_patches.drain(..) {
-            let thread_id = filename_to_thread_id[text_file_patch.filename()];
+            // Note that we can dispatch by `old_filename` or `new_filename`, we
+            // made sure that both will be assigned to the same `thread_id`.
+            let thread_id = filename_to_thread_id[text_file_patch.old_filename().or(text_file_patch.new_filename()).unwrap()];
             text_file_patches_per_thread[thread_id].push((index, text_file_patch));
         }
     }

@@ -138,10 +138,71 @@ pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &
 }
 
 pub struct PatchStatus<'a, 'b> {
+    /// The index of this `FilePatch` in the original list of **patches**. Note
+    /// that there can be multiple `FilePatch`es with the same index if they
+    /// came from the same patch.
     pub index: usize,
+
+    /// The interned `FilePatch`
     pub file_patch: InternedFilePatch<'a>,
+
+    /// Which filename was actually patched. Because patch has to choose between
+    /// `old_filename` and `new_filename` (in some cases even more) based on
+    /// which files exist on the disk.
+    /// Note that the file may have been renamed by the same `FilePatch`. The
+    /// final form with be in `final_filename`.
+    pub target_filename: PathBuf,
+
+    /// The final filename of the file when this patch was done with it. Typically
+    /// it will be the same as `target_filename`, unless the file was renamed.
+    pub final_filename: PathBuf,
+
+    /// Report from `FilePatch::apply`
     pub report: FilePatchApplyReport,
+
+    /// The filename of the patch file, e.g. "blabla.patch"
     pub patch_filename: &'b Path,
+}
+
+/// Decides which filename to use, old or new, depending on which
+/// files exist. This should mimic behavior of patch when used **without**
+/// the --posix option.
+///
+/// # panics
+///
+/// Panics if both `old_filename` and `new_filename` are `None`.
+pub fn choose_filename_to_patch<'a, H: BuildHasher>(
+    old_filename: Option<&'a PathBuf>,
+    new_filename: Option<&'a PathBuf>,
+    modified_files: &HashMap<PathBuf, InternedFile, H>)
+    -> &'a PathBuf
+{
+    match (old_filename, new_filename) {
+        // If there is only one of them, that's the one we'll return
+        (Some(old_filename), None) => old_filename,
+        (None, Some(new_filename)) => new_filename,
+
+        // If there are both...
+        (Some(old_filename), Some(new_filename)) => {
+            // If the old one exists (loaded or on disk), return that
+            if modified_files.contains_key(old_filename) || old_filename.exists() {
+                return old_filename;
+            }
+
+            // If the new one exists (loaded or on disk), return that
+            if modified_files.contains_key(new_filename) || new_filename.exists() {
+                return new_filename;
+            }
+
+            // Otherwise return the old one
+            old_filename
+        }
+
+        (None, None) => {
+            // Called without any??? Bug -> panic.
+            panic!();
+        }
+    }
 }
 
 /// Gets an `InternedFile` from `modified_files` if it was already there,
@@ -209,11 +270,22 @@ pub fn apply_one_file_patch<
     let file_patch = text_file_patch.intern(interner);
 
     // Get the file to patch
-    let file = get_interned_file(file_patch.filename(), modified_files, arena, interner)
-        .with_context(|_| ApplyError::LoadFileToPatch { filename: file_patch.filename().clone() })?;
+    let target_filename = choose_filename_to_patch(file_patch.old_filename(), file_patch.new_filename(), modified_files).clone();
+    let file = get_interned_file(&target_filename, modified_files, arena, interner)
+        .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.clone() })?;
 
     // If the patch renames the file. do it now...
-    let mut file = if let Some(new_filename) = file_patch.new_filename() {
+    let (mut file, final_filename) = if file_patch.is_rename() {
+        let new_filename = file_patch.new_filename().unwrap(); // NOTE(unwrap): It must be there for renaming patches.
+
+        if *new_filename == target_filename {
+            // TODO: Proper reporting!
+            println!("Patch {} would rename file {} to {}, but it already has the name.",
+                config.patch_filenames[index].display(),
+                target_filename.display(),
+                new_filename.display());
+        }
+
         // Move out its content, but keep it among modified_files - we need a record on what
         // to do later - unless something else changes it, we will need to delete it from disk.
         let mut tmp_file = file.move_out();
@@ -228,12 +300,12 @@ pub fn apply_one_file_patch<
             // TODO: Proper reporting!
             println!("Patch {} is renaming file {} to {}, which overwrites existing file!",
                 config.patch_filenames[index].display(),
-                file_patch.filename().display(),
+                target_filename.display(),
                 new_filename.display());
 
             // Put the content back to the old file.
-            let file = get_interned_file(file_patch.filename(), modified_files, arena, interner)
-                .with_context(|_| ApplyError::LoadFileToPatch { filename: file_patch.filename().clone() })?;
+            let file = get_interned_file(&target_filename, modified_files, arena, interner)
+                .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.clone() })?;
             file.move_in(&mut tmp_file);
 
             // Note that we don't place anything into applied_patches - the patch
@@ -246,9 +318,9 @@ pub fn apply_one_file_patch<
 //                 file_patch.filename().display(),
 //                 new_filename.display());
 
-        new_file
+        (new_file, new_filename.clone())
     } else {
-        file
+        (file, target_filename.clone())
     };
 
     // Apply the `FilePatch` on it.
@@ -259,6 +331,8 @@ pub fn apply_one_file_patch<
     applied_patches.push(PatchStatus {
         index,
         file_patch,
+        target_filename,
+        final_filename,
         report,
         patch_filename: &config.patch_filenames[index],
     });
@@ -272,13 +346,8 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
     modified_files: &'a mut HashMap<PathBuf, InternedFile, H>)
     -> &'b InternedFile
 {
-    let filename = match applied_patch.file_patch.new_filename() {
-        Some(new_filename) => new_filename,
-        None => applied_patch.file_patch.filename(),
-    };
-
     {
-        let mut file = modified_files.get_mut(filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+        let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
 
         applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
@@ -286,18 +355,18 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
         // can't get it to pass borrowcheck
     }
 
-    if let Some(new_filename) = applied_patch.file_patch.new_filename() {
+    if applied_patch.file_patch.is_rename() {
         // Now we have to do the rename backwards
-        let file = modified_files.get_mut(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+        let file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
         let mut tmp_file = file.move_out();
 
-        let old_file = modified_files.get_mut(applied_patch.file_patch.filename()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+        let old_file = modified_files.get_mut(&applied_patch.target_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
         let ok = old_file.move_in(&mut tmp_file);
         assert!(ok); // It must be ok during rollback, otherwise we made mistake during applying
 
         old_file
     } else {
-        modified_files.get(filename).unwrap() // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+        modified_files.get(&applied_patch.final_filename).unwrap() // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
     }
 }
 
@@ -319,9 +388,7 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
         rollback_applied_patch(applied_patch, modified_files);
 
         if applied_patch.report.failed() {
-            let rej_filename = make_rej_filename(
-                applied_patch.file_patch.new_filename().unwrap_or_else(|| applied_patch.file_patch.filename())
-            );
+            let rej_filename = make_rej_filename(&applied_patch.target_filename);
             println!("Saving rejects to {:?}", rej_filename);
 
             File::create(&rej_filename).and_then(|mut output| {
@@ -351,7 +418,7 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
 
         let file = rollback_applied_patch(applied_patch, modified_files);
 
-        save_backup_file(applied_patch.patch_filename, applied_patch.file_patch.filename(), &file, &interner)?;
+        save_backup_file(&applied_patch.patch_filename, &applied_patch.target_filename, &file, &interner)?;
 
         if let Some(new_filename) = applied_patch.file_patch.new_filename() {
             // If it was a rename, we also have to backup the new file (it will be empty file).

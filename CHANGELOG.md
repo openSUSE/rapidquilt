@@ -1,6 +1,7 @@
 # Unreleased changes
 
 * Support for patches that change file permissions
+* Use the same logic as patch does when choosing which file to patch
 
 # Version 0.4.3
 
