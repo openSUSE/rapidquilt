@@ -1,6 +1,6 @@
 [package]
 name = "rapidquilt"
-version = "0.4.3"
+version = "0.5.0"
 authors = ["Michal Srb <michalsrb@gmail.com>"]
 edition = '2018'
 

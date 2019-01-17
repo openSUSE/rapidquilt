@@ -1,7 +1,10 @@
 # Unreleased changes
 
+# Version 0.5.0
+
 * Support for patches that change file permissions
 * Use the same logic as patch does when choosing which file to patch
+* Behave same as patch in various cornercases
 
 # Version 0.4.3
 

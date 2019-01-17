@@ -1,8 +1,7 @@
 # Rapidquilt
 
-This is experimental and currently very limited reimplementation of quilt & patch in one.
-
-The goal is to be very fast.
+This is very specialized reimplementation of quilt & patch in one. It supports
+only the `push` command. The goal is to be very fast.
 
 
 ## Usage
@@ -46,6 +45,7 @@ The goal is to be very fast.
 
 ## Limitations compared to quilt & patch
 
+* only the `push` command
 * only patches in unified format
 * date in patch files is ignored
 * ... probably more that I don't know about
