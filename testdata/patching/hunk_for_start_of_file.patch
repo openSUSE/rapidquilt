@@ -1,0 +1,13 @@
+man patch:
+"Hunks with less prefix context than suffix context (after applying fuzz)
+ must apply at the start of the file if their first line  number is 1."
+
+--- file3.in	2019-01-16 15:02:37.016021405 +0100
++++ hunk_for_start_of_file.out	2019-01-16 15:03:08.724512747 +0100
+@@ -1,5 +1,5 @@
+ aaa
+-aaa
++aaa modified
+ aaa
+ aaa
+ aaa

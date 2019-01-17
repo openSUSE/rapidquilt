@@ -1,0 +1,14 @@
+man patch:
+"Hunks with more prefix context than suffix context (after applying fuzz)
+must apply at the end of the file."
+
+(No matter what the target line number says.)
+--- file3.in	2019-01-16 15:02:37.016021405 +0100
++++ hunk_for_start_of_file.out	2019-01-16 15:03:08.724512747 +0100
+@@ -7,5 +7,5 @@
+ aaa
+ aaa
+ aaa
+-aaa
++aaa modified
+ aaa
