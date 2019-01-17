@@ -1,13 +1,68 @@
-use std::fs;
-use std::io::Write;
+use std::fs::{self, File};
+use std::io::{BufReader, BufRead, Write};
+use std::path::Path;
 use std::vec::Vec;
 
-use failure::Error;
+use failure::{Error, ResultExt};
 
+use crate::patch::TextFilePatch;
 use crate::patch::unified::parser::parse_patch;
 use crate::patch::unified::writer::UnifiedPatchWriter;
 use crate::line_interner::LineInterner;
 
+
+#[cfg(test)]
+fn compare_output<'a>(path: &Path, file_patches: Vec<TextFilePatch<'a>>) -> Result<(), Error> {
+    // XXX: We could implement UnifiedPatchWriter for TextFilePatch and completely
+    //      skip the interning in this test. But we don't really need to print
+    //      pre-interned patches anywhere else but in this test.
+    let mut interner = LineInterner::new();
+
+    let mut output = Vec::<u8>::new();
+    for file_patch in file_patches {
+        let file_patch = file_patch.intern(&mut interner);
+        file_patch.write_to(&interner, &mut output)?;
+    }
+
+    let expected_output = fs::read(path.with_extension("patch-expected"))
+        .with_context(|_| "Patch parsed ok, but test could not open \"*.patch-expected\" file".to_string())?;
+
+    if output != expected_output {
+        let stderr = std::io::stderr();
+        let mut stderr = stderr.lock();
+        writeln!(stderr, "*** EXPECTED ***")?;
+        stderr.write(&expected_output)?;
+        writeln!(stderr, "*** WROTE ***")?;
+        stderr.write(&output)?;
+
+        // Try to save what we thought should be there, but ignore errors
+        if let Ok(mut file) = fs::File::create(path.with_extension("patch-bad")) {
+            let _ = file.write_all(&output);
+        }
+
+        panic!("The patch in its canonical form does not match the expected output!");
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+fn compare_error(path: &Path, error: Error) -> Result<(), Error> {
+    use std::fmt::Write;
+    let mut error_str = String::new();
+    write!(error_str, "{:?}\n{}", error, error)?;
+
+    let file = File::open(path.with_extension("error"))
+        .with_context(|_| "Patch failed to parse, but test could not open \"*.error\" file".to_string())?;
+    let reader = BufReader::new(file);
+    let expected_error = reader.lines().next().unwrap()?;
+
+    if !error_str.contains(&expected_error) {
+        panic!("Expected error containing: \"{}\", but got this instead: \"{}\"", expected_error, error_str);
+    }
+
+    Ok(())
+}
 
 #[cfg(test)]
 #[test]
@@ -25,36 +80,10 @@ fn all_files() -> Result<(), Error> {
         let patch_data = fs::read(&path)?;
 
         let strip = 0;
-        let file_patches = parse_patch(&patch_data, strip)?;
-
-        // XXX: We could implement UnifiedPatchWriter for TextFilePatch and completely
-        //      skip the interning in this test. But we don't really need to print
-        //      pre-interned patches anywhere else but in this test.
-        let mut interner = LineInterner::new();
-
-        let mut output = Vec::<u8>::new();
-        for file_patch in file_patches {
-            let file_patch = file_patch.intern(&mut interner);
-            file_patch.write_to(&interner, &mut output)?;
-        }
-
-        let expected_output = fs::read(path.with_extension("patch-expected"))?;
-
-        if output != expected_output {
-            let stderr = std::io::stderr();
-            let mut stderr = stderr.lock();
-            writeln!(stderr, "*** EXPECTED ***")?;
-            stderr.write(&expected_output)?;
-            writeln!(stderr, "*** WROTE ***")?;
-            stderr.write(&output)?;
-
-            // Try to save what we thought should be there, but ignore errors
-            if let Ok(mut file) = fs::File::create(path.with_extension("patch-bad")) {
-                let _ = file.write_all(&output);
-            }
-
-            panic!("The patch in its canonical form does not match the expected output!");
-        }
+        match parse_patch(&patch_data, strip) {
+            Ok(file_patches) => { compare_output(&path, file_patches)?; }
+            Err(error) => { compare_error(&path, error)?; }
+        };
     }
 
     Ok(())
