@@ -302,6 +302,11 @@ impl<'a> InternedHunk<'a> {
                         // have bigger offset so have no chance of being selected.
                         break;
                     }
+                } else {
+                    // We found a position that is worse than the best one so far. We are searching the file from start to end, so the
+                    // possible_target_line will be getting closer and closer to the target_line until we pass it and it will
+                    // start getting worse. At that point we can cut off the search.
+                    break;
                 }
             }
 
