@@ -295,11 +295,13 @@ impl<'a> InternedHunk<'a> {
                 if best_target_line.is_none() || (possible_target_line - target_line).abs() <= (best_target_line.unwrap() - target_line).abs() {
                     // We found a position that is better (or there was no best position yet), remember it.
                     best_target_line = Some(possible_target_line);
-                } else {
-                    // We found a position that is worse than the best one so far. We are searching the file from start to end, so the
-                    // possible_target_line will be getting closer and closer to the target_line until we pass it and it will
-                    // start getting worse. At that point we can cut off the search.
-                    break;
+
+                    if possible_target_line > target_line {
+                        // We found a match on a line that is after the expected target_line.
+                        // We can stop the search right now because any future matches will
+                        // have bigger offset so have no chance of being selected.
+                        break;
+                    }
                 }
             }
 
