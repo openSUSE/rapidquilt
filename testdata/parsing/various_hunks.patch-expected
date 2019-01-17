@@ -23,7 +23,7 @@ diff --git filename filename
  ooo
  ppp
  qqq
-@@ -1,2 +3,4 @@ <- single at character
+@@ -30,2 +30,4 @@ <- single at character
  aaa
 +bbb
 +ccc

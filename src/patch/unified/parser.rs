@@ -5,6 +5,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::vec::Vec;
 
+use failure::Error;
+
 use nom::*;
 use nom::types::CompleteByteSlice;
 
@@ -1266,7 +1268,7 @@ new mode 100755
     assert_eq!(file_patch.hunks.len(), 0);
 }
 
-pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, ParseError> {
+pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, Error> {
     let mut input = CompleteByteSlice(bytes);
 
     let mut filepatches = Vec::<TextFilePatch>::new();
@@ -1280,12 +1282,14 @@ pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatc
             Err(nom::Err::Error(_)) => break,
 
             // Actual error
-            Err(err @ nom::Err::Failure(_)) => { return Err(err.into()); }
+            Err(err @ nom::Err::Failure(_)) => { return Err(ParseError::from(err).into()); }
 
             // No way this could happen
             Err(nom::Err::Incomplete(_)) => unreachable!(),
         };
         input = _input;
+
+        filepatch.validate_hunks()?;
 
         filepatch.strip(strip);
         filepatches.push(filepatch);

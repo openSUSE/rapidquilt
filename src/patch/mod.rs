@@ -463,6 +463,15 @@ pub struct FilePatch<'a, Line> {
     hunks: HunksVec<'a, Line>,
 }
 
+#[derive(Debug, Fail, PartialEq)]
+pub enum PatchValidateError {
+    #[fail(display = "Misordered hunks: #{} at line {} and #{} at line {}", hunk_a_index, hunk_a_target_line, hunk_b_index, hunk_b_target_line)]
+    MisorderedHunks { hunk_a_index: usize, hunk_a_target_line: isize, hunk_b_index: usize, hunk_b_target_line: isize },
+
+    #[fail(display = "Hunks #{} and #{} overlap with more than just context", hunk_a_index, hunk_b_index)]
+    OverlappingHunks { hunk_a_index: usize, hunk_b_index: usize },
+}
+
 impl<'a, Line> FilePatch<'a, Line> {
     pub fn kind(&self) -> FilePatchKind { self.kind }
 
@@ -501,6 +510,38 @@ impl<'a, Line> FilePatch<'a, Line> {
     /// more has no effect because there would be no more context lines to ignore.
     pub fn max_useable_fuzz(&self) -> usize {
         self.hunks.iter().map(|hunk| hunk.max_useable_fuzz()).max().unwrap_or(0)
+    }
+
+    /// While we don't have any requirements about the ordering of hunks, patch
+    /// does and we shouldn't accept more than it accepts.
+    fn validate_hunks(&self) -> Result<(), PatchValidateError> {
+        // Check the ordering and overlaps of hunks
+        for (index, window) in self.hunks.windows(2).enumerate() {
+            let hunk_a = &window[0];
+            let hunk_b = &window[1];
+            let hunk_a_index = index;
+            let hunk_b_index = index + 1;
+
+            if hunk_a.remove.target_line > hunk_b.remove.target_line {
+                return Err(PatchValidateError::MisorderedHunks {
+                    hunk_a_index:       hunk_a_index + 1,
+                    hunk_a_target_line: hunk_a.remove.target_line + 1,
+                    hunk_b_index:       hunk_b_index + 1,
+                    hunk_b_target_line: hunk_b.remove.target_line + 1,
+                });
+            }
+
+            if hunk_a.remove.target_line + hunk_a.remove.content.len() as isize - hunk_a.context_after as isize >
+                hunk_b.remove.target_line as isize
+            {
+                return Err(PatchValidateError::OverlappingHunks {
+                    hunk_a_index: hunk_a_index + 1,
+                    hunk_b_index: hunk_b_index + 1,
+                });
+            }
+        }
+
+        Ok(())
     }
 }
 

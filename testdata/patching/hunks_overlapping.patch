@@ -1,0 +1,35 @@
+Hunks where only the context lines overlap are ok.
+
+Note that in some cases patch accepts even hunks where the context of one hunk
+overlaps with line modified by previous hunk. In that case it will apply only
+if the context matches the original content of the file. This is likely
+unintended and we don't support that in rapidquilt.
+--- file.in	2019-01-16 15:02:37.016021405 +0100
++++ hunks_overlapping.out	2019-01-16 15:03:08.724512747 +0100
+@@ -1,7 +1,7 @@
+ aaa
+ bbb
+ ccc
+-ddd
++ddd modified
+ eee
+ fff
+ ggg
+@@ -5,7 +5,7 @@
+ eee
+ fff
+ ggg
+-hhh
++hhh modified
+ iii
+ jjj
+ kkk
+@@ -9,7 +9,7 @@
+ iii
+ jjj
+ kkk
+-lll
++lll modified
+ mmm
+ nnn
+ ooo

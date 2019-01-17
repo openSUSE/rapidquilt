@@ -1,0 +1,22 @@
+The hunks are not ordered by the lines they modify. This would not be a problem
+for rapidquilt, but patch rejects such patches, so we do it too.
+--- filename
++++ filename
+@@ -50,7 +50,7 @@ foo
+ aaa
+ bbb
+ ccc
+-ddd
++eee
+ fff
+ ggg
+ hhh
+@@ -5,7 +5,7 @@ foo
+ aaa
+ bbb
+ ccc
+-ddd
++eee
+ fff
+ ggg
+ hhh
