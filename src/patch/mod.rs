@@ -31,6 +31,7 @@ use itertools::Itertools;
 
 use crate::line::Line;
 use crate::modified_file::ModifiedFile;
+use crate::util::EditBuffer;
 
 pub mod unified;
 
@@ -160,19 +161,15 @@ impl<'a, L: Line<'a>> Hunk<L> {
     /// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
     ///
     /// `last_hunk_offset`: the offset on which the previous hunk applied
-    fn apply_modify(&self,
+    fn apply_modify<'b, 'c: 'b>(&'c self,
                     my_index: usize,
-                    modified_file: &mut ModifiedFile<L>,
+//                     modified_file: &mut ModifiedFile<L>,
+                    edit_buffer: &mut EditBuffer<'b, L>,
                     direction: PatchDirection,
                     apply_mode: ApplyMode,
                     last_hunk_offset: isize)
                     -> HunkApplyReport
     {
-        // If the file doesn't exist, fail immediatelly
-        if modified_file.deleted {
-            return HunkApplyReport::Failed;
-        }
-
         // Decide which part of the hunk should be added and which should be
         // deleted depending on the direction of applying.
         let (part_add, part_remove) = match direction {
@@ -193,7 +190,7 @@ impl<'a, L: Line<'a>> Hunk<L> {
                 //             previous hunk.."
                 HunkPosition::Middle => part_add.target_line + last_hunk_offset,
 
-                HunkPosition::End => (modified_file.content.len() as isize - part_remove.content.len() as isize),
+                HunkPosition::End => (edit_buffer.len() as isize - part_remove.content.len() as isize),
             },
 
             // In rollback mode, take it from the report
@@ -208,15 +205,15 @@ impl<'a, L: Line<'a>> Hunk<L> {
 
         // If the hunk tries to remove more than the file has, reject it now.
         // So in the following code we can assume that it is smaller or equal.
-        if part_remove.content.len() > modified_file.content.len() {
+        if part_remove.content.len() > edit_buffer.len() {
             return HunkApplyReport::Failed;
         }
 
         // Helper function to decide if the needle matches haystack at give offset.
-        fn matches<'a, L: Line<'a>>(needle: &[L], haystack: &[L], at: isize) -> bool {
+        fn matches<'a, L: Line<'a>>(needle: &[L], haystack: /*&[L]*/ &EditBuffer<L>, at: isize) -> bool {
             assert!(at >= 0);
             let at = at as usize;
-            if needle.len() + at > haystack.len() {
+            if at < haystack.written_len() || needle.len() + at > haystack.len() {
                 return false;
             }
 
@@ -224,7 +221,7 @@ impl<'a, L: Line<'a>> Hunk<L> {
         }
 
         // Check if the part we want to remove is at the originally intended target_line
-        if !matches(&part_remove.content, &modified_file.content, target_line) {
+        if !matches(&part_remove.content, &edit_buffer, target_line) {
             // It is not on the indended target_line...
 
             // If we are in rollback mode, we are in big trouble. Fail early.
@@ -246,10 +243,10 @@ impl<'a, L: Line<'a>> Hunk<L> {
 
             let mut best_target_line: Option<isize> = None;
 
-            let forward_indexes = (target_line + 1)..=(modified_file.content.len() as isize - part_remove.content.len() as isize);
-            let backward_indexes = (0..target_line).rev();
+            let forward_indexes = (target_line + 1)..=(edit_buffer.len() as isize - part_remove.content.len() as isize);
+            let backward_indexes = ((edit_buffer.written_len() as isize)..target_line).rev();
             for possible_target_line in forward_indexes.interleave(backward_indexes) { // It is important that `forward_indexes` go first! E.g. offset +5 should be selected over -5.
-                if matches(&part_remove.content, &modified_file.content, possible_target_line) {
+                if matches(&part_remove.content, &edit_buffer, possible_target_line) {
                     best_target_line = Some(possible_target_line);
                     break;
                 }
@@ -269,8 +266,17 @@ impl<'a, L: Line<'a>> Hunk<L> {
         assert!(target_line >= 0);
 
         // Replace that part of the `modified_file` with the new one!
-        let range = (target_line as usize)..(target_line as usize + part_remove.content.len());
-        modified_file.content.splice(range.clone(), part_add.content.clone());
+//         let range = (target_line as usize)..(target_line as usize + part_remove.content.len());
+//         modified_file.content.splice(range.clone(), part_add.content.clone());
+
+        // Push out all lines that weren't modified until the beginning of this hunk
+        if edit_buffer.written_len() < target_line as usize {
+            edit_buffer.push_own(target_line as usize - edit_buffer.written_len());
+        }
+
+        // Push out our lines excluding the trailing context lines
+        edit_buffer.push_slice(&part_add.content[0..(part_add.content.len() - self.context_after)]);
+        edit_buffer.skip_own(part_remove.content.len() - self.context_after);
 
         // Report success
         HunkApplyReport::Applied { line: target_line, offset: target_line - part_add.target_line }
@@ -592,14 +598,25 @@ impl<'a, L: Line<'a>> FilePatch<L> {
     }
 
     /// Apply this `FilePatchKind::Modify` patch on the file.
-    fn apply_modify(&self, modified_file: &mut ModifiedFile<L>, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
+    fn apply_modify<'me>(&'me self, modified_file: &mut ModifiedFile<L>, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
+        let mut edit_buffer = EditBuffer::new(&mut modified_file.content);
+
         let mut report = FilePatchApplyReport::new_with_capacity(fuzz, self.hunks.len());
 
         let mut last_hunk_offset = 0isize;
 
+        let file_deleted = modified_file.deleted;
+
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
-        let mut for_each_hunk = |i, hunk: &Hunk<L>| {
+        let mut for_each_hunk = |i, hunk: &'me Hunk<L>| {
+            // If the file doesn't exist, fail immediatelly
+            // TODO: Pull this out of the loop, maybe even out of this function
+            if file_deleted {
+                report.push_hunk_report(HunkApplyReport::Failed);
+                return;
+            }
+
             let mut hunk_report = HunkApplyReport::Skipped;
 
             // Decide which fuzz levels we should try
@@ -623,21 +640,23 @@ impl<'a, L: Line<'a>> FilePatch<L> {
             };
 
             for current_fuzz in possible_fuzz_levels {
-                // If we are at fuzz 0, borrow the hunk, otherwise make a copy
-                // for the fuzz level.
-                let hunk = match current_fuzz {
-                    0 => Cow::Borrowed(hunk),
-                    _ => Cow::Owned(hunk.clone_with_fuzz(current_fuzz)),
-                };
+
+            // XXX: FIXME, this must be back:
+//                 // If we are at fuzz 0, borrow the hunk, otherwise make a copy
+//                 // for the fuzz level.
+//                 let hunk = match current_fuzz {
+//                     0 => Cow::Borrowed(hunk),
+//                     _ => Cow::Owned(hunk.clone_with_fuzz(current_fuzz)),
+//                 };
 
                 // Attempt to apply the hunk...
-                hunk_report = hunk.apply_modify(i, modified_file, direction, apply_mode, last_hunk_offset);
+                hunk_report = hunk.apply_modify(i, /*modified_file*/ &mut edit_buffer, direction, apply_mode, last_hunk_offset);
 
                 // If it succeeded, we are done with this hunk, do not try any
                 // more fuzz levels.
-                if let HunkApplyReport::Applied { .. } = hunk_report {
+//                 if let HunkApplyReport::Applied { .. } = hunk_report {
                     break;
-                }
+//                 }
             }
 
             // If it applied, remember the offset, so we can use it for the
@@ -651,15 +670,21 @@ impl<'a, L: Line<'a>> FilePatch<L> {
 
         // TODO: Nicer way to conditionally iterate forwards or backwards?
         match direction {
-            PatchDirection::Forward =>
+            PatchDirection::Forward => {
                 for (i, hunk) in self.hunks.iter().enumerate() {
                     for_each_hunk(i, hunk);
                 }
-            PatchDirection::Revert =>
+            }
+            PatchDirection::Revert => {
                 for (i, hunk) in self.hunks.iter().enumerate().rev() {
                     for_each_hunk(i, hunk);
                 }
+                report.hunk_reports.reverse();
+            }
         };
+
+        edit_buffer.commit();
+//         modified_file.content = edit_buffer.to_vec();
 
         report
     }
