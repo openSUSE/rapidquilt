@@ -31,7 +31,7 @@ impl<'a> FileArena<'a> {
 impl<'a> Arena for FileArena<'a> {
     /// Load the file and return byte slice of its complete content. The slice
     /// is valid as long as this object is alive. (Same lifetimes.)
-    fn load_file(&self, path: &Path) -> Result<&/*'a */[u8], io::Error> {
+    fn load_file(&self, path: &Path) -> Result<&[u8], io::Error> {
         let data = fs::read(path)?.into_boxed_slice();
 
         let slice = unsafe {

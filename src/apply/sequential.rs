@@ -17,17 +17,23 @@ use crate::apply::*;
 use crate::apply::common::*;
 use crate::apply::diagnostics::*;
 use crate::arena::Arena;
+use crate::line::Line;
 use crate::patch::unified::parser::parse_patch;
-use crate::line_interner::LineInterner;
-use crate::interned_file::InternedFile;
+use crate::modified_file::ModifiedFile;
 
 
-pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<ApplyResult<'a>, Error> {
-    let mut interner = LineInterner::new();
+pub fn apply_patches<
+    'arena,
+    'config,
+    L: Line<'arena> + 'arena>
+(
+    config: &'config ApplyConfig,
+    arena: &'arena dyn Arena)
+    -> Result<ApplyResult<'config>, Error>
+{
+    let mut applied_patches = Vec::<PatchStatus<'config, L>>::new();
 
-    let mut applied_patches = Vec::<PatchStatus>::new();
-
-    let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut modified_files = HashMap::<PathBuf, ModifiedFile<L>, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     let mut final_patch = 0;
 
@@ -40,22 +46,21 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
 
         final_patch = index;
 
-        let text_file_patches = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
+        let file_patches = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
             let data = arena.load_file(&config.patches_path.join(patch_filename))?;
-            let text_file_patches = parse_patch(&data, config.strip)?;
-            Ok(text_file_patches)
+            let file_patches = parse_patch(&data, config.strip)?;
+            Ok(file_patches)
         })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
 
         let mut any_report_failed = false;
 
-        for text_file_patch in text_file_patches {
+        for file_patch in file_patches {
             if !apply_one_file_patch(config,
                                      index,
-                                     text_file_patch,
+                                     file_patch,
                                      &mut applied_patches,
                                      &mut modified_files,
-                                     arena,
-                                     &mut interner)?
+                                     arena)?
             {
                 any_report_failed = true;
             }
@@ -63,10 +68,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
 
         if any_report_failed {
             // Analyze failure, in case there was any
-            analyze_patch_failure(index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
+            analyze_patch_failure(index, &applied_patches, &modified_files, &mut failure_analysis)?;
 
             if !config.dry_run {
-                rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner)?;
+                rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index)?;
             }
 
             break;
@@ -76,7 +81,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
     if !config.dry_run {
         println!("Saving modified files...");
 
-        save_modified_files(&modified_files, &interner)?;
+        save_modified_files(&modified_files)?;
 
         if config.do_backups == ApplyConfigDoBackups::Always ||
           (config.do_backups == ApplyConfigDoBackups::OnFail &&
@@ -89,7 +94,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, down_to_index)?;
         }
     }
 
@@ -102,7 +107,6 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
     }
 
     if config.stats {
-        println!("{}", interner.stats());
         println!("{}", arena.stats());
     }
 

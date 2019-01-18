@@ -26,9 +26,6 @@
 //! # Step 3 - multi-threaded
 //!
 //! The threads then each independently apply their `FilePatch`es to their files.
-//! The `FilePatch`es are interned by the threads, each using their own interner.
-//! The affected files are loaded and interned there as well. Then the `FilePatch`
-//! is applied.
 //!
 //! If any application fails, the thread signals the others. At that point the
 //! others may be ahead or behind. They will either catch up, or rollback to
@@ -60,10 +57,10 @@ use crate::apply::*;
 use crate::apply::common::*;
 use crate::apply::diagnostics::*;
 use crate::arena::Arena;
-use crate::patch::{PatchDirection, TextFilePatch};
+use crate::line::Line;
+use crate::patch::{PatchDirection, FilePatch};
 use crate::patch::unified::parser::parse_patch;
-use crate::line_interner::LineInterner;
-use crate::interned_file::InternedFile;
+use crate::modified_file::ModifiedFile;
 
 
 /// This is tool that distributes filenames among threads. Currently it doesn't
@@ -165,23 +162,22 @@ struct WorkerReport {
 /// `receiver`: Receiving part for `Message`s.
 /// `broadcast_message`: Function that sends given `Message` to all threads (including self).
 /// `earliest_broken_patch_index`: Atomic variable for sharing the index of the earlier patch that failed to apply.
-fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
-    config: &'a ApplyConfig,
-    arena: &'a dyn Arena,
+fn apply_worker_task<'config, 'arena, L: Line<'arena> + 'arena, BroadcastFn: Fn(Message)> (
+    config: &'config ApplyConfig,
+    arena: &'arena dyn Arena,
     thread_id: usize,
     threads: usize,
-    thread_file_patches: Vec<(usize, TextFilePatch<'a>)>,
+    thread_file_patches: Vec<(usize, FilePatch<L>)>,
     receiver: &mpsc::Receiver<Message>,
     broadcast_message: BroadcastFn,
     earliest_broken_patch_index: &AtomicUsize)
     -> Result<WorkerReport, Error>
 {
-    let mut interner = LineInterner::new();
-    let mut applied_patches = Vec::<PatchStatus>::new();
-    let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut applied_patches = Vec::<PatchStatus<'config, L>>::new();
+    let mut modified_files = HashMap::<PathBuf, ModifiedFile<L>, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
-    for (index, text_file_patch) in thread_file_patches {
+    for (index, file_patch) in thread_file_patches {
         if index > earliest_broken_patch_index.load(Ordering::Acquire) {
             // We are past the earliest broken patch. Time to stop applying.
             // Note that we DO WANT to apply the last broken patch itself.
@@ -191,11 +187,10 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
         // Try to apply this one `FilePatch`
         match apply_one_file_patch(config,
                                    index,
-                                   text_file_patch,
+                                   file_patch,
                                    &mut applied_patches,
                                    &mut modified_files,
-                                   arena,
-                                   &mut interner) {
+                                   arena) {
             Ok(false) => {
                 // Patch failed to apply...
 
@@ -234,8 +229,8 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                 break;
             }
 
-            let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-            applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+            let file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+            applied_patch.file_patch.rollback(file, PatchDirection::Forward, &applied_patch.report);
 
             applied_patches.pop();
         }
@@ -276,18 +271,18 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
     // Analyze failure, in case there was any
     let mut failure_analysis = Vec::<u8>::new();
-    analyze_patch_failure(earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
+    analyze_patch_failure(earliest_broken_patch_index, &applied_patches, &modified_files, &mut failure_analysis)?;
 
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner)?;
+        rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index)?;
 
         if thread_id == 0 {
             println!("Saving modified files...");
         }
 
         // Save all the files we modified
-        save_modified_files(&modified_files, &interner)?;
+        save_modified_files(&modified_files)?;
 
         // Maybe save some backup files
         if config.do_backups == ApplyConfigDoBackups::Always ||
@@ -309,12 +304,8 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, down_to_index)?;
         }
-    }
-
-    if config.stats {
-        println!("{}", interner.stats());
     }
 
     Ok(WorkerReport {
@@ -323,7 +314,15 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 }
 
 /// Apply all patches from the `config` in parallel
-pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<ApplyResult<'a>, Error> {
+pub fn apply_patches<
+    'config: 'arena,
+    'arena,
+    L: Line<'arena> + 'arena>
+(
+    config: &'config ApplyConfig,
+    arena: &'arena dyn Arena)
+    -> Result<ApplyResult<'config>, Error>
+{
     let threads = rayon::current_num_threads();
 
     println!("Applying {} patches using {} threads...", config.patch_filenames.len(), threads);
@@ -331,23 +330,23 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
     // Load all patches multi-threaded using rayon's parallel iterator.
     let mut text_patches: Vec<_> = config.patch_filenames.par_iter().map(|patch_filename| -> Result<_, Error> {
         let raw_patch_data = arena.load_file(&config.patches_path.join(patch_filename))?;
-        let text_file_patches = parse_patch(raw_patch_data, config.strip)?;
-        Ok(text_file_patches)
+        let file_patches = parse_patch(raw_patch_data, config.strip)?;
+        Ok(file_patches)
     }).collect();
 
     // Distribute the patches to queues for worker threads
     let mut filename_distributor = FilenameDistributor::<PathBuf>::new(threads, text_patches.len()); // There is typically just few amount of file-renaming patches, so lets use the total amount of patches as estimation for amount of independent filenames.
-    for text_file_patches in &text_patches {
+    for file_patches in &text_patches {
         // Error checking later, here we'll look at the ok ones
-        if let Ok(text_file_patches) = text_file_patches {
-            for text_file_patch in text_file_patches {
+        if let Ok(file_patches) = file_patches {
+            for file_patch in file_patches {
                 // This sucks, but the `FilePatch` may have different `old_filename` and `new_filename`
                 // and we don't know which one will be used. It is decided based on which files
                 // exist at the moment when the `FilePatch` will be applied. So for scheduling
                 // purposes we act like if any `FilePatch` that has `old_filename != new_filename`
                 // is renaming, so that both of them will be scheduled to the same thread.
 
-                let (filename, rename_to_filename) = match (text_file_patch.old_filename(), text_file_patch.new_filename()) {
+                let (filename, rename_to_filename) = match (file_patch.old_filename(), file_patch.new_filename()) {
                     (Some(old_filename), None) => (old_filename, None),
                     (None, Some(new_filename)) => (new_filename, None),
                     (Some(old_filename), Some(new_filename)) if old_filename == new_filename => (old_filename, None),
@@ -362,17 +361,17 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
 
     let filename_to_thread_id = filename_distributor.build();
 
-    let mut text_file_patches_per_thread: Vec<Vec<(usize, TextFilePatch)>> = vec![Vec::with_capacity(
+    let mut file_patches_per_thread: Vec<Vec<(usize, FilePatch<L>)>> = vec![Vec::with_capacity(
         config.patch_filenames.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
     ); threads];
-    for (index, text_file_patches) in text_patches.drain(..).enumerate() {
-        let mut text_file_patches = text_file_patches.with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
+    for (index, file_patches) in text_patches.drain(..).enumerate() {
+        let mut file_patches = file_patches.with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
 
-        for text_file_patch in text_file_patches.drain(..) {
+        for file_patch in file_patches.drain(..) {
             // Note that we can dispatch by `old_filename` or `new_filename`, we
             // made sure that both will be assigned to the same `thread_id`.
-            let thread_id = filename_to_thread_id[text_file_patch.old_filename().or(text_file_patch.new_filename()).unwrap()];
-            text_file_patches_per_thread[thread_id].push((index, text_file_patch));
+            let thread_id = filename_to_thread_id[file_patch.old_filename().or(file_patch.new_filename()).unwrap()];
+            file_patches_per_thread[thread_id].push((index, file_patch));
         }
     }
 
@@ -395,7 +394,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
     // Run the applying threads
     rayon::scope(move |scope| {
         // Combine the thread_id, the patches for the thread and the receiving part of the channel
-        for ((thread_id, thread_file_patches), receiver) in text_file_patches_per_thread.drain(..).enumerate().zip(receivers) {
+        for ((thread_id, thread_file_patches), receiver) in file_patches_per_thread.drain(..).enumerate().zip(receivers) {
             // Build the broadcast_message lambda
             let broadcast_message = {
                 let senders = senders.clone();

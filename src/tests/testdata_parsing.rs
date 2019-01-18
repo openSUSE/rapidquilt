@@ -5,23 +5,16 @@ use std::vec::Vec;
 
 use failure::{Error, ResultExt};
 
-use crate::patch::TextFilePatch;
+use crate::patch::FilePatch;
 use crate::patch::unified::parser::parse_patch;
 use crate::patch::unified::writer::UnifiedPatchWriter;
-use crate::line_interner::LineInterner;
 
 
 #[cfg(test)]
-fn compare_output<'a>(path: &Path, file_patches: Vec<TextFilePatch<'a>>) -> Result<(), Error> {
-    // XXX: We could implement UnifiedPatchWriter for TextFilePatch and completely
-    //      skip the interning in this test. But we don't really need to print
-    //      pre-interned patches anywhere else but in this test.
-    let mut interner = LineInterner::new();
-
+fn compare_output<'a>(path: &Path, file_patches: Vec<FilePatch<&'a [u8]>>) -> Result<(), Error> {
     let mut output = Vec::<u8>::new();
     for file_patch in file_patches {
-        let file_patch = file_patch.intern(&mut interner);
-        file_patch.write_to(&interner, &mut output)?;
+        file_patch.write_to(&mut output)?;
     }
 
     let expected_output = fs::read(path.with_extension("patch-expected"))

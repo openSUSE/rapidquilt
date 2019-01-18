@@ -4,10 +4,10 @@ use std::vec::Vec;
 
 use failure::Error;
 
-use crate::interned_file::InternedFile;
+use crate::arena::{Arena, FileArena};
+use crate::modified_file::ModifiedFile;
 use crate::patch::PatchDirection;
 use crate::patch::unified::parser::parse_patch;
-use crate::line_interner::LineInterner;
 
 
 #[cfg(test)]
@@ -24,35 +24,32 @@ fn all_files() -> Result<(), Error> {
 
         eprintln!("Testing patch {}", path.display());
 
+        let arena = FileArena::new();
+
         // Load and parse the patch
-        let patch_data = fs::read(&path)?;
+        let patch_data = arena.load_file(&path)?;
         let strip = 0;
-        let mut file_patches = parse_patch(&patch_data, strip)?;
+        let mut file_patches = parse_patch::<&[u8]>(&patch_data, strip)?;
 
         // Check that there is exactly one FilePatch
         if file_patches.len() != 1 {
             panic!("Test patch {} is for {} files, expected exactly one!", path.display(), file_patches.len());
         }
         let file_patch = file_patches.pop().unwrap();
-        std::mem::drop(file_patches); // XXX: Not sure why I have to drop manually here, but otherwise I get strange borrow check error.
 
         // Load the target file
         // Note: In this case we always expect the old_filename to exist, so we
         //       select it directly.
-        let file = fs::read(path.with_file_name(file_patch.old_filename().expect("old_filename missing!")))?;
-
-        // Intern the patch and file
-        let mut interner = LineInterner::new();
-        let file_patch = file_patch.intern(&mut interner);
-        let mut interned_file = InternedFile::new(&mut interner, &file, true);
+        let file = arena.load_file(&path.with_file_name(file_patch.old_filename().expect("old_filename missing!")))?;
+        let mut modified_file = ModifiedFile::new(&file, true);
 
         // Patch it
-        let report = file_patch.apply(&mut interned_file, PatchDirection::Forward, 0);
+        let report = file_patch.apply(&mut modified_file, PatchDirection::Forward, 0);
         assert!(report.ok());
 
         // Write the output to a buffer
         let mut output = Vec::<u8>::new();
-        interned_file.write_to(&interner, &mut output)?;
+        modified_file.write_to(&mut output)?;
 
         // Compare with the expected output
         let expected_output = fs::read(path.with_extension("out"))?;

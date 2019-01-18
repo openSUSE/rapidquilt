@@ -12,10 +12,10 @@ use std::path::{Path, PathBuf};
 use failure::{Error, ResultExt};
 
 use crate::apply::*;
-use crate::interned_file::InternedFile;
 use crate::arena::Arena;
-use crate::line_interner::LineInterner;
-use crate::patch::{FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
+use crate::line::Line;
+use crate::modified_file::ModifiedFile;
+use crate::patch::{FilePatchApplyReport, PatchDirection, FilePatch};
 use crate::patch::unified::writer::UnifiedPatchRejWriter;
 
 
@@ -50,7 +50,7 @@ fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), io::Err
 
 /// Save the `file` to disk. It also takes care of creating/deleting the file
 /// and containing directories.
-pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, interner: &LineInterner) -> Result<(), io::Error> {
+pub fn save_modified_file<'a, P: AsRef<Path>, L: Line<'a>>(filename: P, file: &ModifiedFile<L>) -> Result<(), io::Error> {
     let filename = filename.as_ref();
 
 //     println!("Saving modified file: {:?}: exited: {:?} deleted: {:?} len: {}", filename, file.existed, file.deleted, file.content.len());
@@ -94,7 +94,7 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
             output.set_permissions(permissions.clone())?;
         }
 
-        file.write_to(&interner, &mut output)?;
+        file.write_to(&mut output)?;
     }
 
     Ok(())
@@ -103,16 +103,15 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
 /// Save all `modified_files` to disk. It also takes care of creating/deleting
 /// the files and containing directories.
 pub fn save_modified_files<
-    'arena: 'interner,
-    'interner,
+    'arena,
+    L: Line<'arena>,
     H: BuildHasher>
 (
-    modified_files: &HashMap<PathBuf, InternedFile, H>,
-    interner: &'interner LineInterner<'arena>)
+    modified_files: &HashMap<PathBuf, ModifiedFile<L>, H>)
     -> Result<(), Error>
 {
     for (filename, file) in modified_files {
-        save_modified_file(filename, file, &interner)
+        save_modified_file(filename, file)
             .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.clone() })?;
     }
 
@@ -120,7 +119,15 @@ pub fn save_modified_files<
 }
 
 /// Write the `original_file` as a quilt backup file.
-pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
+pub fn save_backup_file<
+    'arena,
+    L: Line<'arena>>
+(
+    patch_filename: &Path,
+    filename: &Path,
+    original_file: &ModifiedFile<L>)
+    -> Result<(), Error>
+{
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
     path.push(&filename); // Note that this may add multiple directories plus filename
@@ -131,20 +138,20 @@ pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &
         let path_parent = &path.parent().unwrap(); // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
 
         fs::create_dir_all(path_parent)?;
-        original_file.write_to(interner, &mut File::create(&path)?)
+        original_file.write_to(&mut File::create(&path)?)
     })().with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
 
     Ok(())
 }
 
-pub struct PatchStatus<'a, 'b> {
+pub struct PatchStatus<'config, L> {
     /// The index of this `FilePatch` in the original list of **patches**. Note
     /// that there can be multiple `FilePatch`es with the same index if they
     /// came from the same patch.
     pub index: usize,
 
-    /// The interned `FilePatch`
-    pub file_patch: InternedFilePatch<'a>,
+    /// The `FilePatch` for which this status is
+    pub file_patch: FilePatch<L>,
 
     /// Which filename was actually patched. Because patch has to choose between
     /// `old_filename` and `new_filename` (in some cases even more) based on
@@ -161,7 +168,7 @@ pub struct PatchStatus<'a, 'b> {
     pub report: FilePatchApplyReport,
 
     /// The filename of the patch file, e.g. "blabla.patch"
-    pub patch_filename: &'b Path,
+    pub patch_filename: &'config Path,
 }
 
 /// Decides which filename to use, old or new, depending on which
@@ -171,11 +178,16 @@ pub struct PatchStatus<'a, 'b> {
 /// # panics
 ///
 /// Panics if both `old_filename` and `new_filename` are `None`.
-pub fn choose_filename_to_patch<'a, H: BuildHasher>(
-    old_filename: Option<&'a PathBuf>,
-    new_filename: Option<&'a PathBuf>,
-    modified_files: &HashMap<PathBuf, InternedFile, H>)
-    -> &'a PathBuf
+pub fn choose_filename_to_patch<
+    'pathbuf,
+    'arena,
+    L: Line<'arena>,
+    H: BuildHasher>
+(
+    old_filename: Option<&'pathbuf PathBuf>,
+    new_filename: Option<&'pathbuf PathBuf>,
+    modified_files: &HashMap<PathBuf, ModifiedFile<L>, H>)
+    -> &'pathbuf PathBuf
 {
     match (old_filename, new_filename) {
         // If there is only one of them, that's the one we'll return
@@ -205,19 +217,18 @@ pub fn choose_filename_to_patch<'a, H: BuildHasher>(
     }
 }
 
-/// Gets an `InternedFile` from `modified_files` if it was already there,
+/// Gets an `ModifiedFile` from `modified_files` if it was already there,
 /// or loads it from disk if it exists, or creates new one.
-pub fn get_interned_file<
-    'arena: 'interner,
-    'interner,
+pub fn get_modified_file<
+    'arena,
     'modified_files,
+    L: Line<'arena>,
     H: BuildHasher>
 (
     filename: &PathBuf,
-    modified_files: &'modified_files mut HashMap<PathBuf, InternedFile, H>,
-    arena: &'arena dyn Arena,
-    interner: &'interner mut LineInterner<'arena>)
-    -> Result<&'modified_files mut InternedFile, io::Error>
+    modified_files: &'modified_files mut HashMap<PathBuf, ModifiedFile<L>, H>,
+    arena: &'arena dyn Arena)
+    -> Result<&'modified_files mut ModifiedFile<L>, io::Error>
 {
     // Load the file or create it empty
     let item = match modified_files.entry(filename.clone() /* <-TODO: Avoid clone */) {
@@ -225,11 +236,11 @@ pub fn get_interned_file<
 
         Entry::Vacant(entry) => {
             match arena.load_file(filename) {
-                Ok(data) => entry.insert(InternedFile::new(interner, &data, true)),
+                Ok(data) => entry.insert(ModifiedFile::new(&data, true)),
 
                 // If the file doesn't exist, make empty one.
                 Err(ref error) if error.kind() == io::ErrorKind::NotFound =>
-                    entry.insert(InternedFile::new_non_existent()),
+                    entry.insert(ModifiedFile::new_non_existent()),
 
                 Err(error) => return Err(error),
             }
@@ -243,39 +254,33 @@ pub fn get_interned_file<
 ///
 /// `config`: The configuration of the task.
 /// `index`: Index of the **patch** in the configuration.
-/// `text_file_patch`: A `FilePatch` before interning.
+/// `file_patch`: A `FilePatch` to be applied.
 /// `applied_patches`: Vector of `PatchStatus`es with reports of previously applied patches. Report for this one will be appended in.
 /// `modified_files`: HashMap of modified files so far. The currently patched file will be taken from or added to here.
 /// `arena`: For loading files.
-/// `interner`: For interning patches and files.
 ///
 /// Returns whether the patch applied successfully, or Err in case some other error happened.
 pub fn apply_one_file_patch<
-    'arena: 'interner,
-    'interner,
-    'config: 'applied_patches,
-    'applied_patches,
+    'arena,
+    'config,
+    L: Line<'arena>,
     H: BuildHasher>
 (
     config: &'config ApplyConfig,
     index: usize,
-    text_file_patch: TextFilePatch<'arena>,
-    applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
-    modified_files: &mut HashMap<PathBuf, InternedFile, H>,
-    arena: &'arena dyn Arena,
-    interner: &'interner mut LineInterner<'arena>)
+    file_patch: FilePatch<L>,
+    applied_patches: &mut Vec<PatchStatus<'config, L>>,
+    modified_files: &mut HashMap<PathBuf, ModifiedFile<L>, H>,
+    arena: &'arena dyn Arena)
     -> Result<bool, Error>
 {
-    // Intern the `FilePatch`
-    let file_patch = text_file_patch.intern(interner);
-
     // Get the file to patch
     let target_filename = choose_filename_to_patch(file_patch.old_filename(), file_patch.new_filename(), modified_files).clone();
-    let file = get_interned_file(&target_filename, modified_files, arena, interner)
+    let file = get_modified_file(&target_filename, modified_files, arena)
         .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.clone() })?;
 
     // If the patch renames the file. do it now...
-    let (mut file, final_filename) = if file_patch.is_rename() {
+    let (file, final_filename) = if file_patch.is_rename() {
         let new_filename = file_patch.new_filename().unwrap(); // NOTE(unwrap): It must be there for renaming patches.
 
         if *new_filename == target_filename {
@@ -290,7 +295,7 @@ pub fn apply_one_file_patch<
         // to do later - unless something else changes it, we will need to delete it from disk.
         let mut tmp_file = file.move_out();
 
-        let new_file = get_interned_file(new_filename, modified_files, arena, interner)
+        let new_file = get_modified_file(new_filename, modified_files, arena)
             .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.clone() })?;
 
         if !new_file.move_in(&mut tmp_file) {
@@ -304,7 +309,7 @@ pub fn apply_one_file_patch<
                 new_filename.display());
 
             // Put the content back to the old file.
-            let file = get_interned_file(&target_filename, modified_files, arena, interner)
+            let file = get_modified_file(&target_filename, modified_files, arena)
                 .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.clone() })?;
             file.move_in(&mut tmp_file);
 
@@ -324,7 +329,7 @@ pub fn apply_one_file_patch<
     };
 
     // Apply the `FilePatch` on it.
-    let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz);
+    let report = file_patch.apply(file, PatchDirection::Forward, config.fuzz);
 
     let report_ok = report.ok();
 
@@ -341,15 +346,21 @@ pub fn apply_one_file_patch<
 }
 
 /// Rolls back single applied `FilePatch`
-pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
-    applied_patch: &PatchStatus,
-    modified_files: &'a mut HashMap<PathBuf, InternedFile, H>)
-    -> &'b InternedFile
+pub fn rollback_applied_patch<
+    'config,
+    'arena,
+    'modified_files,
+    H: BuildHasher,
+    L: Line<'arena>>
+(
+    applied_patch: &PatchStatus<'config, L>,
+    modified_files: &'modified_files mut HashMap<PathBuf, ModifiedFile<L>, H>)
+    -> &'modified_files ModifiedFile<L>
 {
     {
-        let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+        let file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
 
-        applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+        applied_patch.file_patch.rollback(file, PatchDirection::Forward, &applied_patch.report);
 
         // XXX: `file` is here dropped and later got again. I would prefer to just keep it, but
         // can't get it to pass borrowcheck
@@ -372,11 +383,10 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
 
 /// Rolls back all `FilePatch`es belonging to the `rejected_patch_index` and save
 /// ".rej" files for each `FilePatch` that failed applying
-pub fn rollback_and_save_rej_files<H: BuildHasher>(
-    applied_patches: &mut Vec<PatchStatus>,
-    modified_files: &mut HashMap<PathBuf, InternedFile, H>,
-    rejected_patch_index: usize,
-    interner: &LineInterner)
+pub fn rollback_and_save_rej_files<'arena, L: Line<'arena>, H: BuildHasher>(
+    applied_patches: &mut Vec<PatchStatus<L>>,
+    modified_files: &mut HashMap<PathBuf, ModifiedFile<L>, H>,
+    rejected_patch_index: usize)
     -> Result<(), Error>
 {
     while let Some(applied_patch) = applied_patches.last() {
@@ -392,7 +402,7 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
             println!("Saving rejects to {:?}", rej_filename);
 
             File::create(&rej_filename).and_then(|mut output| {
-                applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)
+                applied_patch.file_patch.write_rej_to(&mut output, &applied_patch.report)
             }).with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
         }
 
@@ -404,10 +414,13 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
 
 /// Rolls back all `FilePatch`es up to the one belonging to patch with
 /// `down_to_index` index and generates quilt backup files for all of them.
-pub fn rollback_and_save_backup_files<H: BuildHasher>(
-    applied_patches: &mut Vec<PatchStatus>,
-    modified_files: &mut HashMap<PathBuf, InternedFile, H>,
-    interner: &LineInterner,
+pub fn rollback_and_save_backup_files<
+    'arena,
+    L: Line<'arena>,
+    H: BuildHasher>
+(
+    applied_patches: &mut Vec<PatchStatus<L>>,
+    modified_files: &mut HashMap<PathBuf, ModifiedFile<L>, H>,
     down_to_index: usize)
     -> Result<(), Error>
 {
@@ -418,12 +431,12 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
 
         let file = rollback_applied_patch(applied_patch, modified_files);
 
-        save_backup_file(&applied_patch.patch_filename, &applied_patch.target_filename, &file, &interner)?;
+        save_backup_file(&applied_patch.patch_filename, &applied_patch.target_filename, &file)?;
 
         if let Some(new_filename) = applied_patch.file_patch.new_filename() {
             // If it was a rename, we also have to backup the new file (it will be empty file).
             let new_file = modified_files.get(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-            save_backup_file(applied_patch.patch_filename, new_filename, &new_file, &interner)?;
+            save_backup_file(applied_patch.patch_filename, new_filename, &new_file)?;
         }
     }
 

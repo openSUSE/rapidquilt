@@ -8,8 +8,8 @@ extern crate test;
 
 mod apply;
 mod arena;
-mod line_interner;
-mod interned_file;
+mod line;
+mod modified_file;
 mod patch;
 mod util;
 
@@ -68,16 +68,20 @@ enum PushGoal {
     UpTo(PathBuf),
 }
 
-fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
-                            patches_path: P,
-                            goal: PushGoal,
-                            fuzz: usize,
-                            strip: usize,
-                            do_backups: ApplyConfigDoBackups,
-                            backup_count: ApplyConfigBackupCount,
-                            dry_run: bool,
-                            stats: bool)
-                            -> Result<bool, Error>
+fn cmd_push<
+    'arena,
+    P: AsRef<Path> + 'arena> // + 'arena ??
+(
+    arena: &'arena dyn Arena,
+    patches_path: P,
+    goal: PushGoal,
+    fuzz: usize,
+    strip: usize,
+    do_backups: ApplyConfigDoBackups,
+    backup_count: ApplyConfigBackupCount,
+    dry_run: bool,
+    stats: bool)
+    -> Result<bool, Error>
 {
     let patch_filenames = read_series_file("series").unwrap();
 
@@ -132,9 +136,9 @@ fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
     };
 
     let apply_result = if threads <= 1 {
-        apply_patches(&config, arena)?
+        apply_patches::<&[u8]>(&config, arena)?
     } else {
-        apply_patches_parallel(&config, arena)?
+        apply_patches_parallel::<&[u8]>(&config, arena)?
     };
 
     fs::create_dir_all(".pc")?;

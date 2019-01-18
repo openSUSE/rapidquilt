@@ -13,16 +13,16 @@ use std::path::{Path, PathBuf};
 use colored::*;
 
 use crate::apply::common::*;
-use crate::interned_file::InternedFile;
-use crate::line_interner::LineInterner;
+use crate::line::Line;
+use crate::modified_file::ModifiedFile;
 use crate::patch::{HunkApplyReport, PatchDirection};
 use crate::patch::unified::writer::UnifiedPatchHunkWriter;
 
 
 /// Try if the patch would apply with some fuzz. It doesn't do any permanent changes.
-pub fn test_apply_with_fuzzes<H: BuildHasher>(
-    patch_status: &PatchStatus,
-    modified_files: &HashMap<PathBuf, InternedFile, H>)
+pub fn test_apply_with_fuzzes<'a, H: BuildHasher, L: Line<'a>>(
+    patch_status: &PatchStatus<L>,
+    modified_files: &HashMap<PathBuf, ModifiedFile<L>, H>)
     -> Option<usize>
 {
     let file = modified_files.get(&patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
@@ -54,10 +54,10 @@ pub fn test_apply_with_fuzzes<H: BuildHasher>(
     None
 }
 
-pub fn test_apply_after_reverting_other<H: BuildHasher>(
-    failed_patch_status: &PatchStatus,
-    suspect_patch_status: &PatchStatus,
-    modified_files: &HashMap<PathBuf, InternedFile, H>)
+pub fn test_apply_after_reverting_other<'a, L: Line<'a>, H: BuildHasher>(
+    failed_patch_status: &PatchStatus<L>,
+    suspect_patch_status: &PatchStatus<L>,
+    modified_files: &HashMap<PathBuf, ModifiedFile<L>, H>)
     -> bool
 {
     let file = modified_files.get(&failed_patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
@@ -84,11 +84,18 @@ pub fn test_apply_after_reverting_other<H: BuildHasher>(
 
 /// Render a report into `writer` about why the `broken_patch_index` failed to
 /// apply.
-pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
+pub fn analyze_patch_failure<
+    'arena,
+    'config,
+    'applied_patches,
+    'modified_files,
+    L: Line<'arena>,
+    H: BuildHasher,
+    W: Write>
+(
     broken_patch_index: usize,
-    applied_patches: &Vec<PatchStatus>,
-    modified_files: &HashMap<PathBuf, InternedFile, H>,
-    _interner: &LineInterner,
+    applied_patches: &'applied_patches Vec<PatchStatus<'config, L>>,
+    modified_files: &'modified_files HashMap<PathBuf, ModifiedFile<L>, H>,
     writer: &mut W)
     -> Result<(), io::Error>
 {

@@ -611,13 +611,13 @@ fn test_parse_hunk_line() {
     assert_parse_error_code!(parse_hunk_line, b"wtf", ParseErrorCode::BadLineInHunk as u32);
 }
 
-fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, TextHunk<'a>> {
+fn parse_hunk<'a, L: Line<'a>>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Hunk<L>> {
     let (mut input, mut header) = parse_hunk_header(input)?;
 
-    let mut hunk = Hunk::new(
+    let mut hunk = Hunk::<L>::new(
         std::cmp::max(header.remove_line as isize - 1, 0),
         std::cmp::max(header.add_line as isize - 1, 0),
-        header.function
+        header.function.into()
     );
 
     hunk.add.content.reserve(header.add_count);
@@ -637,22 +637,22 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
 
         match line_type {
             HunkLineType::Add => {
-                hunk.add.content.push(line);
+                hunk.add.content.push(line.into());
                 header.add_count -= 1;
 
                 there_was_a_non_context_line = true;
                 hunk.context_after = 0;
             }
             HunkLineType::Remove => {
-                hunk.remove.content.push(line);
+                hunk.remove.content.push(line.into());
                 header.remove_count -= 1;
 
                 there_was_a_non_context_line = true;
                 hunk.context_after = 0;
             }
             HunkLineType::Context => {
-                hunk.add.content.push(line);
-                hunk.remove.content.push(line);
+                hunk.add.content.push(line.into());
+                hunk.remove.content.push(line.into());
                 header.add_count -= 1;
                 header.remove_count -= 1;
 
@@ -680,6 +680,11 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
 #[cfg(test)]
 #[test]
 fn test_parse_hunk() {
+    // This helps the macros select the right `Line`
+    fn parse_hunk_u8<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Hunk<&[u8]>> {
+        parse_hunk(input)
+    }
+
     // Ok hunk
     let hunk_txt = br#"@@ -100,6 +110,7 @@ place
  aaa
@@ -692,7 +697,7 @@ fn test_parse_hunk() {
  hhh
 "#;
 
-    let h = parse_hunk(CompleteByteSlice(hunk_txt)).unwrap().1;
+    let h = parse_hunk_u8(CompleteByteSlice(hunk_txt)).unwrap().1;
     assert_eq!(h.remove.target_line, 99);
     assert_eq!(h.add.target_line, 109);
 
@@ -711,7 +716,7 @@ fn test_parse_hunk() {
  bbb
  ccc
 "#;
-    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
+    assert_parse_error_code!(parse_hunk_u8, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
 
 
     // Bad line in hunk
@@ -721,13 +726,13 @@ fn test_parse_hunk() {
  ccc
 xxxxx
 "#;
-    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
+    assert_parse_error_code!(parse_hunk_u8, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
 }
 
 // named!(parse_hunks<CompleteByteSlice, SmallVec<[TextHunk; 4]>>, many1!(parse_hunk)); // FIXME: many1 will hide even nom::Err::Failure errors, so any failure from inside is not propagated up. :-(
 
-fn parse_hunks(mut input: CompleteByteSlice) -> IResult<CompleteByteSlice, HunksVec<&[u8]>> {
-    let mut hunks = HunksVec::<&[u8]>::new();
+fn parse_hunks<'a, L: Line<'a>>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, HunksVec<L>> {
+    let mut hunks = HunksVec::<L>::new();
     loop {
         match parse_hunk(input) {
             Ok((input_, hunk)) => {
@@ -765,7 +770,7 @@ Some other line...
 Other content.
 "#;
 
-    let hs = parse_hunks(CompleteByteSlice(hunks_txt)).unwrap().1;
+    let hs = parse_hunks::<&[u8]>(CompleteByteSlice(hunks_txt)).unwrap().1;
     assert_eq!(hs.len(), 2);
 
     assert_eq!(hs[0].remove.target_line, 99);
@@ -786,7 +791,7 @@ struct FilePatchMetadata {
 }
 
 impl FilePatchMetadata {
-    pub fn recognize_kind(&self, hunks: &[TextHunk]) -> FilePatchKind {
+    pub fn recognize_kind<'a, L: Line<'a>>(&self, hunks: &[Hunk<L>]) -> FilePatchKind {
         // First check the filenames
         if self.old_filename.as_ref().unwrap() == &Filename::DevNull {
             return FilePatchKind::Create;
@@ -838,8 +843,8 @@ impl FilePatchMetadata {
         false
     }
 
-    pub fn build_filepatch<'a>(self, hunks: HunksVec<'a, &'a [u8]>) -> Option<TextFilePatch<'a>> {
-        let mut builder = FilePatchBuilder::<&[u8]>::default();
+    pub fn build_filepatch<'a, L: Line<'a>>(self, hunks: HunksVec<L>) -> Option<FilePatch<L>> {
+        let mut builder = FilePatchBuilder::<L>::default();
 
         // Set the kind
         builder.kind(self.recognize_kind(&hunks));
@@ -882,7 +887,7 @@ impl FilePatchMetadata {
         Some(builder.build().unwrap()) // NOTE(unwrap): It would be our bug if we didn't provide all necessary values.
     }
 
-    pub fn build_hunkless_filepatch<'a>(self) -> Option<TextFilePatch<'a>> {
+    pub fn build_hunkless_filepatch<'a, L: Line<'a>>(self) -> Option<FilePatch<L>> {
         self.build_filepatch(HunksVec::new())
     }
 }
@@ -904,7 +909,7 @@ fn permissions_from_mode(mode: u32) -> Option<Permissions> {
     None
 }
 
-fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, TextFilePatch<'a>> {
+fn parse_filepatch<'a, L: Line<'a>>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, FilePatch<L>> {
     let mut metadata = FilePatchMetadata::default();
 
     // First we read metadata lines or garbage and wait until we find a first hunk.
@@ -998,6 +1003,11 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByte
 #[cfg(test)]
 #[test]
 fn test_parse_filepatch() {
+    // This helps the macros select the right `Line`
+    fn parse_filepatch_u8<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, FilePatch<&[u8]>> {
+        parse_filepatch(input)
+    }
+
     // Regular filepatch
     let filepatch_txt = br#"garbage1
 garbage2
@@ -1013,7 +1023,7 @@ Some other line...
 Other content.
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch_u8(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1035,7 +1045,7 @@ garbage3
 +ccc
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch_u8(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
     assert_eq!(file_patch.old_filename(), None);
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1057,7 +1067,7 @@ garbage3
 +ccc
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch_u8(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1079,7 +1089,7 @@ garbage3
 -ccc
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch_u8(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), None);
@@ -1101,7 +1111,7 @@ garbage3
 -ccc
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch_u8(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1132,7 +1142,7 @@ Some other line...
 Other content.
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch_u8(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
@@ -1152,7 +1162,7 @@ rename to filename2
 +++ filename2
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch_u8(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
@@ -1175,7 +1185,7 @@ rename to filename2
  ddd
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch_u8(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
@@ -1192,7 +1202,7 @@ diff --git filename1 filename2
 GIT binary patch
 ???
 "#;
-        assert_parse_error_code!(parse_filepatch, s!(filepatch_txt), ParseErrorCode::UnsupportedMetadata as u32);
+        assert_parse_error_code!(parse_filepatch_u8, s!(filepatch_txt), ParseErrorCode::UnsupportedMetadata as u32);
 }
 
 #[cfg(unix)]
@@ -1215,7 +1225,7 @@ new mode 100755
  ddd
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch::<&[u8]>(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1241,7 +1251,7 @@ diff --git filename2 filename2
  ddd
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch::<&[u8]>(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1259,7 +1269,7 @@ old mode 100644
 new mode 100755
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let file_patch = parse_filepatch::<&[u8]>(CompleteByteSlice(filepatch_txt)).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1268,10 +1278,10 @@ new mode 100755
     assert_eq!(file_patch.hunks.len(), 0);
 }
 
-pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, Error> {
+pub fn parse_patch<'a, L: Line<'a>>(bytes: &'a [u8], strip: usize) -> Result<Vec<FilePatch<L>>, Error> {
     let mut input = CompleteByteSlice(bytes);
 
-    let mut filepatches = Vec::<TextFilePatch>::new();
+    let mut filepatches = Vec::new();
 
     loop {
         let (_input, mut filepatch) = match parse_filepatch(input) {
@@ -1322,7 +1332,7 @@ garbage4
 garbage5
 "#;
 
-    let file_patches = parse_patch(patch_txt, 0).unwrap();
+    let file_patches = parse_patch::<&[u8]>(patch_txt, 0).unwrap();
 
     assert_eq!(file_patches.len(), 2);
 
@@ -1360,7 +1370,7 @@ rename from filename7
 rename to filename7
 "#;
 
-    let file_patches = parse_patch(patch_txt, 0).unwrap();
+    let file_patches = parse_patch::<&[u8]>(patch_txt, 0).unwrap();
 
     assert_eq!(file_patches.len(), 4);
 
@@ -1392,7 +1402,7 @@ mod tests {
         let data = include_bytes!("../../../testdata/big.patch");
 
         b.iter(|| {
-            black_box(parse_patch(data, 1).unwrap());
+            black_box(parse_patch::<&[u8]>(data, 1).unwrap());
         });
     }
 }

@@ -6,6 +6,7 @@ use std::collections::HashSet;
 
 
 
+/// XXX: WRONG, no LineId!
 /// Horspool-like algorithm optimized for searching with huge alphabets where
 /// letters are rarely repeated. I.e. useful for searching arrays of `LineId`s
 /// representing interned files.
