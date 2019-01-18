@@ -1,4 +1,4 @@
-use std::hash::Hash;
+// Licensed under the MIT license. See LICENSE.md
 
 
 /// Types representing line must implement this trait
@@ -9,7 +9,6 @@ pub trait Line<'a> :
     PartialEq +
     Eq +
     Copy +
-    Hash +
     Send +
     Sync
 {}
