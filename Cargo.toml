@@ -18,7 +18,6 @@ memchr = "2"
 nom = "4"
 rayon = "1"
 seahash = "3"
-smallvec = "0.6"
 
 [features]
 # Enable this feature to enable benchmarks using the (currently) unstable

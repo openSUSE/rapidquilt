@@ -27,7 +27,6 @@ use std::path::{Path, PathBuf};
 use std::vec::Vec;
 
 use derive_builder::Builder;
-use smallvec::SmallVec;
 
 use crate::line::Line;
 use crate::modified_file::ModifiedFile;
@@ -36,7 +35,7 @@ use crate::util::Searcher;
 pub mod unified;
 
 
-type ContentVec<L> = SmallVec<[L; 13]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
+type ContentVec<L> = Vec<L>;
 
 /// This is part of hunk representing the lines to be added or removed together
 /// with the target line.
@@ -54,7 +53,7 @@ impl<L: Copy> HunkPart<L> {
     /// context lines from start and end.
     fn clone_with_fuzz(&self, fuzz_before: usize, fuzz_after: usize) -> HunkPart<L> {
         HunkPart {
-            content: SmallVec::from_slice(&self.content[fuzz_before..(self.content.len() - fuzz_after)]),
+            content: self.content[fuzz_before..(self.content.len() - fuzz_after)].to_vec(),
             target_line: self.target_line + fuzz_before as isize,
         }
     }
@@ -393,7 +392,7 @@ impl FilePatchApplyReport {
     pub fn fuzz(&self) -> usize { self.fuzz }
 }
 
-pub type HunksVec<L> = SmallVec<[Hunk<L>; 2]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
+pub type HunksVec<L> = Vec<Hunk<L>>;
 
 /// This represents all changes done to single file.
 #[derive(Builder, Clone, Debug)]
@@ -581,7 +580,7 @@ impl<'a, L: Line<'a>> FilePatch<L> {
         };
 
         // Just copy in it the content of our single hunk and we are done.
-        modified_file.content = new_content.clone().into_vec();
+        modified_file.content = new_content.clone();
         modified_file.deleted = false;
 
         FilePatchApplyReport::single_hunk_success(0, 0, fuzz)
