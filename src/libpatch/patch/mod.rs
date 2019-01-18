@@ -143,6 +143,7 @@ pub type InternedHunk<'a> = Hunk<'a, LineId>;
 pub struct HunkView<'a, 'hunk, Line> {
     hunk: &'hunk Hunk<'a, Line>,
 
+    fuzz: usize,
     fuzz_before: usize,
     fuzz_after: usize,
 
@@ -156,6 +157,7 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
 
         HunkView {
             hunk,
+            fuzz,
             fuzz_before,
             fuzz_after,
             direction,
@@ -206,6 +208,8 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
     }
 
     pub fn function(&self) -> &'a [u8] { self.hunk.function }
+
+    pub fn fuzz(&self) -> usize { self.fuzz }
 }
 
 pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
@@ -224,27 +228,26 @@ impl<'a> TextHunk<'a> {
     }
 }
 
-/// Applies given interned `HunkView` onto the `InternedFile`.
+/// Try to apply given `HunkView` of an interned hunk onto the `InternedFile`.
+/// This function does not really modify the interned_file, only returns report
+/// describing if application is possible and where would it go.
 ///
 /// `hunk`: the `HunkView` to apply
 ///
 /// `my_index`: the index of this hunk in the `FilePatch`
 ///
-/// `interned_file`: the changes are done to this file
+/// `interned_file`: the application is tried on this file
 ///
 /// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
-///
-/// `modification_offset`: compensation for the changes already done to the file
 ///
 /// `last_hunk_offset`: the offset on which the previous hunk applied
 ///
 /// `last_frozen_line`: last line that was modified by previous hunk. We must not edit anything before that line.
-fn apply_modify<'a, 'hunk>(
-    hunk: &InternedHunkView<'a, 'hunk>,
+fn try_apply_hunk<'a, 'hunk>(
+    hunk_view: &InternedHunkView<'a, 'hunk>,
     my_index: usize,
-    interned_file: &mut InternedFile,
+    interned_file: &InternedFile,
     apply_mode: ApplyMode,
-    modification_offset: isize,
     last_hunk_offset: isize,
     last_frozen_line: isize)
     -> HunkApplyReport
@@ -255,20 +258,21 @@ fn apply_modify<'a, 'hunk>(
     }
 
     // Shortcuts
-    let remove_content = hunk.remove_content();
+    let remove_content = hunk_view.remove_content();
+    let add_content = hunk_view.add_content();
 
     // Determine the target line.
     let mut target_line = match apply_mode {
         // In normal mode, pick what is in the hunk
-        ApplyMode::Normal => match hunk.position() {
-            HunkPosition::Start => hunk.remove_target_line(),
+        ApplyMode::Normal => match hunk_view.position() {
+            HunkPosition::Start => hunk_view.remove_target_line(),
 
             // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
             //             when the line numbers mentioned in the patch are incorrect, and attempts to find
             //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
             //             line number mentioned for the hunk, plus or minus any offset used in applying the
             //             previous hunk.."
-            HunkPosition::Middle => hunk.remove_target_line() + last_hunk_offset + modification_offset,
+            HunkPosition::Middle => hunk_view.remove_target_line() + last_hunk_offset,
 
             HunkPosition::End => (interned_file.content.len() as isize - remove_content.len() as isize),
         },
@@ -276,7 +280,7 @@ fn apply_modify<'a, 'hunk>(
         // In rollback mode, take it from the report
         ApplyMode::Rollback(report) => match report.hunk_reports()[my_index] {
             // If the hunk was applied at specific line, choose that line now.
-            HunkApplyReport::Applied { line, .. } => line + modification_offset,
+            HunkApplyReport::Applied { rollback_line, .. } => rollback_line,
 
             // Nothing else should get here
             _ => unreachable!(),
@@ -316,7 +320,7 @@ fn apply_modify<'a, 'hunk>(
         // can be applied somewhere else based on context. I.e. if the hunk is
         // targeting the start or the end of the file and it did not match, we
         // can not try to find any better offset.
-        if hunk.position() != HunkPosition::Middle {
+        if hunk_view.position() != HunkPosition::Middle {
             return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
         }
 
@@ -364,23 +368,20 @@ fn apply_modify<'a, 'hunk>(
 
     if let ApplyMode::Normal = apply_mode {
         // Check if we are not modifying frozen content
-        if target_line + hunk.context_before() as isize <= last_frozen_line {
+        if target_line + hunk_view.context_before() as isize <= last_frozen_line {
             return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
         }
     }
 
     assert!(target_line >= 0);
 
-    // Replace that part of the `interned_file` with the new one!
-    let range = (target_line as usize)..(target_line as usize + remove_content.len());
-    interned_file.content.splice(range.clone(), hunk.add_content().to_vec());
-
     // Report success
     HunkApplyReport::Applied {
         line: target_line,
-        offset: target_line - hunk.remove_target_line() - modification_offset,
-        first_modified_line: target_line + hunk.context_before() as isize,
-        last_modified_line: target_line + hunk.add_content().len() as isize - hunk.context_after() as isize,
+        rollback_line: target_line,
+        offset: target_line - hunk_view.remove_target_line(),
+        line_count_diff: add_content.len() as isize - remove_content.len() as isize,
+        fuzz: hunk_view.fuzz(),
     }
 }
 
@@ -423,22 +424,21 @@ pub enum HunkApplyFailureReason {
 pub enum HunkApplyReport {
     /// It was applied on given line, with given offset.
     Applied {
-        /// Line on which the hunk was applied.
+        /// Line on which the hunk was applied (in the original file).
         line: isize,
+
+        /// Line at which the hunk is for rollback (in the modified file).
+        rollback_line: isize,
 
         /// The offset from the originally intended line to the line where it
         /// was applied.
         offset: isize,
 
-        /// The first line in the file that was modified by this hunk. I.e.
-        /// the first one that was added by a '+' line or one after the first
-        /// '-' line.
-        first_modified_line: isize,
+        /// How many lines were added minus how many were removed
+        line_count_diff: isize,
 
-        /// The last line in the file that was modified by this hunk. I.e.
-        /// the last one that was added by a '+' line or one before the last
-        /// '-' line.
-        last_modified_line: isize
+        /// Fuzz with which this specific hunk was applied
+        fuzz: usize,
     },
 
     /// It failed to apply.
@@ -472,14 +472,13 @@ impl FilePatchApplyReport {
     /// Create a report with single hunk that succeeded
     fn single_hunk_success(line: isize,
                            offset: isize,
-                           first_modified_line: isize,
-                           last_modified_line: isize,
+                           line_count_diff: isize,
                            fuzz: usize)
                            -> Self
     {
         FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Applied {
-                line, offset, first_modified_line, last_modified_line
+                line, rollback_line: line, offset, line_count_diff, fuzz,
             }],
             any_failed: false,
             fuzz,
@@ -694,7 +693,7 @@ impl<'a> InternedFilePatch<'a> {
         interned_file.content = new_content.clone().into_vec();
         interned_file.deleted = false;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, 0, new_content.len() as isize - 1, fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, new_content.len() as isize, fuzz)
     }
 
     /// Apply this `FilePatchKind::Delete` patch on the file.
@@ -715,18 +714,12 @@ impl<'a> InternedFilePatch<'a> {
         interned_file.content.clear();
         interned_file.deleted = true;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, -1, -1, fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, -(expected_content.len() as isize), fuzz)
     }
 
     /// Apply this `FilePatchKind::Modify` patch on the file.
-    fn apply_modify(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
+    fn apply_modify<'me>(&'me self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
         let mut report = FilePatchApplyReport::new_with_capacity(fuzz, self.hunks.len());
-
-        // We differ from patch by modifying the buffer representing the file in
-        // place as we apply the hunks. Because of that, the target lines no longer
-        // match after first modification. To compensate for that, we keep track
-        // of the offset.
-        let mut modification_offset = 0isize;
 
         let mut last_hunk_offset = 0isize;
 
@@ -744,54 +737,66 @@ impl<'a> InternedFilePatch<'a> {
             let mut hunk_report = HunkApplyReport::Skipped;
 
             // Decide which fuzz levels we should try
-            #[allow(clippy::range_plus_one)] // We need all ranges to be the same type and the last one has to be empty
             let possible_fuzz_levels = match apply_mode {
                 // In normal mode consider fuzz 0 up to given maximum fuzz, but no more than what is useable for this hunk
                 ApplyMode::Normal =>
-                    0..(std::cmp::min(fuzz, hunk.max_useable_fuzz()) + 1),
+                    0..=std::cmp::min(fuzz, hunk.max_useable_fuzz()),
 
                 // In rollback mode use what worked in normal mode
-                ApplyMode::Rollback(ref report) => match report.hunk_reports[i] {
+                ApplyMode::Rollback(ref previous_report) => match previous_report.hunk_reports[i] {
                     // If the hunk applied, pick the specific fuzz level
-                    HunkApplyReport::Applied { .. } =>
-                        report.fuzz()..(report.fuzz() + 1),
+                    HunkApplyReport::Applied { fuzz, .. } =>
+                        fuzz..=fuzz,
 
                     // If the hunk failed to apply, skip it now.
                     HunkApplyReport::Failed(..) |
-                    HunkApplyReport::Skipped =>
-                        0..0, // Empty interval = it won't try at all
+                    HunkApplyReport::Skipped => {
+                        // Skip it
+                        report.push_hunk_report(hunk_report);
+                        break;
+                    }
                 }
             };
 
             for current_fuzz in possible_fuzz_levels {
                 // Attempt to apply the hunk at the right fuzz level...
-                hunk_report = apply_modify(&hunk.view(direction, current_fuzz),
-                                           i, interned_file, apply_mode,
-                                           modification_offset, last_hunk_offset,
-                                           last_frozen_line);
+                let hunk_view = &hunk.view(direction, current_fuzz);
 
-                // If it succeeded, we are done with this hunk, do not try any
-                // more fuzz levels.
-                if let HunkApplyReport::Applied { .. } = hunk_report {
+                hunk_report = try_apply_hunk(hunk_view, i, interned_file,
+                                             apply_mode, last_hunk_offset,
+                                             last_frozen_line);
+
+                // If it succeeded, we are done with this hunk, remember the last_hunk_offset
+                // and last_frozen_line, so we can use them for the next hunk and do not try
+                // any more fuzz levels.
+                if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
+                    last_hunk_offset = offset;
+                    last_frozen_line = line + hunk_view.remove_content().len() as isize - hunk_view.context_after() as isize;
                     break;
                 }
             }
-
-            // If it applied, remember the offset and last_modified_line, so
-            // we can use them for the next hunk.
-            if let HunkApplyReport::Applied { offset, last_modified_line, .. } = hunk_report {
-                if direction == PatchDirection::Forward {
-                    modification_offset += hunk.add.content.len() as isize - hunk.remove.content.len() as isize;
-                } else {
-                    modification_offset -= hunk.add.content.len() as isize - hunk.remove.content.len() as isize;
-                }
-
-                last_hunk_offset = offset;
-
-                last_frozen_line = last_modified_line;
-            }
-
             report.push_hunk_report(hunk_report);
+        }
+
+        // Now apply all changes on the file.
+        // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
+        //       splices is that they move the tail of the file multiple times. Alternative is to
+        //       generate new Vec and copy every LineId at most once, but that seems to be even
+        //       slower. Ideally we would need some in-place modification that moves every LineId
+        //       at most once. But I don't think it is possible in general case.
+        {
+            let mut modification_offset = 0;
+            for (hunk, hunk_report) in self.hunks.iter().zip(report.hunk_reports.iter_mut()) {
+                if let HunkApplyReport::Applied { line, ref mut rollback_line, fuzz, line_count_diff, .. } = hunk_report {
+                    let hunk_view = hunk.view(direction, *fuzz);
+                    let target_line = *line + modification_offset;
+                    *rollback_line = target_line;
+                    let range = (target_line as usize)..(target_line as usize + hunk_view.remove_content().len());
+                    interned_file.content.splice(range.clone(), hunk_view.add_content().to_vec()); // TODO: No to_vec here?
+
+                    modification_offset += *line_count_diff;
+                }
+            }
         }
 
         report
