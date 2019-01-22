@@ -31,7 +31,6 @@
 //! remove-line and add-line.
 
 
-use std::borrow::Cow;
 use std::fs;
 use std::vec::Vec;
 use std::path::{Path, PathBuf};
@@ -59,17 +58,6 @@ pub struct HunkPart<Line> {
     pub target_line: isize,
 }
 
-impl<Line> HunkPart<Line> where Line: Copy {
-    /// Create a copy of the hunk part with given fuzz, i.e. cutting away
-    /// context lines from start and end.
-    fn clone_with_fuzz(&self, fuzz_before: usize, fuzz_after: usize) -> HunkPart<Line> {
-        HunkPart {
-            content: SmallVec::from_slice(&self.content[fuzz_before..(self.content.len() - fuzz_after)]),
-            target_line: self.target_line + fuzz_before as isize,
-        }
-    }
-}
-
 impl<'a> HunkPart<&'a [u8]> {
     /// Consumes this text-based HunkPart and produces interned HunkPart.
     pub fn intern(mut self, interner: &mut LineInterner<'a>) -> HunkPart<LineId> {
@@ -94,6 +82,20 @@ pub enum HunkPosition {
     Middle,
 }
 
+pub trait HunkView<'a, Line> {
+    fn remove_content(&self) -> &[Line];
+    fn remove_target_line(&self) -> isize;
+    fn add_content(&self) -> &[Line];
+    fn add_target_line(&self) -> isize;
+
+    fn context_before(&self) -> usize;
+    fn context_after(&self) -> usize;
+
+    fn position(&self) -> HunkPosition;
+
+    fn function(&self) -> &'a [u8];
+}
+
 /// Represents single hunk from a patch
 #[derive(Clone, Debug)]
 pub struct Hunk<'a, Line> {
@@ -115,6 +117,20 @@ pub struct Hunk<'a, Line> {
     /// The string that follows the second "@@"
     /// Not necessarily a name of a function, but that's how it is called in diff.
     pub function: &'a [u8],
+}
+
+impl<'a, Line> HunkView<'a, Line> for Hunk<'a, Line> {
+    fn remove_content(&self) -> &[Line] { &self.remove.content }
+    fn remove_target_line(&self) -> isize { self.remove.target_line }
+    fn add_content(&self) -> &[Line] { &self.add.content }
+    fn add_target_line(&self) -> isize { self.add.target_line }
+
+    fn context_before(&self) -> usize { self.context_before }
+    fn context_after(&self) -> usize { self.context_after }
+
+    fn position(&self) -> HunkPosition { self.position }
+
+    fn function(&self) -> &'a [u8] { self.function }
 }
 
 impl<'a, Line> Hunk<'a, Line> {
@@ -145,29 +161,50 @@ impl<'a, Line> Hunk<'a, Line> {
     pub fn max_useable_fuzz(&self) -> usize {
         std::cmp::max(self.context_before, self.context_after)
     }
+
+    pub fn view_with_fuzz<'hunk>(&'hunk self, fuzz: usize) -> FuzzedHunk<'a, 'hunk, Line> {
+        FuzzedHunk::new(self, fuzz)
+    }
 }
 
+#[derive(Clone, Debug)]
+pub struct FuzzedHunk<'a, 'hunk, Line> {
+    hunk: &'hunk Hunk<'a, Line>,
 
-impl<'a, Line> Hunk<'a, Line> where Line: Copy {
-    /// Create a copy of the hunk part with given fuzz, i.e. cutting away
-    /// context lines from start and end.
-    // XXX: This function is relatively costly, but it shouldn't be needed too often
-    pub fn clone_with_fuzz(&self, fuzz: usize) -> Hunk<'a, Line> {
-        let fuzz_before = std::cmp::min(self.context_before, fuzz);
-        let fuzz_after = std::cmp::min(self.context_after, fuzz);
+    fuzz_before: usize,
+    fuzz_after: usize,
+}
 
-        Hunk {
-            remove: self.remove.clone_with_fuzz(fuzz_before, fuzz_after),
-            add: self.add.clone_with_fuzz(fuzz_before, fuzz_after),
+impl<'a, 'hunk, Line> FuzzedHunk<'a, 'hunk, Line> {
+    pub fn new(hunk: &'hunk Hunk<'a, Line>, fuzz: usize) -> Self {
+        let fuzz_before = std::cmp::min(hunk.context_before, fuzz);
+        let fuzz_after = std::cmp::min(hunk.context_after, fuzz);
 
-            context_before: self.context_before - fuzz_before,
-            context_after: self.context_after - fuzz_after,
-
-            position: self.position,
-
-            function: self.function,
+        FuzzedHunk {
+            hunk,
+            fuzz_before,
+            fuzz_after,
         }
     }
+}
+
+impl<'a, 'hunk, Line> HunkView<'a, Line> for FuzzedHunk<'a, 'hunk, Line> {
+    fn remove_content(&self) -> &[Line] {
+        &self.hunk.remove.content[self.fuzz_before..(self.hunk.remove.content.len() - self.fuzz_after)]
+    }
+    fn remove_target_line(&self) -> isize { self.hunk.remove.target_line }
+
+    fn add_content(&self) -> &[Line] {
+        &self.hunk.add.content[self.fuzz_before..(self.hunk.add.content.len() - self.fuzz_after)]
+    }
+    fn add_target_line(&self) -> isize { self.hunk.add.target_line }
+
+    fn context_before(&self) -> usize { self.hunk.context_before - self.fuzz_before }
+    fn context_after(&self) -> usize { self.hunk.context_after - self.fuzz_after }
+
+    fn position(&self) -> HunkPosition { self.hunk.position }
+
+    fn function(&self) -> &'a [u8] { self.hunk.function }
 }
 
 pub type TextHunk<'a> = Hunk<'a, &'a [u8]>;
@@ -187,169 +224,170 @@ impl<'a> TextHunk<'a> {
     }
 }
 
-impl<'a> InternedHunk<'a> {
-    /// Applies this `InternedHunk` onto the `InternedFile`.
-    ///
-    /// `my_index`: the index of this hunk in the `FilePatch`
-    ///
-    /// `interned_file`: the changes are done to this file
-    ///
-    /// `direction`: whether the patch is being applied forward (normally) or reverted
-    ///
-    /// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
-    ///
-    /// `modification_offset`: compensation for the changes already done to the file
-    ///
-    /// `last_hunk_offset`: the offset on which the previous hunk applied
-    ///
-    /// `last_frozen_line`: last line that was modified by previous hunk. We must not edit anything before that line.
-    fn apply_modify(&self,
-                    my_index: usize,
-                    interned_file: &mut InternedFile,
-                    direction: PatchDirection,
-                    apply_mode: ApplyMode,
-                    modification_offset: isize,
-                    last_hunk_offset: isize,
-                    last_frozen_line: isize)
-                    -> HunkApplyReport
-    {
-        // If the file doesn't exist, fail immediatelly
-        if interned_file.deleted {
-            return HunkApplyReport::Failed(HunkApplyFailureReason::FileWasDeleted);
+/// Applies given interned `HunkView` onto the `InternedFile`.
+///
+/// `hunk`: the `HunkView` to apply
+///
+/// `my_index`: the index of this hunk in the `FilePatch`
+///
+/// `interned_file`: the changes are done to this file
+///
+/// `direction`: whether the patch is being applied forward (normally) or reverted
+///
+/// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
+///
+/// `modification_offset`: compensation for the changes already done to the file
+///
+/// `last_hunk_offset`: the offset on which the previous hunk applied
+///
+/// `last_frozen_line`: last line that was modified by previous hunk. We must not edit anything before that line.
+fn apply_modify<'a, H: HunkView<'a, LineId>>(
+    hunk: &H,
+    my_index: usize,
+    interned_file: &mut InternedFile,
+    direction: PatchDirection,
+    apply_mode: ApplyMode,
+    modification_offset: isize,
+    last_hunk_offset: isize,
+    last_frozen_line: isize)
+    -> HunkApplyReport
+{
+    // If the file doesn't exist, fail immediatelly
+    if interned_file.deleted {
+        return HunkApplyReport::Failed(HunkApplyFailureReason::FileWasDeleted);
+    }
+
+    // Decide which part of the hunk should be added and which should be
+    // deleted depending on the direction of applying.
+    let (add_content, remove_content, remove_target_line) = match direction {
+        PatchDirection::Forward => (hunk.add_content(), hunk.remove_content(), hunk.remove_target_line()),
+        PatchDirection::Revert => (hunk.remove_content(), hunk.add_content(), hunk.add_target_line()),
+    };
+
+    // Determine the target line.
+    let mut target_line = match apply_mode {
+        // In normal mode, pick what is in the hunk
+        ApplyMode::Normal => match hunk.position() {
+            HunkPosition::Start => remove_target_line,
+
+            // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
+            //             when the line numbers mentioned in the patch are incorrect, and attempts to find
+            //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
+            //             line number mentioned for the hunk, plus or minus any offset used in applying the
+            //             previous hunk.."
+            HunkPosition::Middle => remove_target_line + last_hunk_offset + modification_offset,
+
+            HunkPosition::End => (interned_file.content.len() as isize - remove_content.len() as isize),
+        },
+
+        // In rollback mode, take it from the report
+        ApplyMode::Rollback(report) => match report.hunk_reports()[my_index] {
+            // If the hunk was applied at specific line, choose that line now.
+            HunkApplyReport::Applied { line, .. } => line,
+
+            // Nothing else should get here
+            _ => unreachable!(),
+        }
+    };
+
+    // If the hunk tries to remove more than the file has, reject it now.
+    // So in the following code we can assume that it is smaller or equal.
+    if remove_content.len() > interned_file.content.len() {
+        return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
+    }
+
+    // Helper function to decide if the needle matches haystack at give offset.
+    fn matches(needle: &[LineId], haystack: &[LineId], at: isize) -> bool {
+        if at < 0 {
+            return false;
         }
 
-        // Decide which part of the hunk should be added and which should be
-        // deleted depending on the direction of applying.
-        let (part_add, part_remove) = match direction {
-            PatchDirection::Forward => (&self.add, &self.remove),
-            PatchDirection::Revert => (&self.remove, &self.add),
-        };
+        let at = at as usize;
+        if needle.len() + at > haystack.len() {
+            return false;
+        }
 
-        // Determine the target line.
-        let mut target_line = match apply_mode {
-            // In normal mode, pick what is in the hunk
-            ApplyMode::Normal => match self.position {
-                HunkPosition::Start => part_remove.target_line,
+        &haystack[at..(at + needle.len())] == needle
+    }
 
-                // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
-                //             when the line numbers mentioned in the patch are incorrect, and attempts to find
-                //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
-                //             line number mentioned for the hunk, plus or minus any offset used in applying the
-                //             previous hunk.."
-                HunkPosition::Middle => part_remove.target_line + last_hunk_offset + modification_offset,
+    // Check if the part we want to remove is at the originally intended target_line
+    if !matches(&remove_content, &interned_file.content, target_line) {
+        // It is not on the indended target_line...
 
-                HunkPosition::End => (interned_file.content.len() as isize - part_remove.content.len() as isize),
-            },
-
-            // In rollback mode, take it from the report
-            ApplyMode::Rollback(report) => match report.hunk_reports()[my_index] {
-                // If the hunk was applied at specific line, choose that line now.
-                HunkApplyReport::Applied { line, .. } => line,
-
-                // Nothing else should get here
-                _ => unreachable!(),
-            }
-        };
-
-        // If the hunk tries to remove more than the file has, reject it now.
-        // So in the following code we can assume that it is smaller or equal.
-        if part_remove.content.len() > interned_file.content.len() {
+        // If we are in rollback mode, we are in big trouble. Fail early.
+        if let ApplyMode::Rollback(_) = apply_mode {
             return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
         }
 
-        // Helper function to decide if the needle matches haystack at give offset.
-        fn matches(needle: &[LineId], haystack: &[LineId], at: isize) -> bool {
-            if at < 0 {
-                return false;
-            }
-
-            let at = at as usize;
-            if needle.len() + at > haystack.len() {
-                return false;
-            }
-
-            &haystack[at..(at + needle.len())] == needle
+        // Only hunks that are intended for somewhere in the middle of the code
+        // can be applied somewhere else based on context. I.e. if the hunk is
+        // targeting the start or the end of the file and it did not match, we
+        // can not try to find any better offset.
+        if hunk.position() != HunkPosition::Middle {
+            return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
         }
 
-        // Check if the part we want to remove is at the originally intended target_line
-        if !matches(&part_remove.content, &interned_file.content, target_line) {
-            // It is not on the indended target_line...
+        // man patch (continuation):
+        // "If that is not the correct place, patch scans both forwards and
+        // backwards for a set of lines matching the context given in the hunk."
 
-            // If we are in rollback mode, we are in big trouble. Fail early.
-            if let ApplyMode::Rollback(_) = apply_mode {
-                return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-            }
+        // We'll find every occurence of `remove_content` in the file and pick the one that is closest
+        // to the `target_line`
+        let mut best_target_line: Option<isize> = None;
 
-            // Only hunks that are intended for somewhere in the middle of the code
-            // can be applied somewhere else based on context. I.e. if the hunk is
-            // targeting the start or the end of the file and it did not match, we
-            // can not try to find any better offset.
-            if self.position != HunkPosition::Middle {
-                return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-            }
+        for possible_target_line in Searcher::new(&remove_content).search_in(&interned_file.content) {
+            let possible_target_line = possible_target_line as isize;
 
-            // man patch (continuation):
-            // "If that is not the correct place, patch scans both forwards and
-            // backwards for a set of lines matching the context given in the hunk."
+            // WARNING: The "<=" in the comparison below is important! If a hunk can be placed with two offsets that
+            // have the same magnitude, but one positive and the other other negative, patch prefers the positive one!
+            if best_target_line.is_none() || (possible_target_line - target_line).abs() <= (best_target_line.unwrap() - target_line).abs() {
+                // We found a position that is better (or there was no best position yet), remember it.
+                best_target_line = Some(possible_target_line);
 
-            // We'll find every occurence of `part_remove.content` in the file and pick the one that is closest
-            // to the `target_line`
-            let mut best_target_line: Option<isize> = None;
-
-            for possible_target_line in Searcher::new(&part_remove.content).search_in(&interned_file.content) {
-                let possible_target_line = possible_target_line as isize;
-
-                // WARNING: The "<=" in the comparison below is important! If a hunk can be placed with two offsets that
-                // have the same magnitude, but one positive and the other other negative, patch prefers the positive one!
-                if best_target_line.is_none() || (possible_target_line - target_line).abs() <= (best_target_line.unwrap() - target_line).abs() {
-                    // We found a position that is better (or there was no best position yet), remember it.
-                    best_target_line = Some(possible_target_line);
-
-                    if possible_target_line > target_line {
-                        // We found a match on a line that is after the expected target_line.
-                        // We can stop the search right now because any future matches will
-                        // have bigger offset so have no chance of being selected.
-                        break;
-                    }
-                } else {
-                    // We found a position that is worse than the best one so far. We are searching the file from start to end, so the
-                    // possible_target_line will be getting closer and closer to the target_line until we pass it and it will
-                    // start getting worse. At that point we can cut off the search.
+                if possible_target_line > target_line {
+                    // We found a match on a line that is after the expected target_line.
+                    // We can stop the search right now because any future matches will
+                    // have bigger offset so have no chance of being selected.
                     break;
                 }
-            }
-
-            // Did we find the line or not?
-            match best_target_line {
-                Some(new_target_line) => {
-                    target_line = new_target_line;
-                },
-                None => {
-                    return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-                }
+            } else {
+                // We found a position that is worse than the best one so far. We are searching the file from start to end, so the
+                // possible_target_line will be getting closer and closer to the target_line until we pass it and it will
+                // start getting worse. At that point we can cut off the search.
+                break;
             }
         }
 
-        if let ApplyMode::Normal = apply_mode {
-            // Check if we are not modifying frozen content
-            if target_line + self.context_before as isize <= last_frozen_line {
-                return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
+        // Did we find the line or not?
+        match best_target_line {
+            Some(new_target_line) => {
+                target_line = new_target_line;
+            },
+            None => {
+                return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
             }
         }
+    }
 
-        assert!(target_line >= 0);
-
-        // Replace that part of the `interned_file` with the new one!
-        let range = (target_line as usize)..(target_line as usize + part_remove.content.len());
-        interned_file.content.splice(range.clone(), part_add.content.clone());
-
-        // Report success
-        HunkApplyReport::Applied {
-            line: target_line,
-            offset: target_line - part_remove.target_line - modification_offset,
-            first_modified_line: target_line + self.context_before as isize,
-            last_modified_line: target_line + part_add.content.len() as isize - self.context_after as isize,
+    if let ApplyMode::Normal = apply_mode {
+        // Check if we are not modifying frozen content
+        if target_line + hunk.context_before() as isize <= last_frozen_line {
+            return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
         }
+    }
+
+    assert!(target_line >= 0);
+
+    // Replace that part of the `interned_file` with the new one!
+    let range = (target_line as usize)..(target_line as usize + remove_content.len());
+    interned_file.content.splice(range.clone(), add_content.to_vec());
+
+    // Report success
+    HunkApplyReport::Applied {
+        line: target_line,
+        offset: target_line - remove_target_line - modification_offset,
+        first_modified_line: target_line + hunk.context_before() as isize,
+        last_modified_line: target_line + add_content.len() as isize - hunk.context_after() as isize,
     }
 }
 
@@ -729,15 +767,11 @@ impl<'a> InternedFilePatch<'a> {
             };
 
             for current_fuzz in possible_fuzz_levels {
-                // If we are at fuzz 0, borrow the hunk, otherwise make a copy
-                // for the fuzz level.
-                let hunk = match current_fuzz {
-                    0 => Cow::Borrowed(hunk),
-                    _ => Cow::Owned(hunk.clone_with_fuzz(current_fuzz)),
+                // Attempt to apply the hunk at the right fuzz level...
+                hunk_report = match current_fuzz {
+                    0 => apply_modify(hunk,                               i, interned_file, direction, apply_mode, modification_offset, last_hunk_offset, last_frozen_line),
+                    _ => apply_modify(&hunk.view_with_fuzz(current_fuzz), i, interned_file, direction, apply_mode, modification_offset, last_hunk_offset, last_frozen_line),
                 };
-
-                // Attempt to apply the hunk...
-                hunk_report = hunk.apply_modify(i, interned_file, direction, apply_mode, modification_offset, last_hunk_offset, last_frozen_line);
 
                 // If it succeeded, we are done with this hunk, do not try any
                 // more fuzz levels.
