@@ -1,0 +1,24 @@
+The hunks are misordered. The first hunk will apply. The second hunk would
+apply with small negative offset, but those lines are already frozen. It can
+also apply with big positive offset to lines later in the file, but patch will
+not choose that offset and reject the file as misordered.
+--- file4.in	2019-01-22 11:14:17.089027215 +0100
++++ misordered_alternative.out	2019-01-22 11:14:57.464940446 +0100
+@@ -12,7 +12,7 @@
+ eee
+ fff
+ ggg
+-hhh
++hhh modified
+ iii
+ jjj
+ kkk
+@@ -9,7 +9,7 @@
+ 0000
+ 1111
+ 2222
+-3333
++3333 modified
+ 4444
+ 5555
+ 6666

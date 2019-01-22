@@ -5,7 +5,7 @@ overlaps with line modified by previous hunk. In that case it will apply only
 if the context matches the original content of the file. This is likely
 unintended and we don't support that in rapidquilt.
 --- file.in	2019-01-16 15:02:37.016021405 +0100
-+++ hunks_overlapping.out	2019-01-16 15:03:08.724512747 +0100
++++ hunks_overlapping_in_context.out	2019-01-16 15:03:08.724512747 +0100
 @@ -1,7 +1,7 @@
  aaa
  bbb

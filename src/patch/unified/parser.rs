@@ -1289,8 +1289,6 @@ pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatc
         };
         input = _input;
 
-        filepatch.validate_hunks()?;
-
         filepatch.strip(strip);
         filepatches.push(filepatch);
     }

@@ -190,7 +190,7 @@ impl<'a> UnifiedPatchRejWriter for FilePatch<'a, LineId> {
         write_file_patch_header_to(self, &mut writer)?;
 
         for (hunk, report) in self.hunks.iter().zip(report.hunk_reports()) {
-            if let HunkApplyReport::Failed = report {
+            if let HunkApplyReport::Failed(..) = report {
                 hunk.write_to(interner, &mut writer)?;
             }
         }

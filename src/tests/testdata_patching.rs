@@ -48,7 +48,21 @@ fn all_files() -> Result<(), Error> {
 
         // Patch it
         let report = file_patch.apply(&mut interned_file, PatchDirection::Forward, 0);
-        assert!(report.ok());
+
+        // Check if it failed when shouldn't or succeeded when it was expected to fail
+        let error_file = path.with_extension("error");
+        let should_fail = error_file.exists();
+        if should_fail {
+            if report.ok() {
+                panic!("The {} file exists, so apply failure is expected, but patch applied successfully!", error_file.display());
+            }
+
+            // We are done then
+            return Ok(())
+        }
+        if !should_fail && report.failed() {
+            panic!("The patch unexpectedly failed to apply!");
+        }
 
         // Write the output to a buffer
         let mut output = Vec::<u8>::new();

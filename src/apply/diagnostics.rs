@@ -15,7 +15,7 @@ use colored::*;
 use crate::apply::common::*;
 use crate::interned_file::InternedFile;
 use crate::line_interner::LineInterner;
-use crate::patch::{HunkApplyReport, PatchDirection};
+use crate::patch::{HunkApplyFailureReason, HunkApplyReport, PatchDirection};
 use crate::patch::unified::writer::UnifiedPatchHunkWriter;
 
 
@@ -118,8 +118,31 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
                         }
                     }
 
-                    HunkApplyReport::Failed => {
+                    HunkApplyReport::Failed(reason) => {
                         write!(writer, "{}", "FAILED ".bright_red().bold())?;
+
+                        let reason_str = match reason {
+                            HunkApplyFailureReason::NoMatchingLines =>
+                                // This is the "normal" reason, no need to print
+                                // any additional info.
+                                None,
+
+                            HunkApplyFailureReason::FileWasDeleted =>
+                                Some("The file was deleted by some previous patch."),
+
+                            HunkApplyFailureReason::CreatingFileThatExists =>
+                                Some("Attempting to create file that already exists."),
+
+                            HunkApplyFailureReason::DeletingFileThatDoesNotMatch =>
+                                Some("Attempting to delete file with content that does not match."),
+
+                            HunkApplyFailureReason::MisorderedHunks =>
+                                Some("Misordered hunks! The hunk would modify content before (or overlapping) some previous hunk."),
+                        };
+
+                        if let Some(reason_str) = reason_str {
+                            write!(writer, "      {}", reason_str.bright_red())?;
+                        }
                     }
 
                     HunkApplyReport::Skipped => {

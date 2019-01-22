@@ -1,0 +1,23 @@
+The target lines make it appear as if the hunks are badly ordered, but after
+finding their final apply location, they apply in-order. Patch accepts such
+patches without complains.
+--- file.in	2019-01-16 15:02:37.016021405 +0100
++++ hunks_seemingly_misordered.out	2019-01-16 15:03:08.724512747 +0100
+@@ -20,7 +20,7 @@
+ aaa
+ bbb
+ ccc
+-ddd
++ddd modified
+ eee
+ fff
+ ggg
+@@ -10,7 +10,7 @@
+ eee
+ fff
+ ggg
+-hhh
++hhh modified
+ iii
+ jjj
+ kkk

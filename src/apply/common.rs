@@ -137,6 +137,7 @@ pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &
     Ok(())
 }
 
+#[derive(Debug)]
 pub struct PatchStatus<'a, 'b> {
     /// The index of this `FilePatch` in the original list of **patches**. Note
     /// that there can be multiple `FilePatch`es with the same index if they

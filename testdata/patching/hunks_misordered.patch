@@ -1,0 +1,21 @@
+The hunks are out of order. Patch will reject such patch.
+--- file.in	2019-01-16 15:02:37.016021405 +0100
++++ hunks_misordered.out	2019-01-16 15:03:08.724512747 +0100
+@@ -8,7 +8,7 @@
+ eee
+ fff
+ ggg
+-hhh
++hhh modified
+ iii
+ jjj
+ kkk
+@@ -1,7 +1,7 @@
+ aaa
+ bbb
+ ccc
+-ddd
++ddd modified
+ eee
+ fff
+ ggg
