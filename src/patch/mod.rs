@@ -330,9 +330,11 @@ impl<'a> InternedHunk<'a> {
             }
         }
 
-        // Check if we are not modifying frozen content
-        if target_line + self.context_before as isize <= last_frozen_line {
-            return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
+        if let ApplyMode::Normal = apply_mode {
+            // Check if we are not modifying frozen content
+            if target_line + self.context_before as isize <= last_frozen_line {
+                return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
+            }
         }
 
         assert!(target_line >= 0);
@@ -755,7 +757,6 @@ impl<'a> InternedFilePatch<'a> {
 
                 last_hunk_offset = offset;
 
-                assert!(last_modified_line > last_frozen_line);
                 last_frozen_line = last_modified_line;
             }
 
