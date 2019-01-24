@@ -16,7 +16,7 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process;
 
-use colored;
+use colored::*;
 use failure::{Error, format_err};
 use getopts::Options;
 
@@ -268,7 +268,7 @@ fn main() {
     match cmd_push(&*arena, patches_path, goal, fuzz, 1, do_backups, backup_count, dry_run, stats, verbosity) {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {
-                eprintln!("{}{}", "  ".repeat(i), cause);
+                eprintln!("{}{}", "  ".repeat(i), format!("{}", cause).red());
             }
 
             process::exit(1);
