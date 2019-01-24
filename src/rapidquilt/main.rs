@@ -18,7 +18,7 @@ use std::process;
 
 use colored::*;
 use failure::{Error, format_err};
-use getopts::Options;
+use getopts::{Matches, Options};
 
 use crate::apply::{
     ApplyConfig,
@@ -68,20 +68,55 @@ enum PushGoal {
     UpTo(PathBuf),
 }
 
-fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
-                            patches_path: P,
-                            goal: PushGoal,
-                            fuzz: usize,
-                            strip: usize,
-                            do_backups: ApplyConfigDoBackups,
-                            backup_count: ApplyConfigBackupCount,
-                            dry_run: bool,
-                            stats: bool,
-                            verbosity: Verbosity)
-                            -> Result<bool, Error>
+/// Returns true if all patches were applied, false if only some, and error if there was error.
+fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args: F, verbosity: Verbosity) -> Result<bool, Error>
 {
+    // Parse "push" specific arguments
+    let do_backups = match matches.opt_str("backup") {
+        Some(ref s) if s == "always" => ApplyConfigDoBackups::Always,
+        Some(ref s) if s == "onfail" => ApplyConfigDoBackups::OnFail,
+        Some(ref s) if s == "never"  => ApplyConfigDoBackups::Never,
+        None                         => ApplyConfigDoBackups::OnFail,
+        _ => Err(format_err!("Bad value given to \"backup\" parameter!")).unwrap(),
+    };
+
+    let backup_count = match matches.opt_str("backup-count") {
+        Some(ref s) if s == "all" => ApplyConfigBackupCount::All,
+        Some(n)                   => ApplyConfigBackupCount::Last(n.parse::<usize>().unwrap()),
+        None                      => ApplyConfigBackupCount::Last(100),
+    };
+
+    let patches_path = matches.opt_str("p").unwrap_or_else(|| "patches".to_string());
+
+    let fuzz = matches.opt_str("fuzz").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+
+    if fuzz > 0 {
+        println!("--fuzz > 0 is not working correctly right now, can not proceed.");
+        process::exit(1);
+    }
+
+    let dry_run = matches.opt_present("dry-run");
+    let stats = matches.opt_present("stats");
+
+    let arena = build_arena(matches.opt_present("mmap"));
+
+    let mut goal = if matches.opt_present("a") {
+        PushGoal::All
+    } else {
+        PushGoal::Count(1)
+    };
+    if let Some(first_free_arg) = free_args.next() {
+        if let Ok(number) = first_free_arg.parse::<usize>() {
+            goal = PushGoal::Count(number);
+        } else {
+            goal = PushGoal::UpTo(PathBuf::from(first_free_arg));
+        }
+    }
+
+    // Process series file
     let patch_filenames = read_series_file("series").unwrap();
 
+    // Determine the last patch
     let first_patch = if let Ok(applied_patch_filenames) = read_series_file(".pc/applied-patches") {
         for (p1, p2) in patch_filenames.iter().zip(applied_patch_filenames.iter()) {
             if p1 != p2 {
@@ -111,6 +146,8 @@ fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
 
     let patch_filenames = &patch_filenames[first_patch..last_patch];
 
+    let strip = 1; // Currently hardcoded
+
     let config = ApplyConfig {
         patch_filenames,
         patches_path: patches_path.as_ref(),
@@ -123,20 +160,10 @@ fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
         verbosity,
     };
 
-    let threads = match env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
-        Some(manual_threads) => {
-            rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global()?;
-            manual_threads
-        },
-        None => {
-            rayon::current_num_threads()
-        }
-    };
-
-    let apply_result = if threads <= 1 {
-        apply_patches(&config, arena)?
+    let apply_result = if rayon::current_num_threads() <= 1 {
+        apply_patches(&config, &*arena)?
     } else {
-        apply_patches_parallel(&config, arena)?
+        apply_patches_parallel(&config, &*arena)?
     };
 
     fs::create_dir_all(".pc")?;
@@ -198,7 +225,7 @@ fn main() {
         version();
     }
 
-    if free_args.next() != Some(&"push".to_string()) || matches.opt_present("help") {
+    if matches.opt_present("help") {
         usage(&opts);
     }
 
@@ -215,36 +242,6 @@ fn main() {
         }
     };
 
-    if let Some(directory) = matches.opt_str("directory") {
-        env::set_current_dir(directory).unwrap();
-    }
-
-    let do_backups = match matches.opt_str("backup") {
-        Some(ref s) if s == "always" => ApplyConfigDoBackups::Always,
-        Some(ref s) if s == "onfail" => ApplyConfigDoBackups::OnFail,
-        Some(ref s) if s == "never"  => ApplyConfigDoBackups::Never,
-        None                         => ApplyConfigDoBackups::OnFail,
-        _ => Err(format_err!("Bad value given to \"backup\" parameter!")).unwrap(),
-    };
-
-    let backup_count = match matches.opt_str("backup-count") {
-        Some(ref s) if s == "all" => ApplyConfigBackupCount::All,
-        Some(n)                   => ApplyConfigBackupCount::Last(n.parse::<usize>().unwrap()),
-        None                      => ApplyConfigBackupCount::Last(100),
-    };
-
-    let patches_path = matches.opt_str("p").unwrap_or_else(|| "patches".to_string());
-
-    let fuzz = matches.opt_str("fuzz").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
-
-    if fuzz > 0 {
-        println!("--fuzz > 0 is not working correctly right now, can not proceed.");
-        process::exit(1);
-    }
-
-    let dry_run = matches.opt_present("dry-run");
-    let stats = matches.opt_present("stats");
-
     // "--verbose" beats "--quiet"
     let verbosity = if matches.opt_count("verbose") >= 2 {
         Verbosity::ExtraVerbose
@@ -256,22 +253,24 @@ fn main() {
         Verbosity::Normal
     };
 
-    let arena = build_arena(matches.opt_present("mmap"));
-
-    let mut goal = if matches.opt_present("a") {
-        PushGoal::All
-    } else {
-        PushGoal::Count(1)
-    };
-    if let Some(first_free_arg) = free_args.next() {
-        if let Ok(number) = first_free_arg.parse::<usize>() {
-            goal = PushGoal::Count(number);
-        } else {
-            goal = PushGoal::UpTo(PathBuf::from(first_free_arg));
-        }
+    if let Some(directory) = matches.opt_str("directory") {
+        env::set_current_dir(directory).unwrap();
     }
 
-    match cmd_push(&*arena, patches_path, goal, fuzz, 1, do_backups, backup_count, dry_run, stats, verbosity) {
+    if let Some(manual_threads) = env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
+        rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global().unwrap();
+    }
+
+    let result = match free_args.next() {
+        Some(cmd) if cmd == "push" => {
+            cmd_push(&matches, free_args, verbosity)
+        }
+        _ => {
+            usage(&opts);
+        }
+    };
+
+    match result {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {
                 eprintln!("{}{}", "  ".repeat(i), format!("{}", cause).red());
