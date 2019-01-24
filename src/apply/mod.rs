@@ -3,6 +3,8 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use failure::Fail;
+
 pub mod sequential;
 pub mod parallel;
 mod common;

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::vec::Vec;
 
-use failure::Error;
+use failure::{Error, Fail};
 
 use nom::*;
 use nom::types::CompleteByteSlice;

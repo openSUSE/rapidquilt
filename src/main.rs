@@ -4,8 +4,6 @@
 #[cfg(feature = "bencher")]
 extern crate test;
 
-#[macro_use] extern crate failure;
-
 mod apply;
 mod arena;
 mod line_interner;
@@ -23,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use colored;
-use failure::Error;
+use failure::{Error, format_err};
 use getopts::Options;
 
 use crate::apply::{
