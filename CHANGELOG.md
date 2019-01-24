@@ -1,5 +1,8 @@
 # Unreleased changes
 
+* Added --verbose and --quiet parameters
+* More changes for better compatibility with patch
+
 # Version 0.5.0
 
 * Support for patches that change file permissions

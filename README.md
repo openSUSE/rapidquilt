@@ -33,6 +33,11 @@ only the `push` command. The goal is to be very fast.
 
             --stats         print statistics in the end
 
+        -q, --quiet         only print errors
+
+        -v, --verbose       print extra information. Repeat for more verbosity. It
+                            may affect performance.
+
             --mmap          mmap files instead of reading into buffers. This may
                             reduce memory usage and improve performance in some
                             cases. Warning: You must ensure that no external

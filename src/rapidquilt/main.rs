@@ -25,7 +25,8 @@ use crate::apply::{
     ApplyConfigBackupCount,
     ApplyConfigDoBackups,
     apply_patches,
-    apply_patches_parallel
+    apply_patches_parallel,
+    Verbosity,
 };
 use crate::arena::{Arena, FileArena};
 
@@ -70,7 +71,8 @@ fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
                             do_backups: ApplyConfigDoBackups,
                             backup_count: ApplyConfigBackupCount,
                             dry_run: bool,
-                            stats: bool)
+                            stats: bool,
+                            verbosity: Verbosity)
                             -> Result<bool, Error>
 {
     let patch_filenames = read_series_file("series").unwrap();
@@ -113,6 +115,7 @@ fn cmd_push<P: AsRef<Path>>(arena: &dyn Arena,
         backup_count,
         dry_run,
         stats,
+        verbosity,
     };
 
     let threads = match env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
@@ -171,6 +174,8 @@ fn main() {
     opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
     opts.optflag("", "dry-run", "do not save any changes");
     opts.optflag("", "stats", "print statistics in the end");
+    opts.optflag("q", "quiet", "only print errors");
+    opts.optflagmulti("v", "verbose", "print extra information. Repeat for more verbosity. It may affect performance.");
 
     #[cfg(unix)]
     opts.optflag("", "mmap", "mmap files instead of reading into buffers. This may reduce memory usage and improve \
@@ -234,6 +239,17 @@ fn main() {
     let dry_run = matches.opt_present("dry-run");
     let stats = matches.opt_present("stats");
 
+    // "--verbose" beats "--quiet"
+    let verbosity = if matches.opt_count("verbose") >= 2 {
+        Verbosity::ExtraVerbose
+    } else if matches.opt_count("verbose") == 1 {
+        Verbosity::Verbose
+    } else if matches.opt_present("quiet") {
+        Verbosity::Quiet
+    } else {
+        Verbosity::Normal
+    };
+
     let arena = build_arena(matches.opt_present("mmap"));
 
     let mut goal = if matches.opt_present("a") {
@@ -249,7 +265,7 @@ fn main() {
         }
     }
 
-    match cmd_push(&*arena, patches_path, goal, fuzz, 1, do_backups, backup_count, dry_run, stats) {
+    match cmd_push(&*arena, patches_path, goal, fuzz, 1, do_backups, backup_count, dry_run, stats, verbosity) {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {
                 eprintln!("{}{}", "  ".repeat(i), cause);

@@ -281,21 +281,21 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner)?;
+        rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner, config.verbosity)?;
 
-        if thread_id == 0 {
+        if config.verbosity >= Verbosity::Normal && thread_id == 0 {
             println!("Saving modified files...");
         }
 
         // Save all the files we modified
-        save_modified_files(&modified_files, &interner)?;
+        save_modified_files(&modified_files, &interner, config.verbosity)?;
 
         // Maybe save some backup files
         if config.do_backups == ApplyConfigDoBackups::Always ||
         (config.do_backups == ApplyConfigDoBackups::OnFail &&
             earliest_broken_patch_index != std::usize::MAX)
         {
-            if thread_id == 0 {
+            if config.verbosity >= Verbosity::Normal && thread_id == 0 {
                 println!("Saving quilt backup files ({})...", config.backup_count);
             }
 
@@ -310,7 +310,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index, config.verbosity)?;
         }
     }
 
@@ -327,14 +327,28 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<ApplyResult<'a>, Error> {
     let threads = rayon::current_num_threads();
 
-    println!("Applying {} patches using {} threads...", config.patch_filenames.len(), threads);
+    if config.verbosity >= Verbosity::Normal {
+        println!("Applying {} patches using {} threads...", config.patch_filenames.len(), threads);
+    }
+
+    if config.verbosity >= Verbosity::Verbose {
+        println!("Parsing patches...");
+    }
 
     // Load all patches multi-threaded using rayon's parallel iterator.
     let mut text_patches: Vec<_> = config.patch_filenames.par_iter().map(|patch_filename| -> Result<_, Error> {
+        if config.verbosity >= Verbosity::ExtraVerbose {
+            // This will fight for stdout lock. But that's expected in ExtraVerbose mode...
+            println!("Parsing patch: {:?}", patch_filename);
+        }
         let raw_patch_data = arena.load_file(&config.patches_path.join(patch_filename))?;
         let text_file_patches = parse_patch(raw_patch_data, config.strip)?;
         Ok(text_file_patches)
     }).collect();
+
+    if config.verbosity >= Verbosity::Verbose {
+        println!("Scheduling files to threads...");
+    }
 
     // Distribute the patches to queues for worker threads
     let mut filename_distributor = FilenameDistributor::<PathBuf>::new(threads, text_patches.len()); // There is typically just few amount of file-renaming patches, so lets use the total amount of patches as estimation for amount of independent filenames.
@@ -375,6 +389,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
             let thread_id = filename_to_thread_id[text_file_patch.old_filename().or(text_file_patch.new_filename()).unwrap()];
             text_file_patches_per_thread[thread_id].push((index, text_file_patch));
         }
+    }
+
+    if config.verbosity >= Verbosity::Verbose {
+        println!("Applying patches...");
     }
 
     // This is the earliest patch that was detected as broken. Note that this patch

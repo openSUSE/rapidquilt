@@ -51,10 +51,12 @@ fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), io::Err
 
 /// Save the `file` to disk. It also takes care of creating/deleting the file
 /// and containing directories.
-pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, interner: &LineInterner) -> Result<(), io::Error> {
+pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, interner: &LineInterner, verbosity: Verbosity) -> Result<(), io::Error> {
     let filename = filename.as_ref();
 
-//     println!("Saving modified file: {:?}: exited: {:?} deleted: {:?} len: {}", filename, file.existed, file.deleted, file.content.len());
+    if verbosity >= Verbosity::ExtraVerbose {
+        println!("Saving modified file: {:?}: existed: {:?} deleted: {:?} len: {}", filename, file.existed, file.deleted, file.content.len());
+    }
 
     if file.existed {
         // If the file file existed, delete it. Whether we want to overwrite it
@@ -109,11 +111,12 @@ pub fn save_modified_files<
     H: BuildHasher>
 (
     modified_files: &HashMap<PathBuf, InternedFile, H>,
-    interner: &'interner LineInterner<'arena>)
+    interner: &'interner LineInterner<'arena>,
+    verbosity: Verbosity)
     -> Result<(), Error>
 {
     for (filename, file) in modified_files {
-        save_modified_file(filename, file, &interner)
+        save_modified_file(filename, file, &interner, verbosity)
             .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.clone() })?;
     }
 
@@ -121,12 +124,20 @@ pub fn save_modified_files<
 }
 
 /// Write the `original_file` as a quilt backup file.
-pub fn save_backup_file(patch_filename: &Path, filename: &Path, original_file: &InternedFile, interner: &LineInterner) -> Result<(), Error> {
+pub fn save_backup_file(patch_filename: &Path,
+                        filename: &Path,
+                        original_file: &InternedFile,
+                        interner: &LineInterner,
+                        verbosity: Verbosity)
+                        -> Result<(), Error>
+{
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
     path.push(&filename); // Note that this may add multiple directories plus filename
 
-//     println!("Saving backup file {:?}", path);
+    if verbosity >= Verbosity::ExtraVerbose {
+        println!("Saving backup file {:?}", path);
+    }
 
     (|| -> Result<(), io::Error> { // TODO: Replace me with try-block when stable.
         let path_parent = &path.parent().unwrap(); // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
@@ -378,7 +389,8 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus>,
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     rejected_patch_index: usize,
-    interner: &LineInterner)
+    interner: &LineInterner,
+    verbosity: Verbosity)
     -> Result<(), Error>
 {
     while let Some(applied_patch) = applied_patches.last() {
@@ -391,7 +403,10 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
 
         if applied_patch.report.failed() {
             let rej_filename = make_rej_filename(&applied_patch.target_filename);
-            println!("Saving rejects to {:?}", rej_filename);
+
+            if verbosity >= Verbosity::Normal {
+                println!("Saving rejects to {:?}", rej_filename);
+            }
 
             File::create(&rej_filename).and_then(|mut output| {
                 applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)
@@ -410,7 +425,8 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus>,
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     interner: &LineInterner,
-    down_to_index: usize)
+    down_to_index: usize,
+    verbosity: Verbosity)
     -> Result<(), Error>
 {
     for applied_patch in applied_patches.iter().rev() {
@@ -420,12 +436,12 @@ pub fn rollback_and_save_backup_files<H: BuildHasher>(
 
         let file = rollback_applied_patch(applied_patch, modified_files);
 
-        save_backup_file(&applied_patch.patch_filename, &applied_patch.target_filename, &file, &interner)?;
+        save_backup_file(&applied_patch.patch_filename, &applied_patch.target_filename, &file, &interner, verbosity)?;
 
         if let Some(new_filename) = applied_patch.file_patch.new_filename() {
             // If it was a rename, we also have to backup the new file (it will be empty file).
             let new_file = modified_files.get(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-            save_backup_file(applied_patch.patch_filename, new_filename, &new_file, &interner)?;
+            save_backup_file(applied_patch.patch_filename, new_filename, &new_file, &interner, verbosity)?;
         }
     }
 

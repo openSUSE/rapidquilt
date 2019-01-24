@@ -34,10 +34,14 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
 
     let mut failure_analysis = Vec::<u8>::new();
 
-    println!("Applying {} patches single-threaded...", config.patch_filenames.len());
+    if config.verbosity >= Verbosity::Normal {
+        println!("Applying {} patches single-threaded...", config.patch_filenames.len());
+    }
 
     for (index, patch_filename) in config.patch_filenames.iter().enumerate() {
-//         println!("Patch: {:?}", patch_filename);
+        if config.verbosity >= Verbosity::Verbose {
+            println!("Patch: {:?}", patch_filename);
+        }
 
         final_patch = index;
 
@@ -67,7 +71,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
             analyze_patch_failure(index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
             if !config.dry_run {
-                rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner)?;
+                rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner, config.verbosity)?;
             }
 
             break;
@@ -75,22 +79,26 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
     }
 
     if !config.dry_run {
-        println!("Saving modified files...");
+        if config.verbosity >= Verbosity::Normal {
+            println!("Saving modified files...");
+        }
 
-        save_modified_files(&modified_files, &interner)?;
+        save_modified_files(&modified_files, &interner, config.verbosity)?;
 
         if config.do_backups == ApplyConfigDoBackups::Always ||
           (config.do_backups == ApplyConfigDoBackups::OnFail &&
             final_patch != config.patch_filenames.len() - 1)
         {
-            println!("Saving quilt backup files ({})...", config.backup_count);
+            if config.verbosity >= Verbosity::Normal {
+                println!("Saving quilt backup files ({})...", config.backup_count);
+            }
 
             let down_to_index = match config.backup_count {
                 ApplyConfigBackupCount::All => 0,
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index)?;
+            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index, config.verbosity)?;
         }
     }
 

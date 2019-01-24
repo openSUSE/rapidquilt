@@ -37,6 +37,15 @@ impl fmt::Display for ApplyConfigBackupCount {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Verbosity {
+    // Ordered from most silent to most verbose
+    Quiet,
+    Normal,
+    Verbose,
+    ExtraVerbose,
+}
+
 #[derive(Debug)]
 pub struct ApplyConfig<'a> {
     pub patch_filenames: &'a [PathBuf],
@@ -47,6 +56,7 @@ pub struct ApplyConfig<'a> {
     pub backup_count: ApplyConfigBackupCount,
     pub dry_run: bool,
     pub stats: bool,
+    pub verbosity: Verbosity,
 }
 
 #[derive(Debug)]
