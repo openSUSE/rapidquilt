@@ -1,7 +1,10 @@
 # Unreleased changes
 
-* Added --verbose and --quiet parameters
+# Version 0.5.1
+
+* Fix detection of misordered hunks
 * More changes for better compatibility with patch
+* Added --verbose, --quiet and --version parameters
 
 # Version 0.5.0
 
