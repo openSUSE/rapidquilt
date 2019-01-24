@@ -283,7 +283,7 @@ fn apply_modify<'a, H: HunkView<'a, LineId>>(
         // In rollback mode, take it from the report
         ApplyMode::Rollback(report) => match report.hunk_reports()[my_index] {
             // If the hunk was applied at specific line, choose that line now.
-            HunkApplyReport::Applied { line, .. } => line,
+            HunkApplyReport::Applied { line, .. } => line + modification_offset,
 
             // Nothing else should get here
             _ => unreachable!(),
@@ -743,7 +743,7 @@ impl<'a> InternedFilePatch<'a> {
 
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
-        let mut for_each_hunk = |i, hunk: &Hunk<LineId>| {
+        for (i, hunk) in self.hunks.iter().enumerate() {
             let mut hunk_report = HunkApplyReport::Skipped;
 
             // Decide which fuzz levels we should try
@@ -795,19 +795,7 @@ impl<'a> InternedFilePatch<'a> {
             }
 
             report.push_hunk_report(hunk_report);
-        };
-
-        // TODO: Nicer way to conditionally iterate forwards or backwards?
-        match direction {
-            PatchDirection::Forward =>
-                for (i, hunk) in self.hunks.iter().enumerate() {
-                    for_each_hunk(i, hunk);
-                }
-            PatchDirection::Revert =>
-                for (i, hunk) in self.hunks.iter().enumerate().rev() {
-                    for_each_hunk(i, hunk);
-                }
-        };
+        }
 
         report
     }
