@@ -810,10 +810,10 @@ struct FilePatchMetadata {
 impl FilePatchMetadata {
     pub fn recognize_kind(&self, hunks: &[TextHunk]) -> FilePatchKind {
         // First check the filenames
-        if self.old_filename.as_ref().unwrap() == &Filename::DevNull {
+        if self.old_filename.as_ref() == Some(&Filename::DevNull) {
             return FilePatchKind::Create;
         }
-        if self.new_filename.as_ref().unwrap() == &Filename::DevNull {
+        if self.new_filename.as_ref() == Some(&Filename::DevNull) {
             return FilePatchKind::Delete;
         }
 
