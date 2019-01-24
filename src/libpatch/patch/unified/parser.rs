@@ -807,6 +807,10 @@ struct FilePatchMetadata {
     new_permissions: Option<Permissions>,
 }
 
+enum FilePatchMetadataBuildError {
+    MissingFilenames(FilePatchMetadata),
+}
+
 impl FilePatchMetadata {
     pub fn recognize_kind(&self, hunks: &[TextHunk]) -> FilePatchKind {
         // First check the filenames
@@ -841,32 +845,38 @@ impl FilePatchMetadata {
         FilePatchKind::Modify
     }
 
-    /// Do we have enough metadata to build hunk-less filepatch?
-    pub fn can_build_hunkless_filepatch(&self) -> bool {
-        // Renaming?
-        if self.old_filename.is_some() && self.new_filename.is_some() &&
-           self.rename_from && self.rename_to
-        {
-            return true;
-        }
-
-        // Mode changing?
-        if (self.old_filename.is_some() || self.new_filename.is_some()) &&
-            self.new_permissions.is_some() // Only the new one is needed for patch
-        {
-            return true;
-        }
-
-        false
-    }
-
-    pub fn build_filepatch<'a>(self, hunks: HunksVec<'a, &'a [u8]>) -> Option<TextFilePatch<'a>> {
+    /// This function will return `None` if some necessary metadata is missing
+    pub fn build_filepatch<'a>(self, hunks: HunksVec<'a, &'a [u8]>) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError> {
         let mut builder = FilePatchBuilder::<&[u8]>::default();
 
         // Set the kind
         builder.kind(self.recognize_kind(&hunks));
 
         // Set the filenames
+        let has_old_filename = match self.old_filename {
+            Some(Filename::Real(_)) => true,
+            _ => false,
+        };
+        let has_new_filename = match self.new_filename {
+            Some(Filename::Real(_)) => true,
+            _ => false,
+        };
+
+        if self.rename_from && self.rename_to {
+            // If it is renaming patch, we must have both filenames
+            if !has_old_filename || !has_new_filename {
+                return Err(FilePatchMetadataBuildError::MissingFilenames(self));
+            }
+
+            builder.is_rename(true);
+        } else {
+            // If it is non-renaming patch, we must have at least one filename
+            if !has_old_filename && !has_new_filename {
+                return Err(FilePatchMetadataBuildError::MissingFilenames(self));
+            }
+        }
+
+        // Move out the filenames
         let old_filename = match self.old_filename {
             Some(Filename::Real(old_filename)) => Some(old_filename),
             _ => None,
@@ -875,20 +885,6 @@ impl FilePatchMetadata {
             Some(Filename::Real(new_filename)) => Some(new_filename),
             _ => None,
         };
-
-        if self.rename_from && self.rename_to {
-            // If it is renaming patch, we must have both filenames
-            if old_filename.is_none() || new_filename.is_none() {
-                return None;
-            }
-
-            builder.is_rename(true);
-        } else {
-            // If it is non-renaming patch, we must have at least one filename
-            if old_filename.is_none() && new_filename.is_none() {
-                return None;
-            }
-        }
 
         builder.old_filename(old_filename);
         builder.new_filename(new_filename);
@@ -901,10 +897,11 @@ impl FilePatchMetadata {
         builder.hunks(hunks);
 
         // Build
-        Some(builder.build().unwrap()) // NOTE(unwrap): It would be our bug if we didn't provide all necessary values.
+        Ok(builder.build().unwrap()) // NOTE(unwrap): It would be our bug if we didn't provide all necessary values.
     }
 
-    pub fn build_hunkless_filepatch<'a>(self) -> Option<TextFilePatch<'a>> {
+    /// This function will return `None` if some necessary metadata is missing
+    pub fn build_hunkless_filepatch<'a>(self) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError> {
         self.build_filepatch(HunksVec::new())
     }
 }
@@ -944,28 +941,32 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByte
                 // We reached end of file or separator and have no hunks. It
                 // could be still valid patch that only renames a file or
                 // changes permissions... So lets check for that.
-                if metadata.can_build_hunkless_filepatch() {
-                    // Note that in this case we don't set `input = input_`, because we don't want to consume the GitDiffSeparator
+                match metadata.build_hunkless_filepatch() {
+                    Ok(filepatch) => {
+                        // It was possible to have hunkless filepatch, great!
 
-                    let mut tmp_metadata = FilePatchMetadata::default();
-                    std::mem::swap(&mut tmp_metadata, &mut metadata);
+                        // Note that in this case we don't set `input = input_`, because we don't want to consume the GitDiffSeparator
 
-                    return Ok((input, tmp_metadata.build_hunkless_filepatch().unwrap())); // NOTE(unwrap): It must succeed since we checked with can_build_hunkless_filepatch.
-                } else {
-                    // Otherwise it just means that everything that may have
-                    // looked like metadata until now was just garbage.
-
-                    // Return if we are at the end of patch
-                    if patch_line == EndOfPatch {
-                        // Note: This is Error, not Failure, because it could be just because there are no more filepatches at the end of file. Not a fatal error.
-                        return Err(nom::Err::Error(nom::Context::Code(input, nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32))));
+                        return Ok((input, filepatch));
                     }
+                    Err(FilePatchMetadataBuildError::MissingFilenames(incomplete_metadata)) => {
+                        // Otherwise it just means that everything that may have
+                        // looked like metadata until now was just garbage.
 
-                    // Reset metadata if it was separator
-                    if let Metadata(MetadataLine::GitDiffSeparator(old_filename, new_filename)) = patch_line {
-                        metadata = FilePatchMetadata::default();
-                        metadata.old_filename = Some(old_filename);
-                        metadata.new_filename = Some(new_filename);
+                        // Return if we are at the end of patch
+                        if patch_line == EndOfPatch {
+                            // Note: This is Error, not Failure, because it could be just because there are no more filepatches at the end of file. Not a fatal error.
+                            return Err(nom::Err::Error(nom::Context::Code(input, nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32))));
+                        }
+
+                        // Reset metadata if it was separator
+                        if let Metadata(MetadataLine::GitDiffSeparator(old_filename, new_filename)) = patch_line {
+                            metadata = FilePatchMetadata::default();
+                            metadata.old_filename = Some(old_filename);
+                            metadata.new_filename = Some(new_filename);
+                        } else {
+                            metadata = incomplete_metadata;
+                        }
                     }
                 }
             }
@@ -1010,8 +1011,11 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByte
     input = input_;
 
     // We can make our filepatch
-    let filepatch = metadata.build_filepatch(hunks).ok_or_else(
-        || nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::MissingFilenameForHunk as u32)))
+    let filepatch = metadata.build_filepatch(hunks).map_err(
+        |error| match error {
+             FilePatchMetadataBuildError::MissingFilenames(_) =>
+                nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::MissingFilenameForHunk as u32)))
+        }
     )?;
 
     Ok((input, filepatch))
