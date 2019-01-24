@@ -637,6 +637,10 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
 
         match line_type {
             HunkLineType::Add => {
+                if header.add_count == 0 {
+                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                }
+
                 hunk.add.content.push(line);
                 header.add_count -= 1;
 
@@ -644,6 +648,10 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
                 hunk.context_after = 0;
             }
             HunkLineType::Remove => {
+                if header.remove_count == 0 {
+                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                }
+
                 hunk.remove.content.push(line);
                 header.remove_count -= 1;
 
@@ -651,6 +659,10 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
                 hunk.context_after = 0;
             }
             HunkLineType::Context => {
+                if header.remove_count == 0 || header.add_count == 0 {
+                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                }
+
                 hunk.add.content.push(line);
                 hunk.remove.content.push(line);
                 header.add_count -= 1;
@@ -714,12 +726,22 @@ fn test_parse_hunk() {
     assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
 
 
-    // Bad line in hunk
+    // Bad line in hunk (nonsense)
     let hunk_txt = br#"@@ -100,6 +110,7 @@ place
  aaa
  bbb
  ccc
 xxxxx
+"#;
+    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
+
+
+    // Bad line in hunk (unexpected '+', '-' or ' ')
+    let hunk_txt = br#"@@ -100,3 +110,2 @@ place
+ aaa
+-bbb
+-ccc
+ ddd
 "#;
     assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
 }
