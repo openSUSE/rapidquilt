@@ -645,7 +645,11 @@ impl<'a> InternedFilePatch<'a> {
         assert!(self.hunks.len() == apply_report.hunk_reports().len());
 
         let result = self.apply_internal(interned_file, direction.opposite(), 0, ApplyMode::Rollback(apply_report));
-        assert!(result.ok()); // Rollback must apply cleanly. If not, we have a bug somewhere.
+
+        // Rollback must apply cleanly. If not, we have a bug somewhere.
+        if result.failed() {
+            panic!("Rapidquilt attempted to rollback a patch and that failed. This is a bug. Failure report: {:?}", result);
+        }
     }
 
     /// Internal function that does the function of both `apply` and `rollback`.
