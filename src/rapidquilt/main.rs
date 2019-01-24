@@ -91,8 +91,10 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     let fuzz = matches.opt_str("fuzz").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
 
     if fuzz > 0 {
-        println!("--fuzz > 0 is not working correctly right now, can not proceed.");
-        process::exit(1);
+        println!(concat!("{}: You are using --fuzz {}. The fuzzy patching algorithm in rapidquilt follows the ",
+                         "same ideas as the one in patch, but it does not replicate all its quirks and corner cases. ",
+                         "You may get different (but still sane) results compared to patch."),
+                "WARNING".bright_yellow(), fuzz);
     }
 
     let dry_run = matches.opt_present("dry-run");
