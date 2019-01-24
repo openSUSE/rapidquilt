@@ -182,8 +182,8 @@ named!(parse_filename_quoted<CompleteByteSlice, Vec<u8>>,
               | tag!(c!(b'\"')) => { |_| vec![b'\"'] }
               | do_parse!(
                   digit_0: one_of!(s!(b"0123")) >>
-                  digit_1: one_of!(s!(b"0123456789")) >>
-                  digit_2: one_of!(s!(b"0123456789")) >>
+                  digit_1: one_of!(s!(b"01234567")) >>
+                  digit_2: one_of!(s!(b"01234567")) >>
 
                   (((digit_0 as u8 - b'0') << 6) + ((digit_1 as u8 - b'0') << 3) + (digit_2 as u8 - b'0'))
                 ) => { |c| vec![c] }
