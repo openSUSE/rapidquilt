@@ -53,6 +53,7 @@ only the `push` command. The goal is to be very fast.
 * only the `push` command
 * only patches in unified format
 * date in patch files is ignored
+* endlines must be the same in patch and patched file (e.g. both "\n" or both "\r\n")
 * ... probably more that I don't know about
 
 ## Screenshot
