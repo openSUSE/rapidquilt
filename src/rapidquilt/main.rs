@@ -35,9 +35,14 @@ use crate::arena::MmapArena;
 
 
 
-fn usage(opts: &Options) {
+fn usage(opts: &Options) -> ! {
     println!("{}", opts.usage("Usage: rapidquilt push [<options>] [num|patch]"));
     process::exit(1);
+}
+
+fn version() -> ! {
+    println!(concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")));
+    process::exit(0);
 }
 
 fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<PathBuf>, Error> {
@@ -183,17 +188,18 @@ fn main() {
                               files while rapidquilt is running, otherwise you may get incorrect results or even crash.");
 
     opts.optflag("h", "help", "print this help menu");
+    opts.optflag("", "version", "print version");
 
-    if args.len() < 2 || args[1] != "push" {
-        usage(&opts);
-        process::exit(1);
+
+    let matches = opts.parse(&args[1..]).unwrap();
+    let mut free_args = matches.free.iter();
+
+    if matches.opt_present("version") {
+        version();
     }
 
-    let matches = opts.parse(&args[2..]).unwrap();
-
-    if matches.opt_present("help") {
+    if free_args.next() != Some(&"push".to_string()) || matches.opt_present("help") {
         usage(&opts);
-        process::exit(1);
     }
 
     match matches.opt_str("color") {
@@ -257,7 +263,7 @@ fn main() {
     } else {
         PushGoal::Count(1)
     };
-    if let Some(first_free_arg) = matches.free.first() {
+    if let Some(first_free_arg) = free_args.next() {
         if let Ok(number) = first_free_arg.parse::<usize>() {
             goal = PushGoal::Count(number);
         } else {
