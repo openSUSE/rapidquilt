@@ -14,6 +14,7 @@ pub use self::sequential::apply_patches;
 pub use self::parallel::apply_patches as apply_patches_parallel;
 
 
+
 #[derive(Debug, PartialEq)]
 pub enum ApplyConfigDoBackups {
     Always,

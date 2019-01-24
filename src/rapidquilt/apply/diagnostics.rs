@@ -12,11 +12,12 @@ use std::path::{Path, PathBuf};
 
 use colored::*;
 
+use libpatch::interned_file::InternedFile;
+use libpatch::line_interner::LineInterner;
+use libpatch::patch::{HunkApplyFailureReason, HunkApplyReport, PatchDirection};
+use libpatch::patch::unified::writer::UnifiedPatchHunkWriter;
+
 use crate::apply::common::*;
-use crate::interned_file::InternedFile;
-use crate::line_interner::LineInterner;
-use crate::patch::{HunkApplyFailureReason, HunkApplyReport, PatchDirection};
-use crate::patch::unified::writer::UnifiedPatchHunkWriter;
 
 
 /// Try if the patch would apply with some fuzz. It doesn't do any permanent changes.

@@ -1387,7 +1387,7 @@ mod tests {
 
     #[bench]
     fn bench_parse_big_patch(b: &mut Bencher) {
-        let data = include_bytes!("../../../testdata/big.patch");
+        let data = include_bytes!("../../../../testdata/big.patch");
 
         b.iter(|| {
             black_box(parse_patch(data, 1).unwrap());

@@ -60,10 +60,11 @@ use crate::apply::*;
 use crate::apply::common::*;
 use crate::apply::diagnostics::*;
 use crate::arena::Arena;
-use crate::patch::{PatchDirection, TextFilePatch};
-use crate::patch::unified::parser::parse_patch;
-use crate::line_interner::LineInterner;
-use crate::interned_file::InternedFile;
+
+use libpatch::patch::{PatchDirection, TextFilePatch};
+use libpatch::patch::unified::parser::parse_patch;
+use libpatch::line_interner::LineInterner;
+use libpatch::interned_file::InternedFile;
 
 
 /// This is tool that distributes filenames among threads. Currently it doesn't

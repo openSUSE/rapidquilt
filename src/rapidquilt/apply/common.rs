@@ -11,12 +11,13 @@ use std::path::{Path, PathBuf};
 
 use failure::{Error, ResultExt};
 
+use libpatch::interned_file::InternedFile;
+use libpatch::line_interner::LineInterner;
+use libpatch::patch::{FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
+use libpatch::patch::unified::writer::UnifiedPatchRejWriter;
+
 use crate::apply::*;
-use crate::interned_file::InternedFile;
 use crate::arena::Arena;
-use crate::line_interner::LineInterner;
-use crate::patch::{FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
-use crate::patch::unified::writer::UnifiedPatchRejWriter;
 
 
 /// Build a ".rej" filename for given path.

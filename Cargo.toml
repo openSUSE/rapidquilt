@@ -7,6 +7,14 @@ edition = '2018'
 [profile.release]
 lto = true
 
+[lib]
+name = "libpatch"
+path = "src/libpatch/lib.rs"
+
+[[bin]]
+name = "rapidquilt"
+path = "src/rapidquilt/main.rs"
+
 [dependencies]
 colored = "1"
 derive_builder = "0.7"

@@ -6,10 +6,6 @@ extern crate test;
 
 mod apply;
 mod arena;
-mod line_interner;
-mod interned_file;
-mod patch;
-mod util;
 
 #[cfg(test)]
 mod tests;
