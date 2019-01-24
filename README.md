@@ -31,6 +31,11 @@ only the `push` command. The goal is to be very fast.
 
             --dry-run       do not save any changes
 
+        -A, --analyze ANALYSIS
+                            run additional analysis while patching. You can use
+                            this option multiple times to run multiple analyses at
+                            once. Available analyses: multiapply
+
             --stats         print statistics in the end
 
         -q, --quiet         only print errors

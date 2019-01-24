@@ -6,8 +6,11 @@ use crate::patch::*;
 use crate::patch::unified::*;
 
 
-pub trait UnifiedPatchHunkWriter {
+pub trait UnifiedPatchHunkHeaderWriter {
     fn write_header_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error>;
+}
+
+pub trait UnifiedPatchHunkWriter: UnifiedPatchHunkHeaderWriter {
     fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error>;
 }
 
@@ -19,7 +22,7 @@ pub trait UnifiedPatchRejWriter {
     fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error>;
 }
 
-impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
+impl<'a, Line> UnifiedPatchHunkHeaderWriter for Hunk<'a, Line> {
     fn write_header_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
         let add_count = self.add.content.len();
         let remove_count = self.remove.content.len();
@@ -44,7 +47,9 @@ impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
 
         Ok(())
     }
+}
 
+impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
     fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
         self.write_header_to(writer)?;
 

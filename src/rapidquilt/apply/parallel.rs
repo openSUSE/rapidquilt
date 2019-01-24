@@ -61,7 +61,8 @@ use crate::apply::common::*;
 use crate::apply::diagnostics::*;
 use crate::arena::Arena;
 
-use libpatch::patch::{PatchDirection, TextFilePatch};
+use libpatch::analysis::{AnalysisSet, Note};
+use libpatch::patch::{InternedFilePatch, PatchDirection, TextFilePatch};
 use libpatch::patch::unified::parser::parse_patch;
 use libpatch::line_interner::LineInterner;
 use libpatch::interned_file::InternedFile;
@@ -166,6 +167,7 @@ struct WorkerReport {
 /// `receiver`: Receiving part for `Message`s.
 /// `broadcast_message`: Function that sends given `Message` to all threads (including self).
 /// `earliest_broken_patch_index`: Atomic variable for sharing the index of the earlier patch that failed to apply.
+/// `analyses`: Set of analyses to run.
 fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     config: &'a ApplyConfig,
     arena: &'a dyn Arena,
@@ -174,7 +176,8 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     thread_file_patches: Vec<(usize, TextFilePatch<'a>)>,
     receiver: &mpsc::Receiver<Message>,
     broadcast_message: BroadcastFn,
-    earliest_broken_patch_index: &AtomicUsize)
+    earliest_broken_patch_index: &AtomicUsize,
+    analyses: &AnalysisSet)
     -> Result<WorkerReport, Error>
 {
     let mut interner = LineInterner::new();
@@ -189,6 +192,13 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
             break;
         }
 
+        let fn_analysis_note = |note: &Note, file_patch: &InternedFilePatch| {
+            // We ignore any error here because currently we don't have a way to propagate it out
+            // of this callback. It's not so tragic, error here would most likely be IO error from
+            // writing to terminal.
+            let _ = print_analysis_note(&config.patch_filenames[index], note, file_patch);
+        };
+
         // Try to apply this one `FilePatch`
         match apply_one_file_patch(config,
                                    index,
@@ -196,7 +206,9 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                                    &mut applied_patches,
                                    &mut modified_files,
                                    arena,
-                                   &mut interner) {
+                                   &mut interner,
+                                   &analyses,
+                                   &fn_analysis_note) {
             Ok(false) => {
                 // Patch failed to apply...
 
@@ -324,7 +336,9 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 }
 
 /// Apply all patches from the `config` in parallel
-pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<ApplyResult<'a>, Error> {
+pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
+    -> Result<ApplyResult<'a>, Error>
+{
     let threads = rayon::current_num_threads();
 
     if config.verbosity >= Verbosity::Normal {
@@ -435,7 +449,8 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
                     thread_file_patches,
                     &receiver,
                     broadcast_message,
-                    earliest_broken_patch_index);
+                    earliest_broken_patch_index,
+                    analyses);
 
                 thread_results_ref.lock().unwrap().push(result); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
             });

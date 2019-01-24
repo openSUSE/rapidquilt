@@ -1,5 +1,8 @@
 # Unreleased changes
 
+* Support for running analyses while patching.
+* Added MultiApply analysis that warns when hunk could apply to more than one location.
+
 # Version 0.5.1
 
 * Fix detection of misordered hunks

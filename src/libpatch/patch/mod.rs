@@ -38,6 +38,7 @@ use std::path::{Path, PathBuf};
 use derive_builder::Builder;
 use smallvec::SmallVec;
 
+use crate::analysis::{Analysis, AnalysisSet, Note, fn_analysis_note_noop};
 use crate::line_interner::{LineId, LineInterner};
 use crate::interned_file::InternedFile;
 use crate::util::Searcher;
@@ -420,7 +421,7 @@ pub enum HunkApplyFailureReason {
 }
 
 /// The result of applying a `Hunk`.
-#[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Debug)]
 pub enum HunkApplyReport {
     /// It was applied on given line, with given offset.
     Applied {
@@ -498,10 +499,13 @@ impl FilePatchApplyReport {
 
     /// Add a hunk report
     fn push_hunk_report(&mut self, hunk_report: HunkApplyReport) {
-        self.hunk_reports.push(hunk_report);
-        if let HunkApplyReport::Failed(..) = hunk_report {
-            self.any_failed = true;
+        match hunk_report {
+            HunkApplyReport::Failed(..) => {
+                self.any_failed = true;
+            }
+            _ => {}
         }
+        self.hunk_reports.push(hunk_report);
     }
 
     /// Did the applying went ok? All hunks succeeded?
@@ -627,16 +631,28 @@ enum ApplyMode<'a> {
 
 impl<'a> InternedFilePatch<'a> {
     /// Apply (or revert - based on `direction`) this patch to the `interned_file` using the given `fuzz`.
-    pub fn apply(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
-        self.apply_internal(interned_file, direction, fuzz, ApplyMode::Normal)
+    pub fn apply(&self,
+                 interned_file: &mut InternedFile,
+                 direction: PatchDirection,
+                 fuzz: usize,
+                 analyses: &AnalysisSet,
+                 fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+                 -> FilePatchApplyReport
+    {
+        self.apply_internal(interned_file, direction, fuzz, ApplyMode::Normal, analyses, fn_analysis_note)
     }
 
     /// Rollback the application (or the revertion - based on direction) of this patch from the `interned_file`
     /// using the information from the `apply_report`.
-    pub fn rollback(&self, interned_file: &mut InternedFile, direction: PatchDirection, apply_report: &FilePatchApplyReport) {
+    pub fn rollback(&self,
+                    interned_file: &mut InternedFile,
+                    direction: PatchDirection,
+                    apply_report: &FilePatchApplyReport)
+    {
         assert!(self.hunks.len() == apply_report.hunk_reports().len());
 
-        let result = self.apply_internal(interned_file, direction.opposite(), 0, ApplyMode::Rollback(apply_report));
+        let result = self.apply_internal(interned_file, direction.opposite(), 0, ApplyMode::Rollback(apply_report),
+                                         &AnalysisSet::default(), &fn_analysis_note_noop);
 
         // Rollback must apply cleanly. If not, we have a bug somewhere.
         if result.failed() {
@@ -645,11 +661,19 @@ impl<'a> InternedFilePatch<'a> {
     }
 
     /// Internal function that does the function of both `apply` and `rollback`.
-    fn apply_internal(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
+    fn apply_internal(&self,
+                      interned_file: &mut InternedFile,
+                      direction: PatchDirection,
+                      fuzz: usize,
+                      apply_mode: ApplyMode,
+                      analyses: &AnalysisSet,
+                      fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+                      -> FilePatchApplyReport
+    {
         // Call the appropriate specialized function
         let mut report = match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
-                self.apply_modify(interned_file, direction, fuzz, apply_mode),
+                self.apply_modify(interned_file, direction, fuzz, apply_mode, analyses, fn_analysis_note),
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
@@ -718,7 +742,15 @@ impl<'a> InternedFilePatch<'a> {
     }
 
     /// Apply this `FilePatchKind::Modify` patch on the file.
-    fn apply_modify<'me>(&'me self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize, apply_mode: ApplyMode) -> FilePatchApplyReport {
+    fn apply_modify(&self,
+                    interned_file: &mut InternedFile,
+                    direction: PatchDirection,
+                    fuzz: usize,
+                    apply_mode: ApplyMode,
+                    analyses: &AnalysisSet,
+                    fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+                    -> FilePatchApplyReport
+    {
         let mut report = FilePatchApplyReport::new_with_capacity(fuzz, self.hunks.len());
 
         let mut last_hunk_offset = 0isize;
@@ -778,6 +810,8 @@ impl<'a> InternedFilePatch<'a> {
             report.push_hunk_report(hunk_report);
         }
 
+        analyses.before_modifications(interned_file, self, direction, &report, fn_analysis_note);
+
         // Now apply all changes on the file.
         // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
         //       splices is that they move the tail of the file multiple times. Alternative is to
@@ -798,6 +832,8 @@ impl<'a> InternedFilePatch<'a> {
                 }
             }
         }
+
+        analyses.after_modifications(interned_file, self, direction, &report, fn_analysis_note);
 
         report
     }

@@ -4,6 +4,7 @@ use std::vec::Vec;
 
 use failure::Error;
 
+use crate::analysis::{AnalysisSet, fn_analysis_note_noop};
 use crate::interned_file::InternedFile;
 use crate::patch::PatchDirection;
 use crate::patch::unified::parser::parse_patch;
@@ -47,7 +48,7 @@ fn all_files() -> Result<(), Error> {
         let mut interned_file = InternedFile::new(&mut interner, &file, true);
 
         // Patch it
-        let report = file_patch.apply(&mut interned_file, PatchDirection::Forward, 0);
+        let report = file_patch.apply(&mut interned_file, PatchDirection::Forward, 0, &AnalysisSet::default(), &fn_analysis_note_noop);
 
         // Check if it failed when shouldn't or succeeded when it was expected to fail
         let error_file = path.with_extension("error");

@@ -20,6 +20,8 @@ use colored::*;
 use failure::{Error, format_err};
 use getopts::{Matches, Options};
 
+use libpatch::analysis::{AnalysisSet, MultiApplyAnalysis};
+
 use crate::apply::{
     ApplyConfig,
     ApplyConfigBackupCount,
@@ -32,7 +34,6 @@ use crate::arena::{Arena, FileArena};
 
 #[cfg(unix)]
 use crate::arena::MmapArena;
-
 
 
 fn usage(opts: &Options) -> ! {
@@ -162,10 +163,20 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         verbosity,
     };
 
+    let mut analyses = AnalysisSet::new();
+
+    for analysis_name in matches.opt_strs("analyze") {
+        if analysis_name.eq_ignore_ascii_case("multiapply") {
+            analyses.add_default::<MultiApplyAnalysis>();
+        } else {
+            return Err(format_err!("Unknown analysis \"{}\"", analysis_name));
+        }
+    }
+
     let apply_result = if rayon::current_num_threads() <= 1 {
-        apply_patches(&config, &*arena)?
+        apply_patches(&config, &*arena, &analyses)?
     } else {
-        apply_patches_parallel(&config, &*arena)?
+        apply_patches_parallel(&config, &*arena, &analyses)?
     };
 
     fs::create_dir_all(".pc")?;
@@ -207,6 +218,7 @@ fn main() {
     opts.optopt("F", "fuzz", "maximal allowed fuzz (default: 0)", "<n>");
     opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
     opts.optflag("", "dry-run", "do not save any changes");
+    opts.optmulti("A", "analyze", "run additional analysis while patching. You can use this option multiple times to run multiple analyses at once. Available analyses: multiapply", "ANALYSIS"); // TODO: Don't hardcoded the list of available analyses?
     opts.optflag("", "stats", "print statistics in the end");
     opts.optflag("q", "quiet", "only print errors");
     opts.optflagmulti("v", "verbose", "print extra information. Repeat for more verbosity. It may affect performance.");

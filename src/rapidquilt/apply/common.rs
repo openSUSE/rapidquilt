@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use failure::{Error, ResultExt};
 
+use libpatch::analysis::{AnalysisSet, Note};
 use libpatch::interned_file::InternedFile;
 use libpatch::line_interner::LineInterner;
 use libpatch::patch::{FilePatchApplyReport, InternedFilePatch, PatchDirection, TextFilePatch};
@@ -268,6 +269,8 @@ pub fn apply_one_file_patch<
     'interner,
     'config: 'applied_patches,
     'applied_patches,
+    'analyses,
+    'fn_analysis_note,
     H: BuildHasher>
 (
     config: &'config ApplyConfig,
@@ -276,7 +279,9 @@ pub fn apply_one_file_patch<
     applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     arena: &'arena dyn Arena,
-    interner: &'interner mut LineInterner<'arena>)
+    interner: &'interner mut LineInterner<'arena>,
+    analyses: &'analyses AnalysisSet,
+    fn_analysis_note: &'fn_analysis_note Fn(&dyn Note, &InternedFilePatch))
     -> Result<bool, Error>
 {
     // Intern the `FilePatch`
@@ -294,9 +299,9 @@ pub fn apply_one_file_patch<
         if *new_filename == target_filename {
             // TODO: Proper reporting!
             println!("Patch {} would rename file {} to {}, but it already has the name.",
-                config.patch_filenames[index].display(),
-                target_filename.display(),
-                new_filename.display());
+                     config.patch_filenames[index].display(),
+                     target_filename.display(),
+                     new_filename.display());
         }
 
         // Move out its content, but keep it among modified_files - we need a record on what
@@ -312,9 +317,9 @@ pub fn apply_one_file_patch<
 
             // TODO: Proper reporting!
             println!("Patch {} is renaming file {} to {}, which overwrites existing file!",
-                config.patch_filenames[index].display(),
-                target_filename.display(),
-                new_filename.display());
+                     config.patch_filenames[index].display(),
+                     target_filename.display(),
+                     new_filename.display());
 
             // Put the content back to the old file.
             let file = get_interned_file(&target_filename, modified_files, arena, interner)
@@ -337,7 +342,7 @@ pub fn apply_one_file_patch<
     };
 
     // Apply the `FilePatch` on it.
-    let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz);
+    let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz, analyses, fn_analysis_note);
 
     let report_ok = report.ok();
 

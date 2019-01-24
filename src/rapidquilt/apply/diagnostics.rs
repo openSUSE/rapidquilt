@@ -12,10 +12,11 @@ use std::path::{Path, PathBuf};
 
 use colored::*;
 
+use libpatch::analysis::{AnalysisSet, Note, NoteSeverity, fn_analysis_note_noop};
 use libpatch::interned_file::InternedFile;
 use libpatch::line_interner::LineInterner;
-use libpatch::patch::{HunkApplyFailureReason, HunkApplyReport, PatchDirection};
-use libpatch::patch::unified::writer::UnifiedPatchHunkWriter;
+use libpatch::patch::{InternedFilePatch, HunkApplyFailureReason, HunkApplyReport, PatchDirection};
+use libpatch::patch::unified::writer::UnifiedPatchHunkHeaderWriter;
 
 use crate::apply::common::*;
 
@@ -45,7 +46,7 @@ pub fn test_apply_with_fuzzes<H: BuildHasher>(
         // Make another copy for test application
         let mut file = file.clone();
 
-        let report = patch_status.file_patch.apply(&mut file, PatchDirection::Forward, fuzz);
+        let report = patch_status.file_patch.apply(&mut file, PatchDirection::Forward, fuzz, &AnalysisSet::default(), &fn_analysis_note_noop);
 
         if report.ok() {
             return Some(fuzz);
@@ -70,14 +71,14 @@ pub fn test_apply_after_reverting_other<H: BuildHasher>(
     failed_patch_status.file_patch.rollback(&mut file, PatchDirection::Forward, &failed_patch_status.report);
 
     // Revert the suspect
-    let revert_report = suspect_patch_status.file_patch.apply(&mut file, PatchDirection::Revert, suspect_patch_status.report.fuzz());
+    let revert_report = suspect_patch_status.file_patch.apply(&mut file, PatchDirection::Revert, suspect_patch_status.report.fuzz(), &AnalysisSet::default(), &fn_analysis_note_noop);
     if revert_report.failed() {
         // If we couldn't even revert the suspect, we can't test anything
         return false;
     }
 
     // Try to apply our failed patch again
-    let apply_report = failed_patch_status.file_patch.apply(&mut file, PatchDirection::Forward, failed_patch_status.report.fuzz());
+    let apply_report = failed_patch_status.file_patch.apply(&mut file, PatchDirection::Forward, failed_patch_status.report.fuzz(), &AnalysisSet::default(), &fn_analysis_note_noop);
 
     // Report whether it would apply ok now
     apply_report.ok()
@@ -209,6 +210,34 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
             writeln!(writer)?;
         }
     }
+
+    Ok(())
+}
+
+pub fn print_analysis_note(patch_filename: &Path, note: &Note, file_patch: &InternedFilePatch) -> Result<(), io::Error> {
+    let stderr = io::stderr();
+    let mut out = stderr.lock();
+
+    writeln!(out, "{} {}", "Patch".yellow(), patch_filename.display())?;
+    writeln!(out, "  {} {}", "File".yellow(), file_patch.old_filename().unwrap_or_else(|| file_patch.new_filename().unwrap()).display())?;
+
+    if let Some(hunk_index) = note.hunk() {
+        let mut buf = Vec::<u8>::new();
+        file_patch.hunks()[hunk_index].write_header_to(&mut buf)?;
+
+        writeln!(out, "    {} #{}\t{}", "Hunk".yellow(), hunk_index + 1, String::from_utf8_lossy(&buf).bright_blue())?;
+        write!(out, "      ")?;
+    } else {
+        write!(out, "    ")?;
+    }
+
+    match note.severity() {
+        NoteSeverity::Warning => write!(out, "{}: ", "warning".bright_yellow().bold())?,
+    }
+
+    note.write(&mut out)?;
+    writeln!(out)?;
+    writeln!(out)?;
 
     Ok(())
 }

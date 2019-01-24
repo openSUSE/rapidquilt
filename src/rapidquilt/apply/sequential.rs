@@ -18,12 +18,15 @@ use crate::apply::common::*;
 use crate::apply::diagnostics::*;
 use crate::arena::Arena;
 
+use libpatch::analysis::{AnalysisSet, Note};
+use libpatch::patch::InternedFilePatch;
 use libpatch::patch::unified::parser::parse_patch;
 use libpatch::line_interner::LineInterner;
 use libpatch::interned_file::InternedFile;
 
 
-pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<ApplyResult<'a>, Error> {
+pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
+    -> Result<ApplyResult<'a>, Error> {
     let mut interner = LineInterner::new();
 
     let mut applied_patches = Vec::<PatchStatus>::new();
@@ -54,13 +57,22 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena) -> Result<A
         let mut any_report_failed = false;
 
         for text_file_patch in text_file_patches {
+            let fn_analysis_note = |note: &Note, file_patch: &InternedFilePatch| {
+                // We ignore any error here because currently we don't have a way to propagate it out
+                // of this callback. It's not so tragic, error here would most likely be IO error from
+                // writing to terminal.
+                let _ = print_analysis_note(patch_filename, note, file_patch);
+            };
+
             if !apply_one_file_patch(config,
                                      index,
                                      text_file_patch,
                                      &mut applied_patches,
                                      &mut modified_files,
                                      arena,
-                                     &mut interner)?
+                                     &mut interner,
+                                     &analyses,
+                                     &fn_analysis_note)?
             {
                 any_report_failed = true;
             }

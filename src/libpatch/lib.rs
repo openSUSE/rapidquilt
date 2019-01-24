@@ -4,6 +4,7 @@
 #[cfg(feature = "bencher")]
 extern crate test;
 
+pub mod analysis;
 pub mod interned_file;
 pub mod line_interner;
 pub mod patch;
