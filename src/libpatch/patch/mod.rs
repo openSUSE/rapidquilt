@@ -82,20 +82,6 @@ pub enum HunkPosition {
     Middle,
 }
 
-pub trait HunkView<'a, Line> {
-    fn remove_content(&self) -> &[Line];
-    fn remove_target_line(&self) -> isize;
-    fn add_content(&self) -> &[Line];
-    fn add_target_line(&self) -> isize;
-
-    fn context_before(&self) -> usize;
-    fn context_after(&self) -> usize;
-
-    fn position(&self) -> HunkPosition;
-
-    fn function(&self) -> &'a [u8];
-}
-
 /// Represents single hunk from a patch
 #[derive(Clone, Debug)]
 pub struct Hunk<'a, Line> {
@@ -117,20 +103,6 @@ pub struct Hunk<'a, Line> {
     /// The string that follows the second "@@"
     /// Not necessarily a name of a function, but that's how it is called in diff.
     pub function: &'a [u8],
-}
-
-impl<'a, Line> HunkView<'a, Line> for Hunk<'a, Line> {
-    fn remove_content(&self) -> &[Line] { &self.remove.content }
-    fn remove_target_line(&self) -> isize { self.remove.target_line }
-    fn add_content(&self) -> &[Line] { &self.add.content }
-    fn add_target_line(&self) -> isize { self.add.target_line }
-
-    fn context_before(&self) -> usize { self.context_before }
-    fn context_after(&self) -> usize { self.context_after }
-
-    fn position(&self) -> HunkPosition { self.position }
-
-    fn function(&self) -> &'a [u8] { self.function }
 }
 
 impl<'a, Line> Hunk<'a, Line> {
@@ -162,53 +134,73 @@ impl<'a, Line> Hunk<'a, Line> {
         std::cmp::max(self.context_before, self.context_after)
     }
 
-    pub fn view_with_fuzz<'hunk>(&'hunk self, fuzz: usize) -> FuzzedHunk<'a, 'hunk, Line> {
-        FuzzedHunk::new(self, fuzz)
+    pub fn view<'hunk>(&'hunk self, direction: PatchDirection, fuzz: usize)
+           -> HunkView<'a, 'hunk, Line>
+    {
+        HunkView::new(self, direction, fuzz)
     }
-}
-
-#[derive(Clone, Debug)]
-pub struct FuzzedHunk<'a, 'hunk, Line> {
-    hunk: &'hunk Hunk<'a, Line>,
-
-    fuzz_before: usize,
-    fuzz_after: usize,
-}
-
-impl<'a, 'hunk, Line> FuzzedHunk<'a, 'hunk, Line> {
-    pub fn new(hunk: &'hunk Hunk<'a, Line>, fuzz: usize) -> Self {
-        let fuzz_before = std::cmp::min(hunk.context_before, fuzz);
-        let fuzz_after = std::cmp::min(hunk.context_after, fuzz);
-
-        FuzzedHunk {
-            hunk,
-            fuzz_before,
-            fuzz_after,
-        }
-    }
-}
-
-impl<'a, 'hunk, Line> HunkView<'a, Line> for FuzzedHunk<'a, 'hunk, Line> {
-    fn remove_content(&self) -> &[Line] {
-        &self.hunk.remove.content[self.fuzz_before..(self.hunk.remove.content.len() - self.fuzz_after)]
-    }
-    fn remove_target_line(&self) -> isize { self.hunk.remove.target_line }
-
-    fn add_content(&self) -> &[Line] {
-        &self.hunk.add.content[self.fuzz_before..(self.hunk.add.content.len() - self.fuzz_after)]
-    }
-    fn add_target_line(&self) -> isize { self.hunk.add.target_line }
-
-    fn context_before(&self) -> usize { self.hunk.context_before - self.fuzz_before }
-    fn context_after(&self) -> usize { self.hunk.context_after - self.fuzz_after }
-
-    fn position(&self) -> HunkPosition { self.hunk.position }
-
-    fn function(&self) -> &'a [u8] { self.hunk.function }
 }
 
 pub type TextHunk<'a> = Hunk<'a, &'a [u8]>;
 pub type InternedHunk<'a> = Hunk<'a, LineId>;
+
+#[derive(Clone, Debug)]
+pub struct HunkView<'a, 'hunk, Line> {
+    hunk: &'hunk Hunk<'a, Line>,
+
+    fuzz_before: usize,
+    fuzz_after: usize,
+
+    direction: PatchDirection,
+}
+
+impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
+    pub fn new(hunk: &'hunk Hunk<'a, Line>, direction: PatchDirection, fuzz: usize) -> Self {
+        let fuzz_before = std::cmp::min(hunk.context_before, fuzz);
+        let fuzz_after = std::cmp::min(hunk.context_after, fuzz);
+
+        HunkView {
+            hunk,
+            fuzz_before,
+            fuzz_after,
+            direction,
+        }
+    }
+
+    fn remove_part(&self) -> &HunkPart<Line> {
+        match self.direction {
+            PatchDirection::Forward => &self.hunk.remove,
+            PatchDirection::Revert => &self.hunk.add,
+        }
+    }
+
+    fn add_part(&self) -> &HunkPart<Line> {
+        match self.direction {
+            PatchDirection::Forward => &self.hunk.add,
+            PatchDirection::Revert => &self.hunk.remove,
+        }
+    }
+
+    pub fn remove_content(&self) -> &[Line] {
+        &self.remove_part().content[self.fuzz_before..(self.remove_part().content.len() - self.fuzz_after)]
+    }
+    pub fn remove_target_line(&self) -> isize { self.remove_part().target_line }
+
+    pub fn add_content(&self) -> &[Line] {
+        &self.add_part().content[self.fuzz_before..(self.add_part().content.len() - self.fuzz_after)]
+    }
+    pub fn add_target_line(&self) -> isize { self.add_part().target_line }
+
+    pub fn context_before(&self) -> usize { self.hunk.context_before - self.fuzz_before }
+    pub fn context_after(&self) -> usize { self.hunk.context_after - self.fuzz_after }
+
+    pub fn position(&self) -> HunkPosition { self.hunk.position }
+
+    pub fn function(&self) -> &'a [u8] { self.hunk.function }
+}
+
+pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
+pub type InternedHunkView<'a, 'hunk> = HunkView<'a, 'hunk, LineId>;
 
 impl<'a> TextHunk<'a> {
     /// Consumes this text-based Hunk and produces interned Hunk.
@@ -232,8 +224,6 @@ impl<'a> TextHunk<'a> {
 ///
 /// `interned_file`: the changes are done to this file
 ///
-/// `direction`: whether the patch is being applied forward (normally) or reverted
-///
 /// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
 ///
 /// `modification_offset`: compensation for the changes already done to the file
@@ -241,11 +231,10 @@ impl<'a> TextHunk<'a> {
 /// `last_hunk_offset`: the offset on which the previous hunk applied
 ///
 /// `last_frozen_line`: last line that was modified by previous hunk. We must not edit anything before that line.
-fn apply_modify<'a, H: HunkView<'a, LineId>>(
-    hunk: &H,
+fn apply_modify<'a, 'hunk>(
+    hunk: &InternedHunkView<'a, 'hunk>,
     my_index: usize,
     interned_file: &mut InternedFile,
-    direction: PatchDirection,
     apply_mode: ApplyMode,
     modification_offset: isize,
     last_hunk_offset: isize,
@@ -257,25 +246,21 @@ fn apply_modify<'a, H: HunkView<'a, LineId>>(
         return HunkApplyReport::Failed(HunkApplyFailureReason::FileWasDeleted);
     }
 
-    // Decide which part of the hunk should be added and which should be
-    // deleted depending on the direction of applying.
-    let (add_content, remove_content, remove_target_line) = match direction {
-        PatchDirection::Forward => (hunk.add_content(), hunk.remove_content(), hunk.remove_target_line()),
-        PatchDirection::Revert => (hunk.remove_content(), hunk.add_content(), hunk.add_target_line()),
-    };
+    // Shortcuts
+    let remove_content = hunk.remove_content();
 
     // Determine the target line.
     let mut target_line = match apply_mode {
         // In normal mode, pick what is in the hunk
         ApplyMode::Normal => match hunk.position() {
-            HunkPosition::Start => remove_target_line,
+            HunkPosition::Start => hunk.remove_target_line(),
 
             // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
             //             when the line numbers mentioned in the patch are incorrect, and attempts to find
             //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
             //             line number mentioned for the hunk, plus or minus any offset used in applying the
             //             previous hunk.."
-            HunkPosition::Middle => remove_target_line + last_hunk_offset + modification_offset,
+            HunkPosition::Middle => hunk.remove_target_line() + last_hunk_offset + modification_offset,
 
             HunkPosition::End => (interned_file.content.len() as isize - remove_content.len() as isize),
         },
@@ -380,14 +365,14 @@ fn apply_modify<'a, H: HunkView<'a, LineId>>(
 
     // Replace that part of the `interned_file` with the new one!
     let range = (target_line as usize)..(target_line as usize + remove_content.len());
-    interned_file.content.splice(range.clone(), add_content.to_vec());
+    interned_file.content.splice(range.clone(), hunk.add_content().to_vec());
 
     // Report success
     HunkApplyReport::Applied {
         line: target_line,
-        offset: target_line - remove_target_line - modification_offset,
+        offset: target_line - hunk.remove_target_line() - modification_offset,
         first_modified_line: target_line + hunk.context_before() as isize,
-        last_modified_line: target_line + add_content.len() as isize - hunk.context_after() as isize,
+        last_modified_line: target_line + hunk.add_content().len() as isize - hunk.context_after() as isize,
     }
 }
 
@@ -772,10 +757,10 @@ impl<'a> InternedFilePatch<'a> {
 
             for current_fuzz in possible_fuzz_levels {
                 // Attempt to apply the hunk at the right fuzz level...
-                hunk_report = match current_fuzz {
-                    0 => apply_modify(hunk,                               i, interned_file, direction, apply_mode, modification_offset, last_hunk_offset, last_frozen_line),
-                    _ => apply_modify(&hunk.view_with_fuzz(current_fuzz), i, interned_file, direction, apply_mode, modification_offset, last_hunk_offset, last_frozen_line),
-                };
+                hunk_report = apply_modify(&hunk.view(direction, current_fuzz),
+                                           i, interned_file, apply_mode,
+                                           modification_offset, last_hunk_offset,
+                                           last_frozen_line);
 
                 // If it succeeded, we are done with this hunk, do not try any
                 // more fuzz levels.
