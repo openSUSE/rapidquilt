@@ -677,15 +677,6 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
         }
     }
 
-    // man patch: "Hunks with less prefix context than suffix context (after applying fuzz) must apply at the
-    //             start of the file if their first line  number is 1. Hunks with more prefix context than suffix
-    //             context (after applying fuzz) must apply at the end of the file."
-    if hunk.context_before < hunk.context_after && header.add_line == 1 {
-        hunk.position = HunkPosition::Start;
-    } else if hunk.context_before > hunk.context_after {
-        hunk.position = HunkPosition::End;
-    }
-
     Ok((input, hunk))
 }
 

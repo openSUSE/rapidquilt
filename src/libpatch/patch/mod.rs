@@ -97,9 +97,6 @@ pub struct Hunk<'a, Line> {
     /// lines. (Useful for fuzzy patching.)
     pub context_after: usize,
 
-    /// Expected placement of this hunk
-    pub position: HunkPosition,
-
     /// The string that follows the second "@@"
     /// Not necessarily a name of a function, but that's how it is called in diff.
     pub function: &'a [u8],
@@ -121,8 +118,6 @@ impl<'a, Line> Hunk<'a, Line> {
 
             context_before: 0,
             context_after: 0,
-
-            position: HunkPosition::Middle,
 
             function,
         }
@@ -194,7 +189,21 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
     pub fn context_before(&self) -> usize { self.hunk.context_before - self.fuzz_before }
     pub fn context_after(&self) -> usize { self.hunk.context_after - self.fuzz_after }
 
-    pub fn position(&self) -> HunkPosition { self.hunk.position }
+    pub fn position(&self) -> HunkPosition {
+        // man patch: "Hunks with less prefix context than suffix context (after applying fuzz) must apply at the
+        //             start of the file if their first line  number is 1. Hunks with more prefix context than suffix
+        //             context (after applying fuzz) must apply at the end of the file."
+
+        if self.context_before() < self.context_after() && self.add_target_line() == 1 {
+            return HunkPosition::Start;
+        }
+
+        if self.context_before() > self.context_after() {
+            return HunkPosition::End;
+        }
+
+        HunkPosition::Middle
+    }
 
     pub fn function(&self) -> &'a [u8] { self.hunk.function }
 }
@@ -210,7 +219,6 @@ impl<'a> TextHunk<'a> {
             add: self.add.intern(interner),
             context_before: self.context_before,
             context_after: self.context_after,
-            position: self.position,
             function: self.function,
         }
     }
