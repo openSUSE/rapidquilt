@@ -289,7 +289,8 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
     // Analyze failure, in case there was any
     let mut failure_analysis = Vec::<u8>::new();
-    analyze_patch_failure(earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
+
+    analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any

@@ -80,7 +80,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
 
         if any_report_failed {
             // Analyze failure, in case there was any
-            analyze_patch_failure(index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
+            analyze_patch_failure(config.verbosity, index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
             if !config.dry_run {
                 rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner, config.verbosity)?;
