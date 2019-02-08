@@ -502,6 +502,17 @@ impl FilePatchApplyReport {
         }
     }
 
+    /// Create a report with single hunk that was skipped
+    fn single_hunk_skip(direction: PatchDirection, fuzz: usize) -> Self {
+        FilePatchApplyReport {
+            hunk_reports: vec![HunkApplyReport::Skipped],
+            any_failed: false,
+            direction,
+            fuzz,
+            previous_permissions: None,
+        }
+    }
+
     /// Add a hunk report
     fn push_hunk_report(&mut self, hunk_report: HunkApplyReport) {
         match hunk_report {
@@ -687,11 +698,11 @@ impl<'a> InternedFilePatch<'a> {
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
-                self.apply_create(interned_file, direction, fuzz),
+                self.apply_create(interned_file, direction, fuzz, apply_mode),
 
             (FilePatchKind::Delete, PatchDirection::Forward) |
             (FilePatchKind::Create, PatchDirection::Revert) =>
-                self.apply_delete(interned_file, direction, fuzz),
+                self.apply_delete(interned_file, direction, fuzz, apply_mode),
         };
 
         // Set new mode to the file, if there is any
@@ -710,8 +721,20 @@ impl<'a> InternedFilePatch<'a> {
     }
 
     /// Apply this `FilePatchKind::Create` patch on the file.
-    fn apply_create(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
+    fn apply_create(&self,
+                    interned_file: &mut InternedFile,
+                    direction: PatchDirection,
+                    fuzz: usize,
+                    apply_mode: ApplyMode)
+                    -> FilePatchApplyReport
+    {
         assert!(self.hunks.len() == 1);
+
+        if let ApplyMode::Rollback(report) = apply_mode {
+            if let HunkApplyReport::Failed(..) = report.hunk_reports()[0] {
+                return FilePatchApplyReport::single_hunk_skip(direction, fuzz);
+            }
+        }
 
         // If we are creating it, it must be empty.
         if !interned_file.content.is_empty() {
@@ -731,8 +754,20 @@ impl<'a> InternedFilePatch<'a> {
     }
 
     /// Apply this `FilePatchKind::Delete` patch on the file.
-    fn apply_delete(&self, interned_file: &mut InternedFile, direction: PatchDirection, fuzz: usize) -> FilePatchApplyReport {
+    fn apply_delete(&self,
+                    interned_file: &mut InternedFile,
+                    direction: PatchDirection,
+                    fuzz: usize,
+                    apply_mode: ApplyMode)
+                    -> FilePatchApplyReport
+    {
         assert!(self.hunks.len() == 1);
+
+        if let ApplyMode::Rollback(report) = apply_mode {
+            if let HunkApplyReport::Failed(..) = report.hunk_reports()[0] {
+                return FilePatchApplyReport::single_hunk_skip(direction, fuzz);
+            }
+        }
 
         let expected_content = match direction {
             PatchDirection::Forward => &self.hunks[0].remove.content,
