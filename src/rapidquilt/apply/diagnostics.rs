@@ -143,7 +143,7 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
                         };
 
                         if let Some(reason_str) = reason_str {
-                            write!(writer, "      {}", reason_str.bright_red())?;
+                            write!(writer, "{}", reason_str.bright_red())?;
                         }
                     }
 
