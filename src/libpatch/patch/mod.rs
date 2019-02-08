@@ -455,16 +455,18 @@ pub enum HunkApplyReport {
 pub struct FilePatchApplyReport {
     any_failed: bool,
     hunk_reports: Vec<HunkApplyReport>,
+    direction: PatchDirection,
     fuzz: usize,
     previous_permissions: Option<fs::Permissions>,
 }
 
 impl FilePatchApplyReport {
     /// Create a report for given amount of hunks
-    fn new_with_capacity(fuzz: usize, capacity: usize) -> Self {
+    fn new_with_capacity(direction: PatchDirection, fuzz: usize, capacity: usize) -> Self {
         FilePatchApplyReport {
             hunk_reports: Vec::with_capacity(capacity),
             any_failed: false,
+            direction,
             fuzz,
             previous_permissions: None,
         }
@@ -474,6 +476,7 @@ impl FilePatchApplyReport {
     fn single_hunk_success(line: isize,
                            offset: isize,
                            line_count_diff: isize,
+                           direction: PatchDirection,
                            fuzz: usize)
                            -> Self
     {
@@ -482,16 +485,18 @@ impl FilePatchApplyReport {
                 line, rollback_line: line, offset, line_count_diff, fuzz,
             }],
             any_failed: false,
+            direction,
             fuzz,
             previous_permissions: None,
         }
     }
 
     /// Create a report with single hunk that failed
-    fn single_hunk_failure(reason: HunkApplyFailureReason, fuzz: usize) -> Self {
+    fn single_hunk_failure(reason: HunkApplyFailureReason, direction: PatchDirection, fuzz: usize) -> Self {
         FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Failed(reason)],
             any_failed: true,
+            direction,
             fuzz,
             previous_permissions: None,
         }
@@ -516,6 +521,11 @@ impl FilePatchApplyReport {
 
     /// Get the reports for the individual hunks.
     pub fn hunk_reports(&self) -> &[HunkApplyReport] { &self.hunk_reports }
+
+    /// Direction that was used to apply this patch
+    pub fn direction(&self) -> PatchDirection {
+        self.direction
+    }
 
     /// Fuzz level used during the applying.
     pub fn fuzz(&self) -> usize { self.fuzz }
@@ -705,7 +715,7 @@ impl<'a> InternedFilePatch<'a> {
 
         // If we are creating it, it must be empty.
         if !interned_file.content.is_empty() {
-            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::CreatingFileThatExists, fuzz);
+            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::CreatingFileThatExists, direction, fuzz);
         }
 
         let new_content = match direction {
@@ -717,7 +727,7 @@ impl<'a> InternedFilePatch<'a> {
         interned_file.content = new_content.clone().into_vec();
         interned_file.deleted = false;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, new_content.len() as isize, fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, new_content.len() as isize, direction, fuzz)
     }
 
     /// Apply this `FilePatchKind::Delete` patch on the file.
@@ -731,14 +741,14 @@ impl<'a> InternedFilePatch<'a> {
 
         // If we are deleting it, it must contain exactly what we want to remove.
         if &expected_content[..] != &interned_file.content[..] {
-            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::DeletingFileThatDoesNotMatch, fuzz);
+            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::DeletingFileThatDoesNotMatch, direction, fuzz);
         }
 
         // Just delete everything and we are done
         interned_file.content.clear();
         interned_file.deleted = true;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, -(expected_content.len() as isize), fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, -(expected_content.len() as isize), direction, fuzz)
     }
 
     /// Apply this `FilePatchKind::Modify` patch on the file.
@@ -751,7 +761,7 @@ impl<'a> InternedFilePatch<'a> {
                     fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
                     -> FilePatchApplyReport
     {
-        let mut report = FilePatchApplyReport::new_with_capacity(fuzz, self.hunks.len());
+        let mut report = FilePatchApplyReport::new_with_capacity(direction, fuzz, self.hunks.len());
 
         let mut last_hunk_offset = 0isize;
 
