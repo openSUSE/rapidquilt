@@ -830,7 +830,7 @@ impl<'a> InternedFilePatch<'a> {
                     HunkApplyReport::Skipped => {
                         // Skip it
                         report.push_hunk_report(hunk_report);
-                        break;
+                        continue;
                     }
                 }
             };
