@@ -1,7 +1,11 @@
 # Unreleased changes
 
+# Version 0.5.2
+
 * Support for running analyses while patching.
 * Added MultiApply analysis that warns when hunk could apply to more than one location.
+* Fixed two kinds of panic when rolling-back failed patches.
+* More information is shown when patch fails to apply.
 
 # Version 0.5.1
 

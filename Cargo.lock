@@ -288,7 +288,7 @@ dependencies = [
 
 [[package]]
 name = "rapidquilt"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "atty 0.2.11 (registry+https://github.com/rust-lang/crates.io-index)",
  "colored 1.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
