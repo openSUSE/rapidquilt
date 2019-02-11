@@ -11,7 +11,7 @@ use crate::patch::{
 use std::fmt::Debug;
 
 mod multiapply;
-pub use multiapply::*;
+pub use self::multiapply::*;
 
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
