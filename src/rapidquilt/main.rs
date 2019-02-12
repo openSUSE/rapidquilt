@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use colored::*;
-use failure::{Error, format_err};
+use failure::{Error, ResultExt, format_err};
 use getopts::{Matches, Options};
 
 use libpatch::analysis::{AnalysisSet, MultiApplyAnalysis};
@@ -63,6 +63,15 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<PathBuf>, Erro
     Ok(patch_filenames)
 }
 
+fn save_applied_patches(applied_patches: &[PathBuf]) -> Result<(), Error> {
+    fs::create_dir_all(".pc")?;
+    let mut file_applied_patches = BufWriter::new(fs::OpenOptions::new().create(true).append(true).open(".pc/applied-patches")?);
+    for applied_patch in applied_patches {
+        writeln!(file_applied_patches, "{}", applied_patch.display())?;
+    }
+    Ok(())
+}
+
 enum PushGoal {
     All,
     Count(usize),
@@ -78,12 +87,12 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         Some(ref s) if s == "onfail" => ApplyConfigDoBackups::OnFail,
         Some(ref s) if s == "never"  => ApplyConfigDoBackups::Never,
         None                         => ApplyConfigDoBackups::OnFail,
-        _ => Err(format_err!("Bad value given to \"backup\" parameter!")).unwrap(),
+        _ => return Err(format_err!("Bad value given to \"backup\" parameter!")),
     };
 
     let backup_count = match matches.opt_str("backup-count") {
         Some(ref s) if s == "all" => ApplyConfigBackupCount::All,
-        Some(n)                   => ApplyConfigBackupCount::Last(n.parse::<usize>().unwrap()),
+        Some(n)                   => ApplyConfigBackupCount::Last(n.parse::<usize>()?),
         None                      => ApplyConfigBackupCount::Last(100),
     };
 
@@ -117,7 +126,8 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     }
 
     // Process series file
-    let patch_filenames = read_series_file("series").unwrap();
+    let patch_filenames = read_series_file("series")
+        .with_context(|_| "When reading \"series\" file.")?;
 
     // Determine the last patch
     let first_patch = if let Ok(applied_patch_filenames) = read_series_file(".pc/applied-patches") {
@@ -185,11 +195,8 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         apply_patches_parallel(&config, &*arena, &analyses)?
     };
 
-    fs::create_dir_all(".pc")?;
-    let mut file_applied_patches = BufWriter::new(fs::OpenOptions::new().create(true).append(true).open(".pc/applied-patches")?);
-    for applied_patch in apply_result.applied_patches {
-        writeln!(file_applied_patches, "{}", applied_patch.display())?;
-    }
+    save_applied_patches(apply_result.applied_patches)
+        .with_context(|_| "When saving applied patches.")?;
 
     Ok(apply_result.skipped_patches.is_empty())
 }
@@ -212,7 +219,16 @@ fn build_arena(use_mmap: bool) -> Box<Arena> {
     }
 }
 
-fn main() {
+// Basically main(), but returning `Result` so we can easily propagate errors with try operator and
+// then format them our own way.
+//
+// We could return `Result` directly from main(), but then it would be formatted using the default
+// formatter, which is ugly and doesn't print the failure's causes, so there is less context. The
+// proper solution is to use own type that will implement `std::process::Termination`, but that is
+// not stable yet.
+//
+// TODO: Use the `std::process::Termination` trait once it is stable.
+fn main_result() -> Result<bool, Error> {
     let args: Vec<_> = env::args().collect();
 
     let mut opts = Options::new();
@@ -238,7 +254,7 @@ fn main() {
     opts.optflag("", "version", "print version");
 
 
-    let matches = opts.parse(&args[1..]).unwrap();
+    let matches = opts.parse(&args[1..])?;
     let mut free_args = matches.free.iter();
 
     if matches.opt_present("version") {
@@ -251,8 +267,8 @@ fn main() {
 
     match matches.opt_str("color") {
         Some(ref s) if s == "always" => colored::control::set_override(true),
-        Some(ref s) if s == "never"  => colored::control::set_override(false),
-        Some(ref s) if s != "auto" => Err(format_err!("Bad value given to \"color\" parameter!")).unwrap(),
+        Some(ref s) if s == "never" => colored::control::set_override(false),
+        Some(ref s) if s != "auto" => return Err(format_err!("Bad value given to \"color\" parameter!")),
         _ /* auto */ => {
             // Force it off if either of the outputs is not terminal. Otherwise leave on default,
             // which uses some env variables.
@@ -274,11 +290,11 @@ fn main() {
     };
 
     if let Some(directory) = matches.opt_str("directory") {
-        env::set_current_dir(directory).unwrap();
+        env::set_current_dir(&directory).with_context(|_| format!("Changing current directory to \"{}\"", directory))?;
     }
 
     if let Some(manual_threads) = env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
-        rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global().unwrap();
+        rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global()?;
     }
 
     let result = match free_args.next() {
@@ -290,7 +306,11 @@ fn main() {
         }
     };
 
-    match result {
+    result
+}
+
+fn main() {
+    match main_result() {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {
                 eprintln!("{}{}", "  ".repeat(i), format!("{}", cause).red());
