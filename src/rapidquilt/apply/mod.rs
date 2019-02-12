@@ -47,10 +47,16 @@ pub enum Verbosity {
 }
 
 #[derive(Debug)]
-pub struct ApplyConfig<'a> {
-    pub patch_filenames: &'a [PathBuf],
-    pub patches_path: &'a Path,
+pub struct SeriesPatch {
+    pub filename: PathBuf,
     pub strip: usize,
+    pub reverse: bool,
+}
+
+#[derive(Debug)]
+pub struct ApplyConfig<'a> {
+    pub series_patches: &'a [SeriesPatch],
+    pub patches_path: &'a Path,
     pub fuzz: usize,
     pub do_backups: ApplyConfigDoBackups,
     pub backup_count: ApplyConfigBackupCount,
@@ -60,9 +66,9 @@ pub struct ApplyConfig<'a> {
 }
 
 #[derive(Debug)]
-pub struct ApplyResult<'a> {
-    pub applied_patches: &'a [PathBuf],
-    pub skipped_patches: &'a [PathBuf],
+pub struct ApplyResult {
+    pub applied_patches: usize,
+    pub skipped_patches: usize,
 }
 
 #[derive(Debug, Fail)]

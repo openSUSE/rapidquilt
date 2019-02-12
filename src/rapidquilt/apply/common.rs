@@ -134,14 +134,14 @@ pub fn save_backup_file(patch_filename: &Path,
 {
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
-    path.push(&filename); // Note that this may add multiple directories plus filename
+    path.push(filename); // Note that this may add multiple directories plus filename
 
     if verbosity >= Verbosity::ExtraVerbose {
         println!("Saving backup file {:?}", path);
     }
 
     (|| -> Result<(), io::Error> { // TODO: Replace me with try-block when stable.
-        let path_parent = &path.parent().unwrap(); // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
+        let path_parent = path.parent().unwrap(); // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
 
         fs::create_dir_all(path_parent)?;
         original_file.write_to(interner, &mut File::create(&path)?)
@@ -276,6 +276,7 @@ pub fn apply_one_file_patch<
     config: &'config ApplyConfig,
     index: usize,
     text_file_patch: TextFilePatch<'arena>,
+    reverse: bool,
     applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
     modified_files: &mut HashMap<PathBuf, InternedFile, H>,
     arena: &'arena dyn Arena,
@@ -299,7 +300,7 @@ pub fn apply_one_file_patch<
         if *new_filename == target_filename {
             // TODO: Proper reporting!
             println!("Patch {} would rename file {} to {}, but it already has the name.",
-                     config.patch_filenames[index].display(),
+                     config.series_patches[index].filename.display(),
                      target_filename.display(),
                      new_filename.display());
         }
@@ -317,7 +318,7 @@ pub fn apply_one_file_patch<
 
             // TODO: Proper reporting!
             println!("Patch {} is renaming file {} to {}, which overwrites existing file!",
-                     config.patch_filenames[index].display(),
+                     config.series_patches[index].filename.display(),
                      target_filename.display(),
                      new_filename.display());
 
@@ -332,7 +333,7 @@ pub fn apply_one_file_patch<
         }
 
 //         println!("Patch {} is renaming file {} to {}!",
-//                 config.patch_filenames[index].display(),
+//                 config.series_patches[index].filename.display(),
 //                 file_patch.filename().display(),
 //                 new_filename.display());
 
@@ -341,8 +342,14 @@ pub fn apply_one_file_patch<
         (file, target_filename.clone())
     };
 
+    let direction = if reverse {
+        PatchDirection::Revert
+    } else {
+        PatchDirection::Forward
+    };
+
     // Apply the `FilePatch` on it.
-    let report = file_patch.apply(&mut file, PatchDirection::Forward, config.fuzz, analyses, fn_analysis_note);
+    let report = file_patch.apply(&mut file, direction, config.fuzz, analyses, fn_analysis_note);
 
     let report_ok = report.ok();
 
@@ -352,7 +359,7 @@ pub fn apply_one_file_patch<
         target_filename,
         final_filename,
         report,
-        patch_filename: &config.patch_filenames[index],
+        patch_filename: &config.series_patches[index].filename,
     });
 
     Ok(report_ok)

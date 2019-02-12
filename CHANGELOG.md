@@ -1,5 +1,7 @@
 # Unreleased changes
 
+* Support for `-p` and `-R` patch options in series file.
+
 # Version 0.5.2
 
 * Support for running analyses while patching.

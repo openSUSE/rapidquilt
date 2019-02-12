@@ -26,7 +26,7 @@ use libpatch::interned_file::InternedFile;
 
 
 pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
-    -> Result<ApplyResult<'a>, Error> {
+    -> Result<ApplyResult, Error> {
     let mut interner = LineInterner::new();
 
     let mut applied_patches = Vec::<PatchStatus>::new();
@@ -38,21 +38,21 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     let mut failure_analysis = Vec::<u8>::new();
 
     if config.verbosity >= Verbosity::Normal {
-        println!("Applying {} patches single-threaded...", config.patch_filenames.len());
+        println!("Applying {} patches single-threaded...", config.series_patches.len());
     }
 
-    for (index, patch_filename) in config.patch_filenames.iter().enumerate() {
+    for (index, series_patch) in config.series_patches.iter().enumerate() {
         if config.verbosity >= Verbosity::Verbose {
-            println!("Patch: {:?}", patch_filename);
+            println!("Patch: {:?}", series_patch.filename);
         }
 
         final_patch = index;
 
         let text_file_patches = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
-            let data = arena.load_file(&config.patches_path.join(patch_filename))?;
-            let text_file_patches = parse_patch(&data, config.strip)?;
+            let data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
+            let text_file_patches = parse_patch(&data, series_patch.strip)?;
             Ok(text_file_patches)
-        })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
+        })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
         let mut any_report_failed = false;
 
@@ -61,12 +61,13 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
                 // We ignore any error here because currently we don't have a way to propagate it out
                 // of this callback. It's not so tragic, error here would most likely be IO error from
                 // writing to terminal.
-                let _ = print_analysis_note(patch_filename, note, file_patch);
+                let _ = print_analysis_note(&series_patch.filename, note, file_patch);
             };
 
             if !apply_one_file_patch(config,
                                      index,
                                      text_file_patch,
+                                     series_patch.reverse,
                                      &mut applied_patches,
                                      &mut modified_files,
                                      arena,
@@ -99,7 +100,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
 
         if config.do_backups == ApplyConfigDoBackups::Always ||
           (config.do_backups == ApplyConfigDoBackups::OnFail &&
-            final_patch != config.patch_filenames.len() - 1)
+            final_patch != config.series_patches.len() - 1)
         {
             if config.verbosity >= Verbosity::Normal {
                 println!("Saving quilt backup files ({})...", config.backup_count);
@@ -114,11 +115,11 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
         }
     }
 
-    if final_patch != config.patch_filenames.len() - 1 {
+    if final_patch != config.series_patches.len() - 1 {
         let stderr = io::stderr();
         let mut out = stderr.lock();
 
-        writeln!(out, "{} {} {}", "Patch".yellow(), config.patch_filenames[final_patch].display(), "FAILED".bright_red().bold())?;
+        writeln!(out, "{} {} {}", "Patch".yellow(), config.series_patches[final_patch].filename.display(), "FAILED".bright_red().bold())?;
         out.write_all(&failure_analysis)?;
     }
 
@@ -128,7 +129,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     }
 
     Ok(ApplyResult {
-        applied_patches: &config.patch_filenames[0..=final_patch],
-        skipped_patches: &config.patch_filenames[(final_patch + 1)..],
+        applied_patches: final_patch + 1,
+        skipped_patches: config.series_patches.len() - (final_patch + 1),
     })
 }

@@ -196,13 +196,14 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
             // We ignore any error here because currently we don't have a way to propagate it out
             // of this callback. It's not so tragic, error here would most likely be IO error from
             // writing to terminal.
-            let _ = print_analysis_note(&config.patch_filenames[index], note, file_patch);
+            let _ = print_analysis_note(&config.series_patches[index].filename, note, file_patch);
         };
 
         // Try to apply this one `FilePatch`
         match apply_one_file_patch(config,
                                    index,
                                    text_file_patch,
+                                   config.series_patches[index].reverse,
                                    &mut applied_patches,
                                    &mut modified_files,
                                    arena,
@@ -313,7 +314,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
             }
 
             let final_patch = if earliest_broken_patch_index == std::usize::MAX {
-                config.patch_filenames.len() - 1
+                config.series_patches.len() - 1
             } else {
                 earliest_broken_patch_index
             };
@@ -338,12 +339,12 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
 /// Apply all patches from the `config` in parallel
 pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
-    -> Result<ApplyResult<'a>, Error>
+    -> Result<ApplyResult, Error>
 {
     let threads = rayon::current_num_threads();
 
     if config.verbosity >= Verbosity::Normal {
-        println!("Applying {} patches using {} threads...", config.patch_filenames.len(), threads);
+        println!("Applying {} patches using {} threads...", config.series_patches.len(), threads);
     }
 
     if config.verbosity >= Verbosity::Verbose {
@@ -351,13 +352,13 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     }
 
     // Load all patches multi-threaded using rayon's parallel iterator.
-    let mut text_patches: Vec<_> = config.patch_filenames.par_iter().map(|patch_filename| -> Result<_, Error> {
+    let mut text_patches: Vec<_> = config.series_patches.par_iter().map(|series_patch| -> Result<_, Error> {
         if config.verbosity >= Verbosity::ExtraVerbose {
             // This will fight for stdout lock. But that's expected in ExtraVerbose mode...
-            println!("Parsing patch: {:?}", patch_filename);
+            println!("Parsing patch: {:?}", series_patch.filename);
         }
-        let raw_patch_data = arena.load_file(&config.patches_path.join(patch_filename))?;
-        let text_file_patches = parse_patch(raw_patch_data, config.strip)?;
+        let raw_patch_data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
+        let text_file_patches = parse_patch(raw_patch_data, series_patch.strip)?;
         Ok(text_file_patches)
     }).collect();
 
@@ -393,10 +394,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     let filename_to_thread_id = filename_distributor.build();
 
     let mut text_file_patches_per_thread: Vec<Vec<(usize, TextFilePatch)>> = vec![Vec::with_capacity(
-        config.patch_filenames.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
+        config.series_patches.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
     ); threads];
     for (index, text_file_patches) in text_patches.drain(..).enumerate() {
-        let mut text_file_patches = text_file_patches.with_context(|_| ApplyError::PatchLoad { patch_filename: config.patch_filenames[index].clone() })?;
+        let mut text_file_patches = text_file_patches.with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
         for text_file_patch in text_file_patches.drain(..) {
             // Note that we can dispatch by `old_filename` or `new_filename`, we
@@ -475,15 +476,15 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     // Check if we actually applied everything
     let mut final_patch = earliest_broken_patch_index.load(Ordering::Acquire);
     if final_patch == std::usize::MAX {
-        final_patch = config.patch_filenames.len();
+        final_patch = config.series_patches.len();
     }
 
     // Print out failure analysis if we didn't apply everything
-    if final_patch != config.patch_filenames.len() {
+    if final_patch != config.series_patches.len() {
         let stderr = io::stderr();
         let mut out = stderr.lock();
 
-        writeln!(out, "{} {} {}", "Patch".yellow(), config.patch_filenames[final_patch].display(), "FAILED".bright_red().bold())?;
+        writeln!(out, "{} {} {}", "Patch".yellow(), config.series_patches[final_patch].filename.display(), "FAILED".bright_red().bold())?;
 
         for result in thread_reports {
             out.write_all(&result.unwrap().failure_analysis)?; // NOTE(unwrap): We already tested for errors above.
@@ -495,8 +496,8 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     }
 
     Ok(ApplyResult {
-        applied_patches: &config.patch_filenames[0..final_patch],
-        skipped_patches: &config.patch_filenames[final_patch..],
+        applied_patches: final_patch,
+        skipped_patches: config.series_patches.len() - final_patch,
     })
 }
 

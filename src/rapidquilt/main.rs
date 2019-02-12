@@ -28,12 +28,16 @@ use crate::apply::{
     ApplyConfigDoBackups,
     apply_patches,
     apply_patches_parallel,
+    SeriesPatch,
     Verbosity,
 };
 use crate::arena::{Arena, FileArena};
 
 #[cfg(unix)]
 use crate::arena::MmapArena;
+
+
+const DEFAULT_PATCH_STRIP: usize = 1;
 
 
 fn usage(opts: &Options) -> ! {
@@ -46,28 +50,68 @@ fn version() -> ! {
     process::exit(0);
 }
 
-fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<PathBuf>, Error> {
+fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, Error> {
+    let mut patch_opts = Options::new();
+    patch_opts.optopt("p", "strip", "Strip this many directories in paths of patched files.", "<n>");
+    patch_opts.optflag("R", "reverse", "Reverse the patch direction.");
+
     let file = File::open(series_path)?;
     let file = BufReader::new(file);
 
-    let patch_filenames = file
-        .lines()
-        .map(|line| line.unwrap() /* <- TODO: Propagate up. */)
-        .filter(|line| !line.is_empty() && !line.starts_with('#')) // man quilt says that comment lines start with '#', it does not mention any whitespace before that (TODO: Verify)
-        .map(|line| {
-            // TODO: Handle comments after the patch name
+    file.lines()
+        .filter_map(|line| {
+            match line {
+                Ok(line) => {
+                    // Comments in series file must start with '#' without whitespace before.
+                    if line.is_empty() || line.starts_with('#') {
+                        None
+                    } else {
+                        // Quilt has no way to handle whitespace in filenames of patches. Leading whitespace
+                        // is ignored and then everything up to any other whitespace is considered as filename.
+                        // Anything left out is used as parameters for patch command.
+                        let mut parts = line.split_whitespace().peekable();
 
-            std::path::PathBuf::from(line)
-        }).collect();
+                        if let Some(filename) = parts.next() {
+                            Some((|| -> Result<SeriesPatch, Error> { // Poor-man's try block
+                                let filename = std::path::PathBuf::from(filename);
 
-    Ok(patch_filenames)
+                                // Fast path when there are no options
+                                if parts.peek().is_none() {
+                                    return Ok(SeriesPatch {
+                                        filename,
+                                        strip: DEFAULT_PATCH_STRIP,
+                                        reverse: false,
+                                    });
+                                }
+
+                                let matches = patch_opts.parse(parts)
+                                    .with_context(|_| format!("Parsing patch options for \"{}\"", filename.display()))?;
+
+                                let strip = matches.opt_str("strip").and_then(|n| n.parse::<usize>().ok()).unwrap_or(DEFAULT_PATCH_STRIP);
+                                let reverse = matches.opt_present("R");
+
+                                Ok(SeriesPatch {
+                                    filename,
+                                    strip,
+                                    reverse,
+                                })
+                            })())
+                        } else {
+                            // Line was just whitespace
+                            None
+                        }
+                    }
+                }
+                Err(err) => Some(Err(err.into())),
+            }
+        }).collect()
 }
 
-fn save_applied_patches(applied_patches: &[PathBuf]) -> Result<(), Error> {
+fn save_applied_patches(applied_patches: &[SeriesPatch]) -> Result<(), Error> {
     fs::create_dir_all(".pc")?;
     let mut file_applied_patches = BufWriter::new(fs::OpenOptions::new().create(true).append(true).open(".pc/applied-patches")?);
     for applied_patch in applied_patches {
-        writeln!(file_applied_patches, "{}", applied_patch.display())?;
+        writeln!(file_applied_patches, "{}", applied_patch.filename.display())?;
     }
     Ok(())
 }
@@ -126,14 +170,14 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     }
 
     // Process series file
-    let patch_filenames = read_series_file("series")
+    let series_patches = read_series_file("series")
         .with_context(|_| "When reading \"series\" file.")?;
 
     // Determine the last patch
     let first_patch = if let Ok(applied_patch_filenames) = read_series_file(".pc/applied-patches") {
-        for (p1, p2) in patch_filenames.iter().zip(applied_patch_filenames.iter()) {
-            if p1 != p2 {
-                return Err(format_err!("There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}", p1.display(), p2.display()));
+        for (p1, p2) in series_patches.iter().zip(applied_patch_filenames.iter()) {
+            if p1.filename != p2.filename {
+                return Err(format_err!("There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}", p1.filename.display(), p2.filename.display()));
             }
         }
         applied_patch_filenames.len()
@@ -141,7 +185,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         0
     };
 
-    if first_patch == patch_filenames.len() {
+    if first_patch == series_patches.len() {
         if verbosity >= Verbosity::Normal {
             println!("All patches applied. Nothing to do.");
             return Ok(true);
@@ -149,10 +193,10 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     }
 
     let last_patch = match goal {
-        PushGoal::All => patch_filenames.len(),
-        PushGoal::Count(n) => std::cmp::min(first_patch + n, patch_filenames.len()),
+        PushGoal::All => series_patches.len(),
+        PushGoal::Count(n) => std::cmp::min(first_patch + n, series_patches.len()),
         PushGoal::UpTo(patch_filename) => {
-            if let Some(index) = patch_filenames.iter().position(|item| *item == patch_filename) {
+            if let Some(index) = series_patches.iter().position(|item| item.filename == patch_filename) {
                 if index <= first_patch {
                     return Err(format_err!("Patch already applied: {:?}", patch_filename));
                 }
@@ -163,15 +207,12 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         }
     };
 
-    let patch_filenames = &patch_filenames[first_patch..last_patch];
-
-    let strip = 1; // Currently hardcoded
+    let series_patches = &series_patches[first_patch..last_patch];
 
     let config = ApplyConfig {
-        patch_filenames,
+        series_patches,
         patches_path: patches_path.as_ref(),
         fuzz,
-        strip,
         do_backups,
         backup_count,
         dry_run,
@@ -195,10 +236,10 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         apply_patches_parallel(&config, &*arena, &analyses)?
     };
 
-    save_applied_patches(apply_result.applied_patches)
+    save_applied_patches(&config.series_patches[0..apply_result.applied_patches])
         .with_context(|_| "When saving applied patches.")?;
 
-    Ok(apply_result.skipped_patches.is_empty())
+    Ok(apply_result.skipped_patches == 0)
 }
 
 #[cfg(unix)]
