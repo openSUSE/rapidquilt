@@ -129,23 +129,30 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, w
     }
 
     // Print permissions metadata
-    if cfg!(unix) {
-        use std::os::unix::fs::PermissionsExt;
+    match () {
+        #[cfg(unix)]
+        () => {
+            use std::os::unix::fs::PermissionsExt;
 
-        if let Some(permissions) = filepatch.old_permissions() {
-            if filepatch.kind() == FilePatchKind::Delete {
-                writeln!(writer, "delete file mode {:o}", permissions.mode())?;
-            } else {
-                writeln!(writer, "old mode {:o}", permissions.mode())?;
+            if let Some(permissions) = filepatch.old_permissions() {
+                if filepatch.kind() == FilePatchKind::Delete {
+                    writeln!(writer, "delete file mode {:o}", permissions.mode())?;
+                } else {
+                    writeln!(writer, "old mode {:o}", permissions.mode())?;
+                }
+            }
+
+            if let Some(permissions) = filepatch.new_permissions() {
+                if filepatch.kind() == FilePatchKind::Delete {
+                    writeln!(writer, "new file mode {:o}", permissions.mode())?;
+                } else {
+                    writeln!(writer, "new mode {:o}", permissions.mode())?;
+                }
             }
         }
-
-        if let Some(permissions) = filepatch.new_permissions() {
-            if filepatch.kind() == FilePatchKind::Delete {
-                writeln!(writer, "new file mode {:o}", permissions.mode())?;
-            } else {
-                writeln!(writer, "new mode {:o}", permissions.mode())?;
-            }
+        #[cfg(not(unix))]
+        () => {
+            // We ignore permissions.
         }
     }
 
