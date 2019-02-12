@@ -123,8 +123,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     let first_patch = if let Ok(applied_patch_filenames) = read_series_file(".pc/applied-patches") {
         for (p1, p2) in patch_filenames.iter().zip(applied_patch_filenames.iter()) {
             if p1 != p2 {
-                println!("There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}", p1.display(), p2.display());
-                process::exit(1);
+                return Err(format_err!("There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}", p1.display(), p2.display()));
             }
         }
         applied_patch_filenames.len()
@@ -132,9 +131,16 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         0
     };
 
+    if first_patch == patch_filenames.len() {
+        if verbosity >= Verbosity::Normal {
+            println!("All patches applied. Nothing to do.");
+            return Ok(true);
+        }
+    }
+
     let last_patch = match goal {
         PushGoal::All => patch_filenames.len(),
-        PushGoal::Count(n) => first_patch + n,
+        PushGoal::Count(n) => std::cmp::min(first_patch + n, patch_filenames.len()),
         PushGoal::UpTo(patch_filename) => {
             if let Some(index) = patch_filenames.iter().position(|item| *item == patch_filename) {
                 if index <= first_patch {
