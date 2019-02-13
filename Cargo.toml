@@ -1,8 +1,14 @@
 [package]
 name = "rapidquilt"
+description = "This is very specialized reimplementation of quilt & patch in one. It supports only the push command. The goal is to be very fast."
+repository = "https://github.com/michalsrb/rapidquilt"
 version = "0.5.3"
 authors = ["Michal Srb <michalsrb@gmail.com>"]
+license = "MIT"
 edition = '2018'
+
+[badges]
+travis-ci = { repository = "rapidquilt/master" }
 
 [profile.release]
 lto = true
