@@ -7,6 +7,9 @@ authors = ["Michal Srb <michalsrb@gmail.com>"]
 license = "MIT"
 edition = '2018'
 
+[badges]
+travis-ci = { repository = "rapidquilt/master" }
+
 [profile.release]
 lto = true
 

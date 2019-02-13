@@ -1,5 +1,12 @@
 # Rapidquilt
 
+[![Build Status](https://travis-ci.org/michalsrb/rapidquilt.svg?branch=master)](
+https://travis-ci.org/michalsrb/rapidquilt)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](
+https://github.com/michalsrb/rapidquilt)
+[![Rust 1.31+](https://img.shields.io/badge/rust-1.31+-lightgray.svg)](
+https://www.rust-lang.org)
+
 This is very specialized reimplementation of quilt & patch in one. It supports
 only the `push` command. The goal is to be very fast.
 
