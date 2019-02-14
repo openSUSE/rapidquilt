@@ -7,3 +7,7 @@ file.
 
 The ".out" files can be generated using the "create_out_files.sh" script, which
 calls the regular patch command.
+
+Both the test and the "create_out_files.sh" script recognize special headers in
+the patch:
+  * fuzz: n

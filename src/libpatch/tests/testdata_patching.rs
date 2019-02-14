@@ -30,6 +30,18 @@ fn all_files() -> Result<(), Error> {
         let strip = 0;
         let mut patch = parse_patch(&patch_data, strip, true)?;
 
+        // Parse our special headers
+        let mut fuzz = 0;
+        for header_line in &patch.header {
+            let header_line = String::from_utf8_lossy(header_line);
+            match &header_line.splitn(2, ": ").collect::<Vec<_>>()[..] {
+                ["fuzz", fuzz_str] => {
+                    fuzz = fuzz_str[..fuzz_str.len() - 1].parse()?;
+                }
+                _ => {}
+            }
+        }
+
         // Check that there is exactly one FilePatch
         if patch.file_patches.len() != 1 {
             panic!("Test patch {} is for {} files, expected exactly one!", path.display(), patch.file_patches.len());
@@ -48,7 +60,7 @@ fn all_files() -> Result<(), Error> {
         let mut interned_file = InternedFile::new(&mut interner, &file, true);
 
         // Patch it
-        let report = file_patch.apply(&mut interned_file, PatchDirection::Forward, 0, &AnalysisSet::default(), &fn_analysis_note_noop);
+        let report = file_patch.apply(&mut interned_file, PatchDirection::Forward, fuzz, &AnalysisSet::default(), &fn_analysis_note_noop);
 
         // Check if it failed when shouldn't or succeeded when it was expected to fail
         let error_file = path.with_extension("error");
@@ -62,7 +74,7 @@ fn all_files() -> Result<(), Error> {
             continue
         }
         if !should_fail && report.failed() {
-            panic!("The patch unexpectedly failed to apply!");
+            panic!("The patch unexpectedly failed to apply! Report: {:#?}", report);
         }
 
         // Write the output to a buffer

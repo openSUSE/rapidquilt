@@ -1,0 +1,12 @@
+fuzz: 2
+--- file.in	2019-01-16 15:02:37.016021405 +0100
++++ with_fuzz2.out	2019-01-16 15:03:08.724512747 +0100
+@@ -1,7 +1,7 @@
+ aaa this line does not match, but will be ignored thanks to fuzz 2!
+ bbb this line does not match, but will be ignored thanks to fuzz 2!
+ ccc
+-ddd
++ddd modified
+ eee
+ fff this line does not match, but will be ignored thanks to fuzz 2!
+ ggg this line does not match, but will be ignored thanks to fuzz 2!

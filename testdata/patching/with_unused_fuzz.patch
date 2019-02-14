@@ -1,0 +1,19 @@
+fuzz: 1
+
+This patch can apply with --fuzz=0 and big offset or with --fuzz=1 and no
+offset. The --fuzz=0 and big offset must be preferred!
+
+Notice that there is no "ccc" on line 10, so it will be applied to line 34
+instead. With fuzz 1, it could apply to the line 10, but it should not come to
+that.
+--- file4.in	2019-01-16 15:02:37.016021405 +0100
++++ with_unused_fuzz.out	2019-01-16 15:03:08.724512747 +0100
+@@ -10,7 +10,7 @@
+ ccc
+ ddd
+ eee
+-fff
++fff modified
+ ggg
+ hhh
+ iii
