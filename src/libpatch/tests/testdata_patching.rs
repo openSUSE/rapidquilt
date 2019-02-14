@@ -58,8 +58,8 @@ fn all_files() -> Result<(), Error> {
                 panic!("The {} file exists, so apply failure is expected, but patch applied successfully!", error_file.display());
             }
 
-            // We are done then
-            return Ok(())
+            // We are done with this patch then
+            continue
         }
         if !should_fail && report.failed() {
             panic!("The patch unexpectedly failed to apply!");
