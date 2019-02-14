@@ -236,6 +236,72 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
     Ok(())
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum StringClass {
+    Whitespace,
+    Identifier,
+    Other,
+}
+
+struct ClasifyingIterator<'a> {
+    input: &'a str
+}
+
+impl<'a> ClasifyingIterator<'a> {
+    fn new(input: &'a str) -> Self {
+        ClasifyingIterator {
+            input
+        }
+    }
+
+    // This is just approximation of the usual rules of the common programming languages. It does
+    // not need to be exact.
+    fn classify_character(c: char) -> StringClass {
+        if c.is_whitespace() {
+            StringClass::Whitespace
+        } else if c.is_alphanumeric() || c == '_' {
+            StringClass::Identifier
+        } else {
+            StringClass::Other
+        }
+    }
+}
+
+impl<'a> Iterator for ClasifyingIterator<'a> {
+    type Item = (StringClass, &'a str);
+
+    #[inline]
+    fn next(&mut self) -> Option<(StringClass, &'a str)> {
+        if self.input.is_empty() {
+            return None;
+        }
+
+        let mut ci = self.input.char_indices();
+
+        let first_char_type = match ci.next() {
+            Some((_, c)) => Self::classify_character(c),
+            None => return None,
+        };
+
+        for (i, c) in ci {
+            // `StringClass::Other` is split to individual characters. Everything else is split into
+            // continuous substrings of the class.
+            if first_char_type == StringClass::Other ||
+               first_char_type != Self::classify_character(c)
+            {
+                let (slice, remainder) = self.input.split_at(i);
+                self.input = remainder;
+                return Some((first_char_type, slice));
+            }
+        }
+
+        let slice = self.input;
+        self.input = &self.input[0..0];
+        Some((first_char_type, slice))
+    }
+}
+
+
 /// Figure out where the hunk was supposed to apply and print it out with highlighted differences.
 pub fn print_difference_to_closest_match<W: Write>(
     report: &FilePatchApplyReport,
@@ -385,6 +451,63 @@ pub fn print_difference_to_closest_match<W: Write>(
         Ok(())
     };
 
+    let write_modified_line = |writer: &mut W, file_line_str: &str, hunk_line_str: &str, line_num: isize| -> Result<(), io::Error> {
+        let line_str = format!("{:5}:", line_num + 1);
+
+        let file: Vec<_> = ClasifyingIterator::new(file_line_str).collect();
+        let hunk: Vec<_> = ClasifyingIterator::new(hunk_line_str).collect();
+
+        fn find_closest_match(a: &[(StringClass, &str)], b: &[(StringClass, &str)]) -> (usize, usize) {
+            for i in 0..(a.len() + b.len()) {
+                for j in 0..std::cmp::min(i + 1, a.len()) {
+                    if (i - j) < b.len() && a[j] == b[i - j] {
+                        return (j, i - j);
+                    }
+                }
+            }
+
+            (a.len(), b.len())
+        }
+
+        let mut file_i = 0;
+        let mut hunk_i = 0;
+
+        let mut hunk_buf = Vec::<u8>::with_capacity(hunk_line_str.len() * 13 / 10 /* 30% extra for coloring */);
+
+        write!(hunk_buf, "{}{}", prefix, line_str.bright_magenta())?;
+        write!(writer,   "{}{}", prefix, line_str.bright_cyan())?;
+
+        while file_i < file.len() || hunk_i < hunk.len() {
+            let (file_count, hunk_count) = find_closest_match(&file[file_i..], &hunk[hunk_i..]);
+            for _ in 0..hunk_count {
+                if hunk[hunk_i].0 == StringClass::Whitespace {
+                    write!(hunk_buf, "{}", hunk[hunk_i].1.bright_magenta().underline())?;
+                } else {
+                    write!(hunk_buf, "{}", hunk[hunk_i].1.bright_magenta().bold())?;
+                }
+                hunk_i += 1;
+            }
+            for _ in 0..file_count {
+                if file[file_i].0 == StringClass::Whitespace {
+                    write!(writer, "{}", file[file_i].1.bright_cyan().underline())?;
+                } else {
+                    write!(writer, "{}", file[file_i].1.bright_cyan().bold())?;
+                }
+                file_i += 1;
+            }
+            if file_i < file.len() && hunk_i < hunk.len() {
+                write!(hunk_buf, "{}", hunk[hunk_i].1.magenta().dimmed())?;
+                write!(writer,   "{}", file[file_i].1.cyan().dimmed())?;
+                hunk_i += 1;
+                file_i += 1;
+            }
+        }
+
+        writer.write(&hunk_buf)?;
+
+        Ok(())
+    };
+
     if let Some(best_path) = best_path {
         writeln!(writer)?;
         writeln!(writer, "{}{} Comparison of the content of the {} and the content expected by the {}:", prefix, "hint:".purple(), "file".bright_cyan(), "hunk".bright_magenta())?;
@@ -398,8 +521,7 @@ pub fn print_difference_to_closest_match<W: Write>(
                 if matrix[y][x] == 0 {
                     write_line(writer, WriteLineType::Matching, &file_content_txt[y], Some(y as isize))?;
                 } else {
-                    write_line(writer, WriteLineType::InFile, &file_content_txt[y], Some(y as isize))?;
-                    write_line(writer, WriteLineType::InHunk, &hunk_content_txt[x], Some(y as isize))?;
+                    write_modified_line(writer, &file_content_txt[y], &hunk_content_txt[x], y as isize)?;
                 }
             } else if prev_x + 1 == x {
                 write_line(writer, WriteLineType::InHunk, &hunk_content_txt[x], None)?; // No line number if this line is just in hunk
