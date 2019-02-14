@@ -197,7 +197,7 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
         //             start of the file if their first line  number is 1. Hunks with more prefix context than suffix
         //             context (after applying fuzz) must apply at the end of the file."
 
-        if self.context_before() < self.context_after() && self.add_target_line() == 1 {
+        if self.context_before() < self.context_after() && self.add_target_line() == 0 { // Note that we are numbering lines from 0, so this is the "line number 1" the manual talks about.
             return HunkPosition::Start;
         }
 
