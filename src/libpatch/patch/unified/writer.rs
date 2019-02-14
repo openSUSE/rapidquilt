@@ -1,6 +1,6 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::io::{self, BufWriter, Write};
+use std::io::{self, Write};
 
 use crate::patch::*;
 use crate::patch::unified::*;
@@ -111,7 +111,7 @@ impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
 }
 
 
-fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, writer: &mut BufWriter<W>) -> Result<(), io::Error> {
+fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, writer: &mut W) -> Result<(), io::Error> {
     // TODO: Currently we are writing patches with `strip` level 0, which is exactly
     //       what we need for .rej files. But we could add option to configure it?
 
@@ -179,12 +179,10 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, w
 
 impl<'a> UnifiedPatchWriter for FilePatch<'a, LineId> {
     fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
-        let mut writer = BufWriter::new(writer);
-
-        write_file_patch_header_to(self, &mut writer)?;
+        write_file_patch_header_to(self, writer)?;
 
         for hunk in &self.hunks {
-            hunk.write_to(interner, &mut writer)?;
+            hunk.write_to(interner, writer)?;
         }
 
         Ok(())
@@ -197,13 +195,11 @@ impl<'a> UnifiedPatchRejWriter for FilePatch<'a, LineId> {
             return Ok(())
         }
 
-        let mut writer = BufWriter::new(writer);
-
-        write_file_patch_header_to(self, &mut writer)?;
+        write_file_patch_header_to(self, writer)?;
 
         for (hunk, report) in self.hunks.iter().zip(report.hunk_reports()) {
             if let HunkApplyReport::Failed(..) = report {
-                hunk.write_to(interner, &mut writer)?;
+                hunk.write_to(interner, writer)?;
             }
         }
 

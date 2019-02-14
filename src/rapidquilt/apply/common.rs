@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, hash_map::Entry};
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, BufWriter};
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 
@@ -420,8 +420,9 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
                 println!("Saving rejects to {:?}", rej_filename);
             }
 
-            File::create(&rej_filename).and_then(|mut output| {
-                applied_patch.file_patch.write_rej_to(&interner, &mut output, &applied_patch.report)
+            File::create(&rej_filename).and_then(|output| {
+                let mut writer = BufWriter::new(output);
+                applied_patch.file_patch.write_rej_to(&interner, &mut writer, &applied_patch.report)
             }).with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
         }
 
