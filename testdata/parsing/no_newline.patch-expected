@@ -1,3 +1,4 @@
+This tests no newline markers in various positions.
 diff --git in_context in_context
 --- in_context
 +++ in_context

@@ -1,0 +1,38 @@
+This patch has additional garbage between file patches and at the end.
+The garbage is ignored and is not included into the header.
+diff --git filename1 filename1
+--- filename1
++++ filename1
+@@ -5,7 +5,7 @@ foo1
+ aaa1
+ bbb1
+ ccc1
+-ddd1
++eee1
+ fff1
+ ggg1
+ hhh1
+diff --git filename2 filename2
+--- filename2
++++ filename2
+@@ -5,7 +5,7 @@ foo2
+ aaa2
+ bbb2
+ ccc2
+-ddd2
++eee2
+ fff2
+ ggg2
+ hhh2
+diff --git filename3 filename3
+--- filename3
++++ filename3
+@@ -5,7 +5,7 @@ foo3
+ aaa3
+ bbb3
+ ccc3
+-ddd3
++eee3
+ fff3
+ ggg3
+ hhh3

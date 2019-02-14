@@ -1,3 +1,5 @@
+This one has modification date following the filename.
+We are ignoring it, so the canonical form won't have it.
 diff --git filename filename
 --- filename
 +++ filename

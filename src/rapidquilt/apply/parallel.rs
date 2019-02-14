@@ -358,8 +358,8 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
             println!("Parsing patch: {:?}", series_patch.filename);
         }
         let raw_patch_data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
-        let text_file_patches = parse_patch(raw_patch_data, series_patch.strip)?;
-        Ok(text_file_patches)
+        let text_patch = parse_patch(raw_patch_data, series_patch.strip, false)?;
+        Ok(text_patch)
     }).collect();
 
     if config.verbosity >= Verbosity::Verbose {
@@ -368,10 +368,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
 
     // Distribute the patches to queues for worker threads
     let mut filename_distributor = FilenameDistributor::<PathBuf>::new(threads);
-    for text_file_patches in &text_patches {
+    for text_patch in &text_patches {
         // Error checking later, here we'll look at the ok ones
-        if let Ok(text_file_patches) = text_file_patches {
-            for text_file_patch in text_file_patches {
+        if let Ok(text_patch) = text_patch {
+            for text_file_patch in &text_patch.file_patches {
                 // This sucks, but the `FilePatch` may have different `old_filename` and `new_filename`
                 // and we don't know which one will be used. It is decided based on which files
                 // exist at the moment when the `FilePatch` will be applied. So for scheduling
@@ -396,10 +396,10 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     let mut text_file_patches_per_thread: Vec<Vec<(usize, TextFilePatch)>> = vec![Vec::with_capacity(
         config.series_patches.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
     ); threads];
-    for (index, text_file_patches) in text_patches.drain(..).enumerate() {
-        let mut text_file_patches = text_file_patches.with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
+    for (index, text_patch) in text_patches.drain(..).enumerate() {
+        let mut text_patch = text_patch.with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
-        for text_file_patch in text_file_patches.drain(..) {
+        for text_file_patch in text_patch.file_patches.drain(..) {
             // Note that we can dispatch by `old_filename` or `new_filename`, we
             // made sure that both will be assigned to the same `thread_id`.
             let thread_id = filename_to_thread_id[text_file_patch.old_filename().or(text_file_patch.new_filename()).unwrap()];

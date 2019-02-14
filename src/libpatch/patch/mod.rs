@@ -4,7 +4,7 @@
 //! applying them on `InternedFile`s.
 //!
 //! The hierarchy is:
-//! Top: `Vec<FilePatch>`     ... a single "blabla.patch" file
+//! Top: `Patch`              ... a single "blabla.patch" file
 //!   Has many: `FilePatch`   ... a part of patch that changes single file
 //!     Has many: `Hunk`      ... a single hunk
 //!       Has two: `HunkPart` ... one for content to be added, one to be removed
@@ -15,13 +15,13 @@
 //!
 //! * `Line = &[u8]`: The line is a slice of some external buffer. This is how
 //!                   patches come from parser.
-//!                   Type alliases `TextFilePatch` and `TextHunk` can be used
-//!                   as shortcut.
+//!                   Type aliases `TextPatch`, `TextFilePatch` and `TextHunk`
+//!                   can be used as shortcut.
 //!
 //! * `Line = LineId`: The line is a unique 32-bit ID. This is how patches look
 //!                    after interning.
-//!                    Type alliases `InternedFilePatch` and `InternedHunk` can
-//!                    be used as shortcut.
+//!                    Type aliases `InternedPatch`, `InternedFilePatch` and
+//!                    `InternedHunk` can be used as shortcut.
 //!
 //! Other line representations would be possible, for example one where
 //! `Line = String` for a patch that owns its data.
@@ -881,5 +881,29 @@ impl<'a> InternedFilePatch<'a> {
         analyses.after_modifications(interned_file, self, direction, &report, fn_analysis_note);
 
         report
+    }
+}
+
+/// A single patch file
+#[derive(Clone, Debug)]
+pub struct Patch<'a, Line> {
+    /// All "garbage" lines preceding the first FilePatch.
+    /// These lines include the final new line character.
+    pub header: Vec<&'a [u8]>,
+
+    /// All FilePatches included in the patch file
+    pub file_patches: Vec<FilePatch<'a, Line>>,
+}
+
+pub type TextPatch<'a> = Patch<'a, &'a [u8]>;
+pub type InternedPatch<'a> = Patch<'a, LineId>;
+
+impl<'a> TextPatch<'a> {
+    /// Consumes this text-based Patch and produces interned Patch.
+    pub fn intern(mut self, interner: &mut LineInterner<'a>) -> InternedPatch<'a> {
+        InternedPatch {
+            header: self.header,
+            file_patches: self.file_patches.drain(..).map(|file_patch| file_patch.intern(interner)).collect(),
+        }
     }
 }

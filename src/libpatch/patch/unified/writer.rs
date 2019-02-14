@@ -207,3 +207,16 @@ impl<'a> UnifiedPatchRejWriter for FilePatch<'a, LineId> {
     }
 }
 
+impl<'a> UnifiedPatchWriter for Patch<'a, LineId> {
+    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
+        for header_line in &self.header {
+            writer.write(header_line)?;
+        }
+
+        for file_patch in &self.file_patches {
+            file_patch.write_to(interner, writer)?;
+        }
+
+        Ok(())
+    }
+}

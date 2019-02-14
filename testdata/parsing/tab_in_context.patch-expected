@@ -1,3 +1,4 @@
+Patch accepts TAB character at the beginning of context.
 diff --git filename filename
 --- filename
 +++ filename

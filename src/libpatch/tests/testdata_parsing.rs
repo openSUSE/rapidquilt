@@ -5,24 +5,21 @@ use std::vec::Vec;
 
 use failure::{Error, ResultExt};
 
-use crate::patch::TextFilePatch;
+use crate::patch::TextPatch;
 use crate::patch::unified::parser::parse_patch;
 use crate::patch::unified::writer::UnifiedPatchWriter;
 use crate::line_interner::LineInterner;
 
 
 #[cfg(test)]
-fn compare_output<'a>(path: &Path, file_patches: Vec<TextFilePatch<'a>>) -> Result<(), Error> {
+fn compare_output<'a>(path: &Path, patch: TextPatch<'a>) -> Result<(), Error> {
     // XXX: We could implement UnifiedPatchWriter for TextFilePatch and completely
     //      skip the interning in this test. But we don't really need to print
     //      pre-interned patches anywhere else but in this test.
     let mut interner = LineInterner::new();
 
     let mut output = Vec::<u8>::new();
-    for file_patch in file_patches {
-        let file_patch = file_patch.intern(&mut interner);
-        file_patch.write_to(&interner, &mut output)?;
-    }
+    patch.intern(&mut interner).write_to(&interner, &mut output)?;
 
     let expected_output = fs::read(path.with_extension("patch-expected"))
         .with_context(|_| "Patch parsed ok, but test could not open \"*.patch-expected\" file".to_string())?;
@@ -80,8 +77,8 @@ fn all_files() -> Result<(), Error> {
         let patch_data = fs::read(&path)?;
 
         let strip = 0;
-        match parse_patch(&patch_data, strip) {
-            Ok(file_patches) => { compare_output(&path, file_patches)?; }
+        match parse_patch(&patch_data, strip, true) {
+            Ok(patch) => { compare_output(&path, patch)?; }
             Err(error) => { compare_error(&path, error)?; }
         };
     }

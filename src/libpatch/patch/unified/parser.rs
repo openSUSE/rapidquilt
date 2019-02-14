@@ -384,8 +384,8 @@ fn test_parse_metadata_line() {
 }
 
 #[derive(Debug, PartialEq)]
-enum PatchLine {
-    Garbage,
+enum PatchLine<'a> {
+    Garbage(&'a [u8]),
     Metadata(MetadataLine),
     StartOfHunk,
     EndOfPatch,
@@ -395,7 +395,7 @@ named!(parse_patch_line<CompleteByteSlice, PatchLine>,
     alt!(
         map!(parse_metadata_line, PatchLine::Metadata) |
         value!(PatchLine::StartOfHunk, peek!(parse_hunk_header)) |
-        value!(PatchLine::Garbage, take_until_newline_incl) |
+        map!(take_until_newline_incl, |line| PatchLine::Garbage(line.0)) |
         value!(PatchLine::EndOfPatch, eof!())
     )
 );
@@ -411,7 +411,7 @@ fn test_parse_patch_line() {
 
     assert_parsed!(parse_patch_line, b"@@ -1 +1 @@\n", StartOfHunk);
 
-    assert_parsed!(parse_patch_line, b"Bla ble bli.\n", Garbage);
+    assert_parsed!(parse_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
 }
 
 fn parse_number_usize(input: CompleteByteSlice) -> IResult<CompleteByteSlice, usize> {
@@ -914,7 +914,11 @@ fn permissions_from_mode(mode: u32) -> Option<Permissions> {
     None
 }
 
-fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, TextFilePatch<'a>> {
+fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
+    -> IResult<CompleteByteSlice, (Vec<&'a [u8]>, TextFilePatch<'a>)>
+{
+    let mut header = Vec::new();
+
     let mut metadata = FilePatchMetadata::default();
 
     // First we read metadata lines or garbage and wait until we find a first hunk.
@@ -925,10 +929,20 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByte
         use self::MetadataLine::*;
 
         match patch_line {
-            Garbage => { input = input_; continue; }
+            Garbage(garbage) => {
+                if want_header {
+                    header.push(garbage);
+                }
+                input = input_;
+                continue;
+            }
+
             StartOfHunk => { input = input_; break; }
 
             EndOfPatch | Metadata(MetadataLine::GitDiffSeparator(..)) => {
+                // No more header lines after the first non-garbage line
+                want_header = false;
+
                 // We reached end of file or separator and have no hunks. It
                 // could be still valid patch that only renames a file or
                 // changes permissions... So lets check for that.
@@ -938,7 +952,7 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByte
 
                         // Note that in this case we don't set `input = input_`, because we don't want to consume the GitDiffSeparator
 
-                        return Ok((input, filepatch));
+                        return Ok((input, (header, filepatch)));
                     }
                     Err(FilePatchMetadataBuildError::MissingFilenames(incomplete_metadata)) => {
                         // Otherwise it just means that everything that may have
@@ -1009,7 +1023,7 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>) -> IResult<CompleteByte
         }
     )?;
 
-    Ok((input, filepatch))
+    Ok((input, (header, filepatch)))
 }
 
 #[cfg(test)]
@@ -1030,7 +1044,13 @@ Some other line...
 Other content.
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1052,7 +1072,13 @@ garbage3
 +ccc
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
     assert_eq!(file_patch.old_filename(), None);
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1074,7 +1100,13 @@ garbage3
 +ccc
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1096,7 +1128,13 @@ garbage3
 -ccc
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), None);
@@ -1118,7 +1156,13 @@ garbage3
 -ccc
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1149,7 +1193,13 @@ Some other line...
 Other content.
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
@@ -1169,7 +1219,13 @@ rename to filename2
 +++ filename2
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
@@ -1192,7 +1248,13 @@ rename to filename2
  ddd
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
@@ -1209,7 +1271,18 @@ diff --git filename1 filename2
 GIT binary patch
 ???
 "#;
-        assert_parse_error_code!(parse_filepatch, s!(filepatch_txt), ParseErrorCode::UnsupportedMetadata as u32);
+
+    let ret = parse_filepatch(CompleteByteSlice(filepatch_txt), false);
+    match ret {
+        Err(nom::Err::Error(  nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) |
+        Err(nom::Err::Failure(nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) => {
+            assert_eq!(error_code, ParseErrorCode::UnsupportedMetadata as u32);
+        }
+
+        _ => {
+            panic!("Got unexpected success when parsing patch with unsupported metadata!");
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -1232,7 +1305,7 @@ new mode 100755
  ddd
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1258,7 +1331,7 @@ diff --git filename2 filename2
  ddd
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1276,7 +1349,7 @@ old mode 100644
 new mode 100755
 "#;
 
-    let file_patch = parse_filepatch(CompleteByteSlice(filepatch_txt)).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
     assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
@@ -1285,15 +1358,17 @@ new mode 100755
     assert_eq!(file_patch.hunks.len(), 0);
 }
 
-pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatch<'a>>, Error> {
+pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize, mut wants_header: bool) -> Result<TextPatch<'a>, Error> {
     let mut input = CompleteByteSlice(bytes);
 
-    let mut filepatches = Vec::<TextFilePatch>::new();
+    let mut header = Vec::new();
+    let mut file_patches = Vec::<TextFilePatch>::new();
 
     loop {
-        let (_input, mut filepatch) = match parse_filepatch(input) {
+        // Parse one filepatch at time. If it is the first one, ask it to give us its header as well.
+        let (_input, (filepatch_header, mut filepatch)) = match parse_filepatch(input, wants_header) {
             // We got one
-            Ok(filepatch) => filepatch,
+            Ok(header_and_filepatch) => header_and_filepatch,
 
             // No more filepatches...
             Err(nom::Err::Error(_)) => break,
@@ -1304,13 +1379,23 @@ pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize) -> Result<Vec<TextFilePatc
             // No way this could happen
             Err(nom::Err::Incomplete(_)) => unreachable!(),
         };
+
+        if wants_header {
+            // We take header from the first FilePatch and then we don't want any more
+            header = filepatch_header;
+            wants_header = false;
+        }
+
         input = _input;
 
         filepatch.strip(strip);
-        filepatches.push(filepatch);
+        file_patches.push(filepatch);
     }
 
-    Ok(filepatches)
+    Ok(TextPatch {
+        header,
+        file_patches,
+    })
 }
 
 #[cfg(test)]
@@ -1326,6 +1411,8 @@ garbage3
 -nnn
 +ooo
  ppp
+garbage4
+garbage5
 --- filename2
 +++ filename2
 @@ -200,3 +210,3 @@ place2
@@ -1333,11 +1420,18 @@ garbage3
 -bbb
 +ccc
  ddd
-garbage4
-garbage5
+garbage6
+garbage7
 "#;
 
-    let file_patches = parse_patch(patch_txt, 0).unwrap();
+    let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert_eq!(patch.header.len(), 3);
+    assert_eq!(patch.header[0], b"garbage1\n");
+    assert_eq!(patch.header[1], b"garbage2\n");
+    assert_eq!(patch.header[2], b"garbage3\n");
+
+    let file_patches = patch.file_patches;
 
     assert_eq!(file_patches.len(), 2);
 
@@ -1375,7 +1469,14 @@ rename from filename7
 rename to filename7
 "#;
 
-    let file_patches = parse_patch(patch_txt, 0).unwrap();
+    let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert_eq!(patch.header.len(), 3);
+    assert_eq!(patch.header[0], b"garbage1\n");
+    assert_eq!(patch.header[1], b"garbage2\n");
+    assert_eq!(patch.header[2], b"garbage3\n");
+
+    let file_patches = patch.file_patches;
 
     assert_eq!(file_patches.len(), 4);
 
@@ -1407,7 +1508,7 @@ mod tests {
         let data = include_bytes!("../../../../testdata/big.patch");
 
         b.iter(|| {
-            black_box(parse_patch(data, 1).unwrap());
+            black_box(parse_patch(data, 1, false).unwrap());
         });
     }
 }

@@ -28,14 +28,14 @@ fn all_files() -> Result<(), Error> {
         // Load and parse the patch
         let patch_data = fs::read(&path)?;
         let strip = 0;
-        let mut file_patches = parse_patch(&patch_data, strip)?;
+        let mut patch = parse_patch(&patch_data, strip, true)?;
 
         // Check that there is exactly one FilePatch
-        if file_patches.len() != 1 {
-            panic!("Test patch {} is for {} files, expected exactly one!", path.display(), file_patches.len());
+        if patch.file_patches.len() != 1 {
+            panic!("Test patch {} is for {} files, expected exactly one!", path.display(), patch.file_patches.len());
         }
-        let file_patch = file_patches.pop().unwrap();
-        std::mem::drop(file_patches); // XXX: Not sure why I have to drop manually here, but otherwise I get strange borrow check error.
+        let file_patch = patch.file_patches.pop().unwrap();
+        std::mem::drop(patch); // XXX: Not sure why I have to drop manually here, but otherwise I get strange borrow check error.
 
         // Load the target file
         // Note: In this case we always expect the old_filename to exist, so we

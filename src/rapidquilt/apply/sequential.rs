@@ -48,15 +48,15 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
 
         final_patch = index;
 
-        let text_file_patches = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
+        let patch = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
             let data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
-            let text_file_patches = parse_patch(&data, series_patch.strip)?;
-            Ok(text_file_patches)
+            let patch = parse_patch(&data, series_patch.strip, false)?;
+            Ok(patch)
         })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
         let mut any_report_failed = false;
 
-        for text_file_patch in text_file_patches {
+        for text_file_patch in patch.file_patches {
             let fn_analysis_note = |note: &Note, file_patch: &InternedFilePatch| {
                 // We ignore any error here because currently we don't have a way to propagate it out
                 // of this callback. It's not so tragic, error here would most likely be IO error from

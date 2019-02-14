@@ -1,3 +1,4 @@
+Patch that changes permissions.
 diff --git filename filename
 old mode 100644
 new mode 100755

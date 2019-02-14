@@ -1,3 +1,4 @@
+Here is patch without --- and +++, but with "diff --git" line.
 diff --git filename filename
 --- filename
 +++ filename

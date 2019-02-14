@@ -1,3 +1,5 @@
+This tests rename patches.
+One with hunk, then without hunk and last without hunk at the end of file.
 diff --git old_filename1 new_filename1
 rename from old_filename1
 rename to new_filename1
