@@ -1,0 +1,15 @@
+fuzz: 1
+
+This tests correctness of the fuzz algorithm. The fuzz 1 must eat away one line
+of the prefix context, but it must not eat anything from the suffix context.
+One can imagine that it instead eats one virtual "out-of-file" suffix line.
+--- file5.in	2019-01-16 15:02:37.016021405 +0100
++++ with_fuzz1_at_end_mismatch.out	2019-01-16 15:03:08.724512747 +0100
+@@ -1,6 +1,6 @@
+ ttt
+ uuu
+ vvv
+-www
++www modified
+ xxx
+ yyy mismatched line

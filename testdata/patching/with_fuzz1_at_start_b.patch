@@ -1,0 +1,13 @@
+fuzz: 1
+
+Without fuzz, this patch would be forced to apply to the beginning of the file.
+With fuzz 1 it is *still* forced to apply to the beginning which will fail!
+--- file5.in	2019-01-16 15:02:37.016021405 +0100
++++ with_fuzz1_at_start_b.out	2019-01-16 15:03:08.724512747 +0100
+@@ -1,5 +1,5 @@
+ ccc
+-ddd
++ddd modified
+ eee
+ fff
+ ggg

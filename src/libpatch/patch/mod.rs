@@ -31,6 +31,7 @@
 //! remove-line and add-line.
 
 
+use std::cmp::{max, min};
 use std::fs;
 use std::vec::Vec;
 use std::path::{Path, PathBuf};
@@ -127,7 +128,7 @@ impl<'a, Line> Hunk<'a, Line> {
     /// Return the maximum fuzz that can be applied to this hunk. Applying more
     /// has no effect because there would be no more context lines to ignore.
     pub fn max_useable_fuzz(&self) -> usize {
-        std::cmp::max(self.context_before, self.context_after)
+        max(self.context_before, self.context_after)
     }
 
     pub fn view<'hunk>(&'hunk self, direction: PatchDirection, fuzz: usize)
@@ -153,8 +154,20 @@ pub struct HunkView<'a, 'hunk, Line> {
 
 impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
     pub fn new(hunk: &'hunk Hunk<'a, Line>, direction: PatchDirection, fuzz: usize) -> Self {
-        let fuzz_before = std::cmp::min(hunk.context_before, fuzz);
-        let fuzz_after = std::cmp::min(hunk.context_after, fuzz);
+        // If the `context_before` and `context_after` are equal, then `fuzz` needs to be subtracted
+        // from both of them equally. So `fuzz` just turns into `fuzz_before` and `fuzz_after`.
+        //
+        // If they are not equal, then `fuzz` needs to be subtracted from the bigger one of them and
+        // then the smaller one will be shortened only if needed to match the (originally) bigger one.
+        //
+        // One way to imagine it is that the shorter context actually contains virtual "out-of-file"
+        // lines that make him as long as the other context. The fuzz is eating away these virtual
+        // lines same as the real in-file lines. If it eats all the "out-of-file" lines, then the
+        // hunk is no longer tied to the start/end of file.
+
+        let remaining_context = max(hunk.context_before, hunk.context_after).saturating_sub(fuzz);
+        let fuzz_before = hunk.context_before.saturating_sub(remaining_context);
+        let fuzz_after = hunk.context_after.saturating_sub(remaining_context);
 
         HunkView {
             hunk,
@@ -197,7 +210,9 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
         //             start of the file if their first line  number is 1. Hunks with more prefix context than suffix
         //             context (after applying fuzz) must apply at the end of the file."
 
-        if self.context_before() < self.context_after() && self.add_target_line() == 0 { // Note that we are numbering lines from 0, so this is the "line number 1" the manual talks about.
+        if self.context_before() < self.context_after() &&
+           self.add_target_line() == 0 // Note that we are numbering lines from 0, so this is the "line number 1" the manual talks about.
+        {
             return HunkPosition::Start;
         }
 
@@ -817,7 +832,7 @@ impl<'a> InternedFilePatch<'a> {
             let possible_fuzz_levels = match apply_mode {
                 // In normal mode consider fuzz 0 up to given maximum fuzz, but no more than what is useable for this hunk
                 ApplyMode::Normal =>
-                    0..=std::cmp::min(fuzz, hunk.max_useable_fuzz()),
+                    0..=min(fuzz, hunk.max_useable_fuzz()),
 
                 // In rollback mode use what worked in normal mode
                 ApplyMode::Rollback(ref previous_report) => match previous_report.hunk_reports[i] {

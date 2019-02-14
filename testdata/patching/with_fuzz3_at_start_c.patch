@@ -1,0 +1,13 @@
+fuzz: 3
+
+Without fuzz, this patch would be forced to apply to the beginning of the file.
+With fuzz 3 it is free to apply anywhere, because suffix context minus fuzz
+is no longer bigger than prefix context.
+--- file5.in	2019-01-16 15:02:37.016021405 +0100
++++ with_fuzz3_at_start_c.out	2019-01-16 15:03:08.724512747 +0100
+@@ -1,4 +1,4 @@
+-ddd
++ddd modified
+ eee
+ fff
+ ggg

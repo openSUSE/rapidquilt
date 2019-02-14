@@ -1,6 +1,7 @@
 # Unreleased changes
 
 * Support for `-p` and `-R` patch options in series file.
+* Fuzz > 0 now behaves lot more like patch.
 
 # Version 0.5.2
 
