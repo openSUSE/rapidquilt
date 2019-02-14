@@ -3,7 +3,7 @@ use crate::apply::parallel::FilenameDistributor;
 
 #[test]
 fn test_empty() {
-    let f = FilenameDistributor::<String>::new(1, 0);
+    let f = FilenameDistributor::<String>::new(1);
     let h = f.build();
     assert_eq!(h.len(), 0);
 }
@@ -12,7 +12,7 @@ fn test_empty() {
 fn test_basic() {
     let thread_count = 4;
 
-    let mut f = FilenameDistributor::new(thread_count, 0);
+    let mut f = FilenameDistributor::new(thread_count);
 
     f.add("aaa", None);
     f.add("bbb", None);
@@ -43,7 +43,7 @@ fn test_basic() {
 fn test_equal_distribution() {
     let thread_count = 4096;
 
-    let mut f = FilenameDistributor::new(thread_count, 0);
+    let mut f = FilenameDistributor::new(thread_count);
 
     f.add("aaa", None);
     f.add("bbb", None);
@@ -71,7 +71,7 @@ fn test_equal_distribution() {
 fn test_rename_1() {
     let thread_count = 4096;
 
-    let mut f = FilenameDistributor::new(thread_count, 0);
+    let mut f = FilenameDistributor::new(thread_count);
 
     f.add("aaa", None);
     f.add("bbb", None);
@@ -98,7 +98,7 @@ fn test_rename_1() {
 fn test_rename_2() {
     let thread_count = 4096;
 
-    let mut f = FilenameDistributor::new(thread_count, 0);
+    let mut f = FilenameDistributor::new(thread_count);
 
     f.add("aaa", None);
     f.add("bbb", None);
@@ -126,7 +126,7 @@ fn test_rename_2() {
 fn test_rename_3() {
     let thread_count = 4096;
 
-    let mut f = FilenameDistributor::new(thread_count, 0);
+    let mut f = FilenameDistributor::new(thread_count);
 
     f.add("aaa", Some("bbb"));
     f.add("bbb", Some("ccc"));
@@ -152,7 +152,7 @@ fn test_rename_3() {
 fn test_rename_4() {
     let thread_count = 4096;
 
-    let mut f = FilenameDistributor::new(thread_count, 0);
+    let mut f = FilenameDistributor::new(thread_count);
 
     f.add("hhh", Some("ggg"));
     f.add("ggg", Some("fff"));
@@ -178,7 +178,7 @@ fn test_rename_4() {
 fn test_rename_5() {
     let thread_count = 4096;
 
-    let mut f = FilenameDistributor::new(thread_count, 0);
+    let mut f = FilenameDistributor::new(thread_count);
 
     f.add("aaa", None);
     f.add("bbb", None);
@@ -212,7 +212,7 @@ fn test_rename_5() {
 fn test_rename_6() {
     let thread_count = 4096;
 
-    let mut f = FilenameDistributor::new(thread_count, 0);
+    let mut f = FilenameDistributor::new(thread_count);
 
     f.add("aaa", None);
     f.add("aaa", Some("bbb"));
