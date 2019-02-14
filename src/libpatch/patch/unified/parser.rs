@@ -645,7 +645,7 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
                 header.add_count -= 1;
 
                 there_was_a_non_context_line = true;
-                hunk.context_after = 0;
+                hunk.suffix_context = 0;
             }
             HunkLineType::Remove => {
                 if header.remove_count == 0 {
@@ -656,7 +656,7 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
                 header.remove_count -= 1;
 
                 there_was_a_non_context_line = true;
-                hunk.context_after = 0;
+                hunk.suffix_context = 0;
             }
             HunkLineType::Context => {
                 if header.remove_count == 0 || header.add_count == 0 {
@@ -669,9 +669,9 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
                 header.remove_count -= 1;
 
                 if !there_was_a_non_context_line {
-                    hunk.context_before += 1;
+                    hunk.prefix_context += 1;
                 } else {
-                    hunk.context_after += 1;
+                    hunk.suffix_context += 1;
                 }
             }
         }
@@ -702,8 +702,8 @@ fn test_parse_hunk() {
     assert_eq!(&h.add.content[..], [b"aaa\n", b"bbb\n", b"ccc\n", b"eee\n", b"fff\n", b"ggg\n", b"hhh\n"]);
     assert_eq!(&h.remove.content[..], [b"aaa\n", b"bbb\n", b"ccc\n", b"ddd\n", b"ggg\n", b"hhh\n"]);
 
-    assert_eq!(h.context_before, 3);
-    assert_eq!(h.context_after, 2);
+    assert_eq!(h.prefix_context, 3);
+    assert_eq!(h.suffix_context, 2);
 
     assert_eq!(h.function, b"place");
 
@@ -817,7 +817,7 @@ impl FilePatchMetadata {
         if hunks.len() == 1 {
             let only_hunk = &hunks[0];
 
-            if only_hunk.context_after == 0 && only_hunk.context_before == 0 {
+            if only_hunk.suffix_context == 0 && only_hunk.prefix_context == 0 {
                 if only_hunk.add.content.is_empty() &&
                   !only_hunk.remove.content.is_empty()
                 {

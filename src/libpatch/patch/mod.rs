@@ -94,10 +94,10 @@ pub struct Hunk<'a, Line> {
 
     /// How many lines at start of both `remove` and `add` are actually context
     /// lines. (Useful for fuzzy patching.)
-    pub context_before: usize,
+    pub prefix_context: usize,
     /// How many lines at the end of both `remove` and `add` are actually context
     /// lines. (Useful for fuzzy patching.)
-    pub context_after: usize,
+    pub suffix_context: usize,
 
     /// The string that follows the second "@@"
     /// Not necessarily a name of a function, but that's how it is called in diff.
@@ -118,8 +118,8 @@ impl<'a, Line> Hunk<'a, Line> {
                 target_line: add_line,
             },
 
-            context_before: 0,
-            context_after: 0,
+            prefix_context: 0,
+            suffix_context: 0,
 
             function,
         }
@@ -128,7 +128,7 @@ impl<'a, Line> Hunk<'a, Line> {
     /// Return the maximum fuzz that can be applied to this hunk. Applying more
     /// has no effect because there would be no more context lines to ignore.
     pub fn max_useable_fuzz(&self) -> usize {
-        max(self.context_before, self.context_after)
+        max(self.prefix_context, self.suffix_context)
     }
 
     pub fn view<'hunk>(&'hunk self, direction: PatchDirection, fuzz: usize)
@@ -146,16 +146,16 @@ pub struct HunkView<'a, 'hunk, Line> {
     hunk: &'hunk Hunk<'a, Line>,
 
     fuzz: usize,
-    fuzz_before: usize,
-    fuzz_after: usize,
+    prefix_fuzz: usize,
+    suffix_fuzz: usize,
 
     direction: PatchDirection,
 }
 
 impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
     pub fn new(hunk: &'hunk Hunk<'a, Line>, direction: PatchDirection, fuzz: usize) -> Self {
-        // If the `context_before` and `context_after` are equal, then `fuzz` needs to be subtracted
-        // from both of them equally. So `fuzz` just turns into `fuzz_before` and `fuzz_after`.
+        // If the `prefix_context` and `suffix_context` are equal, then `fuzz` needs to be subtracted
+        // from both of them equally. So `fuzz` just turns into `prefix_fuzz` and `suffix_fuzz`.
         //
         // If they are not equal, then `fuzz` needs to be subtracted from the bigger one of them and
         // then the smaller one will be shortened only if needed to match the (originally) bigger one.
@@ -165,15 +165,15 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
         // lines same as the real in-file lines. If it eats all the "out-of-file" lines, then the
         // hunk is no longer tied to the start/end of file.
 
-        let remaining_context = max(hunk.context_before, hunk.context_after).saturating_sub(fuzz);
-        let fuzz_before = hunk.context_before.saturating_sub(remaining_context);
-        let fuzz_after = hunk.context_after.saturating_sub(remaining_context);
+        let remaining_context = max(hunk.prefix_context, hunk.suffix_context).saturating_sub(fuzz);
+        let prefix_fuzz = hunk.prefix_context.saturating_sub(remaining_context);
+        let suffix_fuzz = hunk.suffix_context.saturating_sub(remaining_context);
 
         HunkView {
             hunk,
             fuzz,
-            fuzz_before,
-            fuzz_after,
+            prefix_fuzz,
+            suffix_fuzz,
             direction,
         }
     }
@@ -193,30 +193,30 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
     }
 
     pub fn remove_content(&self) -> &[Line] {
-        &self.remove_part().content[self.fuzz_before..(self.remove_part().content.len() - self.fuzz_after)]
+        &self.remove_part().content[self.prefix_fuzz..(self.remove_part().content.len() - self.suffix_fuzz)]
     }
     pub fn remove_target_line(&self) -> isize { self.remove_part().target_line }
 
     pub fn add_content(&self) -> &[Line] {
-        &self.add_part().content[self.fuzz_before..(self.add_part().content.len() - self.fuzz_after)]
+        &self.add_part().content[self.prefix_fuzz..(self.add_part().content.len() - self.suffix_fuzz)]
     }
     pub fn add_target_line(&self) -> isize { self.add_part().target_line }
 
-    pub fn context_before(&self) -> usize { self.hunk.context_before - self.fuzz_before }
-    pub fn context_after(&self) -> usize { self.hunk.context_after - self.fuzz_after }
+    pub fn prefix_context(&self) -> usize { self.hunk.prefix_context - self.prefix_fuzz }
+    pub fn suffix_context(&self) -> usize { self.hunk.suffix_context - self.suffix_fuzz }
 
     pub fn position(&self) -> HunkPosition {
         // man patch: "Hunks with less prefix context than suffix context (after applying fuzz) must apply at the
         //             start of the file if their first line  number is 1. Hunks with more prefix context than suffix
         //             context (after applying fuzz) must apply at the end of the file."
 
-        if self.context_before() < self.context_after() &&
+        if self.prefix_context() < self.suffix_context() &&
            self.add_target_line() == 0 // Note that we are numbering lines from 0, so this is the "line number 1" the manual talks about.
         {
             return HunkPosition::Start;
         }
 
-        if self.context_before() > self.context_after() {
+        if self.prefix_context() > self.suffix_context() {
             return HunkPosition::End;
         }
 
@@ -237,8 +237,8 @@ impl<'a> TextHunk<'a> {
         Hunk {
             remove: self.remove.intern(interner),
             add: self.add.intern(interner),
-            context_before: self.context_before,
-            context_after: self.context_after,
+            prefix_context: self.prefix_context,
+            suffix_context: self.suffix_context,
             function: self.function,
         }
     }
@@ -384,7 +384,7 @@ fn try_apply_hunk<'a, 'hunk>(
 
     if let ApplyMode::Normal = apply_mode {
         // Check if we are not modifying frozen content
-        if target_line + hunk_view.context_before() as isize <= last_frozen_line {
+        if target_line + hunk_view.prefix_context() as isize <= last_frozen_line {
             return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
         }
     }
@@ -863,7 +863,7 @@ impl<'a> InternedFilePatch<'a> {
                 // any more fuzz levels.
                 if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
                     last_hunk_offset = offset;
-                    last_frozen_line = line + hunk_view.remove_content().len() as isize - hunk_view.context_after() as isize;
+                    last_frozen_line = line + hunk_view.remove_content().len() as isize - hunk_view.suffix_context() as isize;
                     break;
                 }
             }
