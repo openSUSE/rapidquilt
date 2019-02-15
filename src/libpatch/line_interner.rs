@@ -4,6 +4,8 @@ use std::fmt;
 use std::hash::BuildHasherDefault;
 
 use indexmap::IndexSet;
+use std::hash::Hash;
+use std::hash::Hasher;
 
 
 pub struct Stats {
@@ -26,13 +28,41 @@ impl<'a> fmt::Debug for LineId {
     }
 }
 
+/// A newtype around `&[u8]` that makes lines ending with "\r\n" act like if they ended with "\n"
+/// when hashing and comparing. Note that lines with no newline marker are still distinct from lines
+/// with marker.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug, Eq)]
+struct EOLIgnoringLine<'a>(&'a [u8]);
+
+impl<'a> Hash for EOLIgnoringLine<'a> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        if self.0.ends_with(b"\r\n") {
+            self.0[0..self.0.len() - 2].hash(state);
+        } else {
+            self.0[0..self.0.len() - 1].hash(state);
+        }
+    }
+}
+
+impl<'a> PartialEq<Self> for EOLIgnoringLine<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self.0.ends_with(b"\r\n"), other.0.ends_with(b"\r\n")) {
+            (true, true) => self.0[0..self.0.len() - 2] == other.0[0..other.0.len() - 2],
+            (true, false) => self.0[0..self.0.len() - 2] == other.0[0..other.0.len() - 1] && other.0[other.0.len() - 1] == b'\n',
+            (false, true) => self.0[0..self.0.len() - 1] == other.0[0..other.0.len() - 2] && self.0[self.0.len() - 1] == b'\n',
+            (false, false) => self.0 == other.0,
+        }
+    }
+}
+
 /// A tool that interns lines and assigns them `LineId`s.
 ///
 /// A line is a non-empty sequence of bytes that may end with b'\n' (but
 /// doesn't have to, e.g. if it was the last line of a file that did not
 /// end with b'\n')
 pub struct LineInterner<'a> {
-    set: IndexSet<&'a [u8], BuildHasherDefault<seahash::SeaHasher>>,
+    set: IndexSet<EOLIgnoringLine<'a>, BuildHasherDefault<seahash::SeaHasher>>,
 }
 
 impl<'a> LineInterner<'a> {
@@ -52,12 +82,12 @@ impl<'a> LineInterner<'a> {
         // otherwise it would not exist.
         debug_assert!(!bytes.is_empty());
 
-        LineId(self.set.insert_full(bytes).0 as u32)
+        LineId(self.set.insert_full(EOLIgnoringLine(bytes)).0 as u32)
     }
 
     /// Get the line for given `LineId`. Returns `None` if that id isn't known.
     pub fn get(&self, id: LineId) -> Option<&'a [u8]> {
-        self.set.get_index(id.0 as usize).cloned() // Cloned for Option<&&[u8]> -> Option<&[u8]>
+        self.set.get_index(id.0 as usize).cloned().map(|f| f.0) // Cloned for Option<&&[u8]> -> Option<&[u8]>
     }
 
     /// Get statistics
@@ -72,7 +102,7 @@ impl<'a> fmt::Debug for LineInterner<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "LineInterner {{ set:")?;
         for (i, item) in self.set.iter().enumerate() {
-            writeln!(f, "{}:\t\"{}\"", i, String::from_utf8_lossy(item))?;
+            writeln!(f, "{}:\t\"{}\"", i, String::from_utf8_lossy(item.0))?;
         }
         write!(f, " }}")
     }
@@ -93,5 +123,53 @@ mod tests {
 
         assert!(interner.get(id1) == Some(b"aaa"));
         assert!(interner.get(id2) == Some(b"bbb"));
+    }
+
+    #[test]
+    fn eol_ignoring_line() {
+        let line_linux = EOLIgnoringLine(b"test\n");
+        let line_windows = EOLIgnoringLine(b"test\r\n");
+        let line_no_nl = EOLIgnoringLine(b"test");
+
+        fn get_hash<T: Hash>(t: &T) -> u64 {
+            let mut hasher = seahash::SeaHasher::default();
+            t.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        assert_eq!(get_hash(&line_linux), get_hash(&line_linux));
+        assert_eq!(get_hash(&line_windows), get_hash(&line_windows));
+        assert_eq!(get_hash(&line_no_nl), get_hash(&line_no_nl));
+        assert_eq!(get_hash(&line_linux), get_hash(&line_windows));
+
+        // Technically the following two tests are not correct. It could happen that the two hashes
+        // will end up the same. If this test ever start failing, first just try to change the sample
+        // string to something else. If it is still failing, then we are probably generating hashes
+        // that are too prone to collision.
+        assert_ne!(get_hash(&line_linux), get_hash(&line_no_nl));
+        assert_ne!(get_hash(&line_windows), get_hash(&line_no_nl));
+
+        assert_eq!(line_linux, line_linux);
+        assert_eq!(line_windows, line_windows);
+        assert_eq!(line_no_nl, line_no_nl);
+        assert_eq!(line_linux, line_windows);
+        assert_ne!(line_linux, line_no_nl);
+        assert_ne!(line_windows, line_no_nl);
+    }
+
+    #[test]
+    fn eol_test() {
+        let mut interner = LineInterner::new();
+        let line_linux = interner.add(b"test\n");
+        let line_windows = interner.add(b"test\r\n");
+        let line_no_nl = interner.add(b"test");
+
+        assert_eq!(line_linux, line_windows);
+        assert_ne!(line_linux, line_no_nl);
+        assert_ne!(line_windows, line_no_nl);
+
+        assert_eq!(interner.get(line_linux), Some(&b"test\n"[..]));
+        assert_eq!(interner.get(line_windows), Some(&b"test\n"[..])); // We should get back the linux one, because that's the first that went in
+        assert_eq!(interner.get(line_no_nl), Some(&b"test"[..]));
     }
 }
