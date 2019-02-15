@@ -1,7 +1,14 @@
 # Unreleased changes
 
+# Version 0.5.4
+
 * Support for `-p` and `-R` patch options in series file.
 * Fuzz > 0 now behaves lot more like patch.
+* Multiple bugfixes.
+
+# Version 0.5.3
+
+* Created because version 0.5.2 was tagged badly
 
 # Version 0.5.2
 
