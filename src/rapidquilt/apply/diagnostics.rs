@@ -379,7 +379,10 @@ pub fn print_difference_to_closest_match<W: Write>(
 
         if !line_str.ends_with('\n') {
             writeln!(writer)?;
-            write!(writer, "{}       \\ No new line!", prefix)?;
+            writeln!(writer, "{}      {}{}", prefix, " ".repeat(line_str.len()), "^ no new line".bright_red())?;
+        }
+        if !line_str.ends_with("\r\n") {
+            writeln!(writer, "{}      {}{}", prefix, " ".repeat(line_str.len()), "^ windows new line".bright_red())?;
         }
 
         Ok(())
