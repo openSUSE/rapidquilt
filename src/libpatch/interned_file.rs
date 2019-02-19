@@ -13,7 +13,13 @@ use crate::util::split_lines_with_endings;
 #[derive(Clone, Debug)]
 pub struct InternedFile {
     pub content: Vec<LineId>,
+
+    /// Did the file originally existed on disk? This captures the original state on the disk, it
+    /// is not changed by any patches.
     pub existed: bool,
+
+    /// Was this file deleted? Also true if the file was not present since beginning. This can be
+    /// changed by patches.
     pub deleted: bool,
 
     /// This tracks the permissions set by patches. It is `None` if no patch

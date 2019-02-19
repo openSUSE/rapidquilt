@@ -270,7 +270,7 @@ fn try_apply_hunk<'a, 'hunk>(
 {
     // If the file doesn't exist, fail immediatelly
     if interned_file.deleted {
-        return HunkApplyReport::Failed(HunkApplyFailureReason::FileWasDeleted);
+        return HunkApplyReport::Failed(HunkApplyFailureReason::FileDoesNotExist);
     }
 
     // Shortcuts
@@ -429,7 +429,7 @@ impl PatchDirection {
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub enum HunkApplyFailureReason {
     NoMatchingLines,
-    FileWasDeleted,
+    FileDoesNotExist,
     CreatingFileThatExists,
     DeletingFileThatDoesNotMatch,
     MisorderedHunks,

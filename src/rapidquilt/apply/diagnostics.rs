@@ -138,8 +138,8 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
                                 // any additional info.
                                 None,
 
-                            HunkApplyFailureReason::FileWasDeleted =>
-                                Some("The file was deleted by some previous patch."),
+                            HunkApplyFailureReason::FileDoesNotExist =>
+                                Some("Can not find file to patch."),
 
                             HunkApplyFailureReason::CreatingFileThatExists =>
                                 Some("Attempting to create file that already exists."),
