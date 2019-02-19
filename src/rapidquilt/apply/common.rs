@@ -208,8 +208,8 @@ pub fn choose_filename_to_patch<'a, H: BuildHasher>(
                 return new_filename;
             }
 
-            // Otherwise return the old one
-            old_filename
+            // Otherwise return the new one
+            new_filename
         }
 
         (None, None) => {
