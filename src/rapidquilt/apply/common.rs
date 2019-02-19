@@ -199,16 +199,26 @@ pub fn choose_filename_to_patch<'a, H: BuildHasher>(
         // If there are both...
         (Some(old_filename), Some(new_filename)) => {
             // If the old one exists (loaded or on disk), return that
-            if modified_files.contains_key(old_filename) || old_filename.exists() {
+            if modified_files.get(old_filename).map(|f| !f.deleted).unwrap_or(false) ||
+                old_filename.exists()
+            {
                 return old_filename;
             }
 
             // If the new one exists (loaded or on disk), return that
-            if modified_files.contains_key(new_filename) || new_filename.exists() {
+            if modified_files.get(new_filename).map(|f| !f.deleted).unwrap_or(false) ||
+                new_filename.exists()
+            {
                 return new_filename;
             }
 
-            // Otherwise return the new one
+            // This matches behavior of patch in my tests, but it may not match every time. Patch actually
+            // uses strange logic of figuring the "best" of the two filenames by comparing amount of
+            // components in path, length of basename and length of the full path. The comparison code may
+            // not actually do what it is described to do. So at this point we can not really replicate
+            // the behavior exactly.
+
+            // Otherwise return the new one.
             new_filename
         }
 
