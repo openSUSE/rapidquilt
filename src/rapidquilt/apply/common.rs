@@ -199,27 +199,36 @@ pub fn choose_filename_to_patch<'a, H: BuildHasher>(
         // If there are both...
         (Some(old_filename), Some(new_filename)) => {
             // If the old one exists (loaded or on disk), return that
-            if modified_files.get(old_filename).map(|f| !f.deleted).unwrap_or(false) ||
-                old_filename.exists()
-            {
-                return old_filename;
+            match modified_files.get(old_filename) {
+                // File is not in the database yet, check what is on disk...
+                None => {
+                    if old_filename.exists() {
+                        // It exists on disk, lets use it!
+                        old_filename
+                    } else {
+                        // Otherwise we choose new_filename without any additional checks.
+                        // See comment in the last match branch below.
+                        new_filename
+                    }
+                }
+
+                // File is in our database and it was not virtually deleted, lets use it!
+                Some(InternedFile { deleted: false, .. }) => {
+                    old_filename
+                }
+
+                // File is in our database and was virtually deleted, we will use new_filename.
+                // There is no point in checking anything about it, because no matter if it exists
+                // or not, we would fallback to using it in the end.
+                Some(InternedFile { deleted: true, .. }) => {
+                    // This matches behavior of patch in my tests, but it may not match every time.
+                    // Patch actually uses strange logic for figuring the "best" of the two (three)
+                    // filenames by comparing amount of components in path, length of basename and
+                    // length of the full path. The code appears to be buggy, so it is basically
+                    // undefined which file will be selected.
+                    new_filename
+                }
             }
-
-            // If the new one exists (loaded or on disk), return that
-            if modified_files.get(new_filename).map(|f| !f.deleted).unwrap_or(false) ||
-                new_filename.exists()
-            {
-                return new_filename;
-            }
-
-            // This matches behavior of patch in my tests, but it may not match every time. Patch actually
-            // uses strange logic of figuring the "best" of the two filenames by comparing amount of
-            // components in path, length of basename and length of the full path. The comparison code may
-            // not actually do what it is described to do. So at this point we can not really replicate
-            // the behavior exactly.
-
-            // Otherwise return the new one.
-            new_filename
         }
 
         (None, None) => {
