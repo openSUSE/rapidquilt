@@ -19,6 +19,9 @@
 //! 1) The files are roughly equally distributed.
 //! 2) If a filename A was ever renamed to filename B, both of them must be
 //! processed by the same thread.
+//! 3) Similarly, if a patch contains two different filenames A and B, even that
+//! it is not renaming, both A and B are assigned to the same thread (because
+//! whether A or B will be used is unknown at this moment).
 //!
 //! The `FilePatch`es are distributed to the threads based on the filenames
 //! assigned to them.
@@ -72,6 +75,13 @@ use libpatch::interned_file::InternedFile;
 /// do any overly smart planning, it just distributes them one by one as they
 /// come. However, it makes sure that every pair of filenames that was renamed
 /// from one to another will end up assigned to the same thread.
+///
+/// We must ensure that if we get e.g. renames A->B, C->D, B->C, then all filenames
+/// A, B, C, D must be assigned to the same thread, no matter in what order we saw
+/// the renames. To solve this, we use algorithm for finding connected components
+/// in a graph. Every filename is a node of the graph and every rename A->B is an edge
+/// between nodes A->B. In the end every connected component is then assigned to a
+/// singe thread. Typically most components consist of a single node.
 pub struct FilenameDistributor<T: Hash + Eq> {
     thread_count: usize,
     filename_to_index: HashMap<T, usize, BuildHasherDefault<seahash::SeaHasher>>,
@@ -79,6 +89,7 @@ pub struct FilenameDistributor<T: Hash + Eq> {
 }
 
 impl<T: Hash + Eq> FilenameDistributor<T> {
+    /// Create new distributor that distributes into `thread_count`-amount of threads
     pub fn new(thread_count: usize) -> Self {
         FilenameDistributor {
             thread_count,
@@ -87,6 +98,8 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
         }
     }
 
+    /// Add new `filename` to the distributor and optionally a `new_filename` if it is going to be
+    /// renamed. It is ok if both `filename` and `new_filename` was already added.
     pub fn add(&mut self, filename: T, new_filename: Option<T>) {
         // Check if we already saw the filename. If not, add it to filename_to_index and to self.connected_components as alone component.
         let next_index = self.connected_components.len();
@@ -114,6 +127,7 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
         }
     }
 
+    /// Consume the distributor and produce a map from `filename` to thread index.
     pub fn build(mut self) -> HashMap<T, usize, BuildHasherDefault<seahash::SeaHasher>> {
         for i in 0..self.connected_components.len() {
             if self.connected_components[i] != i {
@@ -129,7 +143,9 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
     }
 }
 
-/// Messages passed between threads
+/// Messages passed between threads.
+/// All messages are broadcasted to all threads (including the sender!), there is no one-to-one
+/// messaging.
 #[derive(Clone, Debug)]
 enum Message {
     /// "I found new, earlier patch that fails to apply". The actual index
@@ -188,7 +204,9 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     for (index, text_file_patch) in thread_file_patches {
         if index > earliest_broken_patch_index.load(Ordering::Acquire) {
             // We are past the earliest broken patch. Time to stop applying.
-            // Note that we DO WANT to apply the last broken patch itself.
+            // Note that we DO WANT to apply the last broken patch itself, because
+            // some hunks may fail to apply in this file as well, we want to get
+            // the complete set of failed hunks for error message and '*.rej' files.
             break;
         }
 
@@ -221,6 +239,10 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
                 // Signal everyone
                 broadcast_message(Message::NewEarliestBrokenPatchIndex);
+
+                // We continue applying because it is quite possible that we have more `FilePatch`es
+                // from the same `Patch` in queue and we must attempt to apply them all before we
+                // are done. (So we get complete "*.rej" files.)
             }
             Err(err) => {
                 // There was some other error! Signal everyone and terminate.
@@ -270,7 +292,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
             Message::ThreadDoneApplying => {
                 received_done_applying_count += 1;
-                // Time to rollback some more TODO: Is this needed? It won't hurt much, but still...
+                // Time to rollback some more or break out if all threads are done
                 continue;
             },
 
@@ -290,9 +312,9 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
     // Analyze failure, in case there was any
     let mut failure_analysis = Vec::<u8>::new();
-
     analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
+    // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
         rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner, config.verbosity)?;
@@ -379,11 +401,20 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
                 // is renaming, so that both of them will be scheduled to the same thread.
 
                 let (filename, rename_to_filename) = match (text_file_patch.old_filename(), text_file_patch.new_filename()) {
+                    // Only `old_filename` => use that.
                     (Some(old_filename), None) => (old_filename, None),
+
+                    // Only `new_filename` => use that.
                     (None, Some(new_filename)) => (new_filename, None),
+
+                    // `old_filename` and `new_filename` that are the same => use that.
                     (Some(old_filename), Some(new_filename)) if old_filename == new_filename => (old_filename, None),
+
+                    // `old_filename` and `new_filename` => consider it a rename!
                     (Some(old_filename), Some(new_filename)) => (old_filename, Some(new_filename)),
-                    (None, None) => unreachable!(), // Such patch should not come from parser
+
+                    // Neither!? Such patch should not come from parser.
+                    (None, None) => unreachable!(),
                 };
 
                 filename_distributor.add(filename.clone(), rename_to_filename.cloned()); // TODO: Get rid of clone?
@@ -393,6 +424,8 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
 
     let filename_to_thread_id = filename_distributor.build();
 
+    // Now use the filename->thread_id map to distribute the actual `FilePatch`es into queues (`Vec`s)
+    // for each thread.
     let mut text_file_patches_per_thread: Vec<Vec<(usize, TextFilePatch)>> = vec![Vec::with_capacity(
         config.series_patches.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
     ); threads];
@@ -424,7 +457,6 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
 
     // This will record results from the threads.
     let thread_results: Mutex<Vec<Result<WorkerReport, Error>>> = Mutex::new(Vec::new());
-
     let thread_results_ref = &thread_results;
 
     // Run the applying threads
