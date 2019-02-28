@@ -37,6 +37,22 @@ use crate::arena::{Arena, FileArena};
 use crate::arena::MmapArena;
 
 
+// Jemalloc has much better performance in multi threaded use than system allocator (at least on
+// linux). This may change in the future, so this may be reverted, but make measurements first.
+//
+// Example benchmark on openSUSE Leap 15.0, 8 core Intel Xeon E5-1620 applying
+// 44247 patches of SUSE's kernel-source branch SLE15-SP1:
+//
+// threads    system allocator    jemalloc
+//       1               5.2 s       5.1 s
+//       2               3.6 s       2.7 s
+//       4               3.0 s       1.6 s
+//       8               3.0 s       1.2 s
+//
+#[global_allocator]
+static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
+
+
 const DEFAULT_PATCH_STRIP: usize = 1;
 
 
