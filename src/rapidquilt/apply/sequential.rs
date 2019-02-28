@@ -4,7 +4,7 @@
 //!
 //! Patches are read, parsed and applied one by one.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::hash::BuildHasherDefault;
 use std::path::PathBuf;
@@ -96,7 +96,9 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
             println!("Saving modified files...");
         }
 
-        save_modified_files(&modified_files, &interner, config.verbosity)?;
+        let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
+        save_modified_files(&modified_files, &mut directories_for_cleaning, &interner, config.verbosity)?;
+        clean_empty_directories(directories_for_cleaning)?;
 
         if config.do_backups == ApplyConfigDoBackups::Always ||
           (config.do_backups == ApplyConfigDoBackups::OnFail &&

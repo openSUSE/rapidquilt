@@ -46,12 +46,12 @@
 
 
 use std;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::hash::{BuildHasherDefault, Hash};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{mpsc, Mutex};
+use std::sync::{mpsc, Barrier, Mutex};
 
 use colored::*;
 use failure::{Error, ResultExt};
@@ -189,6 +189,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     arena: &'a dyn Arena,
     thread_id: usize,
     threads: usize,
+    barrier: &Barrier,
     thread_file_patches: Vec<(usize, TextFilePatch<'a>)>,
     receiver: &mpsc::Receiver<Message>,
     broadcast_message: BroadcastFn,
@@ -324,7 +325,10 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
         }
 
         // Save all the files we modified
-        save_modified_files(&modified_files, &interner, config.verbosity)?;
+        let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
+        save_modified_files(&modified_files, &mut directories_for_cleaning, &interner, config.verbosity)?;
+        barrier.wait();
+        clean_empty_directories(directories_for_cleaning)?;
 
         // Maybe save some backup files
         if config.do_backups == ApplyConfigDoBackups::Always ||
@@ -455,6 +459,9 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
         mpsc::sync_channel::<Message>(threads * 2) // At the moment every thread can send at most 2 messages, so lets use fixed size channel.
     }).unzip();
 
+    // Create barrier for synchronization
+    let barrier = &Barrier::new(threads);
+
     // This will record results from the threads.
     let thread_results: Mutex<Vec<Result<WorkerReport, Error>>> = Mutex::new(Vec::new());
     let thread_results_ref = &thread_results;
@@ -480,6 +487,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
                     arena,
                     thread_id,
                     threads,
+                    barrier,
                     thread_file_patches,
                     &receiver,
                     broadcast_message,

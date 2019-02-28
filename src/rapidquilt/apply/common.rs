@@ -3,7 +3,7 @@
 //! This module contains functions shared between the `parallel` and
 //! `sequential` modules.
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::fs::{self, File};
 use std::io::{self, BufWriter};
 use std::hash::BuildHasher;
@@ -31,20 +31,60 @@ pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
     }
 }
 
-/// Delete the directory containing the `path` and every parent directory as
-/// long as they are empty.
-fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), io::Error> {
-    let mut path = path.as_ref();
+/// Delete all directories and their parents if they are empty.
+pub fn clean_empty_directories<'a, P: AsRef<Path>, I: IntoIterator<Item = P>>(directories_for_cleaning: I) -> Result<(), io::Error> {
+    // Warning: This function can be called by multiple threads at the same time for the same
+    //          directories (or nested directories), so things may disappear under its hands, it
+    //          must be able to deal with it.
 
-    while let Some(parent) = path.parent() {
-        if fs::read_dir(parent)?.next().is_some() {
-            // Not empty, we are done.
-            return Ok(());
+    // Go over every directory from the list...
+    for directory in directories_for_cleaning {
+        // ... and climb from the directory up until we find non-empty directory or there are no
+        // more parents (the paths are relative to our working directory, so that means we reached
+        // the working directory)
+        let mut directory = directory.as_ref();
+        loop {
+            // Check if there is at least one file in the directory
+            match fs::read_dir(directory).map(|mut d| d.next()) {
+                Err(ref error) if error.kind() == io::ErrorKind::NotFound => {
+                    // Directory itself does not exist, we are done.
+                    // This may happen if we already deleted it when cleaning after another file.
+                    // For example if there were "dir1/file1" and "dir1/dir2/file2" and both
+                    // "file1" and "file2" got deleted, then cleanup for "file2" would delete
+                    // everything and then the cleanup for "file1" has nothing to do.
+                    break;
+                }
+
+                Err(error) => {
+                    // Other error, report
+                    return Err(error);
+                }
+
+                Ok(Some(_)) => {
+                    // Directory is not empty, we are done.
+                    break;
+                }
+
+                Ok(None) => {
+                    // Directory is empty, we will delete it and then proceed with its parent...
+                }
+            }
+
+            match fs::remove_dir(directory) {
+                Err(error) => {
+                    if error.kind() != io::ErrorKind::NotFound {
+                        return Err(error);
+                    }
+                }
+                _ => {}
+            }
+
+            if let Some(parent) = directory.parent() {
+                directory = parent;
+            } else {
+                break;
+            }
         }
-
-        fs::remove_dir(parent)?;
-
-        path = parent;
     }
 
     Ok(())
@@ -52,7 +92,14 @@ fn clean_empty_parent_directories<P: AsRef<Path>>(path: P) -> Result<(), io::Err
 
 /// Save the `file` to disk. It also takes care of creating/deleting the file
 /// and containing directories.
-pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, interner: &LineInterner, verbosity: Verbosity) -> Result<(), io::Error> {
+pub fn save_modified_file<P: AsRef<Path>, H: BuildHasher>(
+    filename: P,
+    file: &InternedFile,
+    directories_for_cleaning: &mut HashSet<PathBuf, H>,
+    interner: &LineInterner,
+    verbosity: Verbosity)
+    -> Result<(), io::Error>
+{
     let filename = filename.as_ref();
 
     if verbosity >= Verbosity::ExtraVerbose {
@@ -78,9 +125,12 @@ pub fn save_modified_file<P: AsRef<Path>>(filename: P, file: &InternedFile, inte
     }
 
     if file.deleted {
-        // If the file was deleted and existed before, clean empty parent directories
+        // If the file was deleted and existed before, its parent directory may be empty and so
+        // needs to be checked for cleaning.
         if file.existed {
-            clean_empty_parent_directories(filename)?;
+            if let Some(parent) = filename.parent() {
+                directories_for_cleaning.insert(parent.to_path_buf());
+            }
         }
     } else {
         // If the file is not tracked as deleted, re-create it with the next content.
@@ -112,12 +162,13 @@ pub fn save_modified_files<
     H: BuildHasher>
 (
     modified_files: &HashMap<PathBuf, InternedFile, H>,
+    directories_for_cleaning: &mut HashSet<PathBuf, H>,
     interner: &'interner LineInterner<'arena>,
     verbosity: Verbosity)
     -> Result<(), Error>
 {
     for (filename, file) in modified_files {
-        save_modified_file(filename, file, &interner, verbosity)
+        save_modified_file(filename, file, directories_for_cleaning, &interner, verbosity)
             .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.clone() })?;
     }
 
