@@ -108,9 +108,19 @@ impl InternedFile {
         let mut writer = BufWriter::new(writer);
 
         for line_id in &self.content {
-            writer.write_all(interner.get(*line_id).unwrap())?; // NOTE(unwrap): It must be in the interner, otherwise we panick
+            writer.write_all(interner.get(*line_id).unwrap())?; // NOTE(unwrap): It must be in the interner, otherwise we panic
         }
 
         Ok(())
+    }
+
+    pub fn len(&self, interner: &LineInterner) -> usize {
+        let mut len = 0;
+
+        for line_id in &self.content {
+            len += interner.get(*line_id).unwrap().len(); // NOTE(unwrap): It must be in the interner, otherwise we panic
+        }
+
+        len
     }
 }

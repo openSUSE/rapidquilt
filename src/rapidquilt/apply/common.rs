@@ -141,12 +141,15 @@ pub fn save_modified_file<P: AsRef<Path>, H: BuildHasher>(
                 fs::create_dir_all(parent)?;
             }
         }
-        let mut output = File::create(filename)?;
+//        let mut output = File::create(filename)?;
+        let output = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(filename)?;
 
         // If any patch set non-default permission, set them now
         if let Some(ref permissions) = file.permissions {
             output.set_permissions(permissions.clone())?;
         }
+
+        let mut output = crate::util::FallocateWriter::new(output, file.len(&interner))?;
 
         file.write_to(&interner, &mut output)?;
     }

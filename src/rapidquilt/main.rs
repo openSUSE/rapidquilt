@@ -6,6 +6,7 @@ extern crate test;
 
 mod apply;
 mod arena;
+mod util;
 
 #[cfg(test)]
 mod tests;
