@@ -1,5 +1,10 @@
 # Unreleased changes
 
+# Version 0.5.5
+
+* Fix race condition when deleting empty directories
+* Use jemalloc allocator (it was default until Rust 1.32.0, performs lot better in multi-threaded use)
+
 # Version 0.5.4
 
 * Support for `-p` and `-R` patch options in series file.
