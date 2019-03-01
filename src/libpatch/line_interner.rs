@@ -5,6 +5,8 @@ use std::hash::BuildHasherDefault;
 
 use indexmap::IndexSet;
 
+use crate::line::LineId;
+
 
 pub struct Stats {
     lines: usize,
@@ -13,16 +15,6 @@ pub struct Stats {
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "LineInterner Statistics (lines: {})", self.lines)
-    }
-}
-
-/// ID that is given to every unique line
-#[derive(Clone, Copy, Eq, Hash, PartialEq)]
-pub struct LineId(u64);
-
-impl<'a> fmt::Debug for LineId {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.0)
     }
 }
 

@@ -5,14 +5,41 @@ use std::io::{self, BufWriter, Write};
 
 use crate::line_interner::{LineId, LineInterner};
 use crate::util::split_lines_with_endings;
+use std::cell::RefCell;
+
+
+/*struct Region<'a> {
+    data: &'a [u8],
+    kind: RegionKind,
+}
+
+enum RegionKind {
+    Raw,
+    Split {
+        line_starts: Vec<u32>,
+    },
+    Interned {
+        lines: Vec<LineId>,
+    },
+}
+
+struct InternedFileContent {
+
+}*/
+
+// TODO: IDEA: Just keep simple (original_before, modified_interned, original_after)
+
+
 
 
 /// This represents a file that had lines interned by an interner.
 /// Additionally it keeps information on whether the file originally existed
 /// on disk and whether it was deleted.
 #[derive(Clone, Debug)]
-pub struct InternedFile {
-    pub content: Vec<LineId>,
+pub struct InternedFile<'area, 'interner: 'area> {
+    interner: &'interner RefCell<LineInterner<'area>>,
+
+    content: Vec<LineId>,
 
     /// Did the file originally existed on disk? This captures the original state on the disk, it
     /// is not changed by any patches.
