@@ -7,13 +7,13 @@ use std::cell::Ref;
 
 
 // TODO: Any standard trait to use instead of this?
-pub trait HayStack<T> /*: Index<usize, Output = T> +
+pub trait HayStack<T: Copy> /*: Index<usize, Output = T> +
                         Index<Range<usize>, Output = [T]> +
                         Index<RangeFull, Output = [T]>*/
 {
     fn len(&self) -> usize;
 
-    fn get(&self, index: usize) -> Ref<T>;
+    fn get(&self, index: usize) -> T;
     fn slice(&self, range: Range<usize>) -> Ref<[T]>;
     fn full_slice(&self) -> Ref<[T]>;
 }
@@ -80,13 +80,13 @@ impl<T, A> HayStack<T> for A where A: AsRef<[T]> + Index<usize, Output = T> + In
 /// letters are rarely repeated. I.e. useful for searching arrays of `LineId`s
 /// representing interned files.
 pub struct Searcher<'needle, T>
-where T: Clone + Eq + Hash + PartialEq {
+where T: Copy + Eq + Hash + PartialEq {
     needle: &'needle [T],
     filter: HashSet<T, BuildHasherDefault<seahash::SeaHasher>>, // Note: This turned out to be faster than any of the filters from probabilistic-collections
 }
 
 impl<'needle, T> Searcher<'needle, T>
-where T: Clone + Eq + Hash + PartialEq {
+where T: Copy + Eq + Hash + PartialEq {
     pub fn new(needle: &'needle [T]) -> Self {
         let mut filter = HashSet::default();
 
@@ -110,7 +110,7 @@ where T: Clone + Eq + Hash + PartialEq {
 }
 
 struct SearcherIterator<'needle, 'haystack, 'searcher, T, H>
-where T: Clone + Eq + Hash + PartialEq,
+where T: Copy + Eq + Hash + PartialEq,
       H: HayStack<T>
 {
     searcher: &'searcher Searcher<'needle, T>,
@@ -119,7 +119,7 @@ where T: Clone + Eq + Hash + PartialEq,
 }
 
 impl<'needle, 'haystack, 'searcher, T, H> Iterator for SearcherIterator<'needle, 'haystack, 'searcher, T, H>
-where T: Clone + Eq + Hash + PartialEq,
+where T: Copy + Eq + Hash + PartialEq,
       H: HayStack<T>
 {
     type Item = usize;
@@ -138,7 +138,7 @@ where T: Clone + Eq + Hash + PartialEq,
 
             // Check if the last element in the current window is one of the needle's characters...
             let last_item = self.haystack.get(self.position + self.searcher.needle.len() - 1);
-            if self.searcher.filter.contains(&*last_item) {
+            if self.searcher.filter.contains(&last_item) {
                 // ... it is one of them, manually explore the current window.
                 for pos in self.position..min(self.position + self.searcher.needle.len(), self.haystack.len() + 1 - self.searcher.needle.len()) {
                     if &*self.haystack.slice(pos..(pos + self.searcher.needle.len())) == self.searcher.needle {

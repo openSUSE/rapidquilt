@@ -3,13 +3,12 @@
 use std::cell::{Ref, RefCell};
 use std::fs::Permissions;
 use std::io::{self, BufWriter, Write};
-use std::ops::{Index, Range};
+use std::ops::Range;
 
 use memchr::{memchr, memchr_iter};
 
 use crate::line::LineId;
 use crate::line_interner::LineInterner;
-//use crate::util::split_lines_with_endings;
 use crate::util::HayStack;
 use std::ops::RangeFull;
 use std::ops::RangeBounds;
@@ -34,12 +33,17 @@ impl<'arena: 'interner, 'interner> InternedFileContent<'arena, 'interner> {
     pub fn new(bytes: &'arena [u8], interner: &'interner RefCell<LineInterner<'arena>>) -> Self {
         let mut lines = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
 
+        lines.push(LineId::from_offset(0));
         lines.extend(
             memchr_iter(b'\n', bytes)
             .map(|offset| {
-                LineId::from_offset(offset as u64)
+                LineId::from_offset(offset as u64 + 1)
             })
         );
+
+        if lines.last() == Some(&LineId::from_offset(bytes.len() as u64)) {
+            lines.pop();
+        }
 
         InternedFileContent {
             bytes,
@@ -86,7 +90,7 @@ impl<'arena: 'interner, 'interner> InternedFileContent<'arena, 'interner> {
                 next_line.as_offset() as usize
             } else {
                 // ... it was already interned, we must search for '\n' ourselves
-                line_offset + memchr(b'\n', &self.bytes[line_offset..]).unwrap() // NOTE(unwrap): We know there must be one more '\n' because we know there is one more line
+                line_offset + 1 + memchr(b'\n', &self.bytes[line_offset..]).unwrap() // NOTE(unwrap): We know there must be one more '\n' because we know there is one more line
             }
         } else {
             // ... this is the last line, so we just take the end of the file as offset of the next line
@@ -114,21 +118,23 @@ impl<'arena: 'interner, 'interner> HayStack<LineId> for InternedFileContent<'are
         self.len()
     }
 
-    fn get(&self, index: usize) -> Ref<LineId> {
+    fn get(&self, index: usize) -> LineId {
         // If it is already in line_id form, return it
-        if self.lines.borrow()[index].is_line_id() {
-            return Ref::map(self.lines.borrow(), |lines| &lines[index]);
+        let line_id = self.lines.borrow()[index];
+        if line_id.is_line_id() {
+            return line_id;
         }
 
         // Otherwise it is in offset form and we must intern it
         let line = self.line_known_as_offset_line(index);
+//        println!("Adding index {} line {:?}", index, line);
         let line_id = self.interner.borrow_mut().add(line);
 
         // Remember it for future
         self.lines.borrow_mut()[index] = line_id;
 
         // And return it
-        Ref::map(self.lines.borrow(), |lines| &lines[index])
+        line_id
     }
 
     fn slice(&self, range: Range<usize>) -> Ref<[LineId]> {
@@ -147,31 +153,6 @@ impl<'arena: 'interner, 'interner> HayStack<LineId> for InternedFileContent<'are
         Ref::map(self.lines.borrow(), |lines| &lines[..])
     }
 }
-
-/*
-impl<'arena: 'interner, 'interner> Index<usize> for InternedFileContent<'arena, 'interner> {
-    type Output = LineId;
-
-    fn index(&self, index: usize) -> &Self::Output {
-
-    }
-}
-
-impl<'arena: 'interner, 'interner> Index<Range<usize>> for InternedFileContent<'arena, 'interner> {
-    type Output = [LineId];
-
-    fn index(&self, index: Range<usize>) -> &Self::Output {
-        unimplemented!()
-    }
-}
-
-impl<'arena: 'interner, 'interner> Index<RangeFull> for InternedFileContent<'arena, 'interner> {
-    type Output = [LineId];
-
-    fn index(&self, index: RangeFull) -> &Self::Output {
-        unimplemented!()
-    }
-}*/
 
 
 /// This represents a file that had lines interned by an interner.
