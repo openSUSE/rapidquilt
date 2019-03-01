@@ -69,6 +69,7 @@ use libpatch::patch::{InternedFilePatch, PatchDirection, TextFilePatch};
 use libpatch::patch::unified::parser::parse_patch;
 use libpatch::line_interner::LineInterner;
 use libpatch::interned_file::InternedFile;
+use std::cell::RefCell;
 
 
 /// This is tool that distributes filenames among threads. Currently it doesn't
@@ -197,7 +198,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     analyses: &AnalysisSet)
     -> Result<WorkerReport, Error>
 {
-    let mut interner = LineInterner::new();
+    let mut interner = RefCell::new(LineInterner::new());
     let mut applied_patches = Vec::<PatchStatus>::new();
     let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
@@ -226,7 +227,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                                    &mut applied_patches,
                                    &mut modified_files,
                                    arena,
-                                   &mut interner,
+                                   &interner,
                                    &analyses,
                                    &fn_analysis_note) {
             Ok(false) => {
@@ -313,7 +314,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
     // Analyze failure, in case there was any
     let mut failure_analysis = Vec::<u8>::new();
-    analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
+//    analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
     // If this is not dry-run, save all the results
     if !config.dry_run {
@@ -355,7 +356,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     }
 
     if config.stats {
-        println!("{}", interner.stats());
+        println!("{}", interner.borrow().stats());
     }
 
     Ok(WorkerReport {

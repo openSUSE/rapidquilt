@@ -19,6 +19,7 @@ use libpatch::patch::unified::writer::UnifiedPatchRejWriter;
 
 use crate::apply::*;
 use crate::arena::Arena;
+use std::cell::RefCell;
 
 
 /// Build a ".rej" filename for given path.
@@ -92,11 +93,11 @@ pub fn clean_empty_directories<'a, P: AsRef<Path>, I: IntoIterator<Item = P>>(di
 
 /// Save the `file` to disk. It also takes care of creating/deleting the file
 /// and containing directories.
-pub fn save_modified_file<P: AsRef<Path>, H: BuildHasher>(
+pub fn save_modified_file<'arena: 'interner, 'interner, P: AsRef<Path>, H: BuildHasher>(
     filename: P,
-    file: &InternedFile,
+    file: &InternedFile<'arena, 'interner>,
     directories_for_cleaning: &mut HashSet<PathBuf, H>,
-    interner: &LineInterner,
+    interner: &RefCell<LineInterner>,
     verbosity: Verbosity)
     -> Result<(), io::Error>
 {
@@ -148,7 +149,7 @@ pub fn save_modified_file<P: AsRef<Path>, H: BuildHasher>(
             output.set_permissions(permissions.clone())?;
         }
 
-        file.write_to(&interner, &mut output)?;
+        file.write_to(&mut output)?;
     }
 
     Ok(())
@@ -161,9 +162,9 @@ pub fn save_modified_files<
     'interner,
     H: BuildHasher>
 (
-    modified_files: &HashMap<PathBuf, InternedFile, H>,
+    modified_files: &HashMap<PathBuf, InternedFile<'arena, 'interner>, H>,
     directories_for_cleaning: &mut HashSet<PathBuf, H>,
-    interner: &'interner LineInterner<'arena>,
+    interner: &'interner RefCell<LineInterner<'arena>>,
     verbosity: Verbosity)
     -> Result<(), Error>
 {
@@ -176,12 +177,13 @@ pub fn save_modified_files<
 }
 
 /// Write the `original_file` as a quilt backup file.
-pub fn save_backup_file(patch_filename: &Path,
-                        filename: &Path,
-                        original_file: &InternedFile,
-                        interner: &LineInterner,
-                        verbosity: Verbosity)
-                        -> Result<(), Error>
+pub fn save_backup_file<'arena: 'interner, 'interner>(
+    patch_filename: &Path,
+    filename: &Path,
+    original_file: &InternedFile<'arena, 'interner>,
+    interner: &RefCell<LineInterner>,
+    verbosity: Verbosity)
+    -> Result<(), Error>
 {
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
@@ -195,7 +197,7 @@ pub fn save_backup_file(patch_filename: &Path,
         let path_parent = path.parent().unwrap(); // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
 
         fs::create_dir_all(path_parent)?;
-        original_file.write_to(interner, &mut File::create(&path)?)
+        original_file.write_to(&mut File::create(&path)?)
     })().with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
 
     Ok(())
@@ -236,10 +238,10 @@ pub struct PatchStatus<'a, 'b> {
 /// # panics
 ///
 /// Panics if both `old_filename` and `new_filename` are `None`.
-pub fn choose_filename_to_patch<'a, H: BuildHasher>(
+pub fn choose_filename_to_patch<'a, 'arena: 'interner, 'interner, H: BuildHasher>(
     old_filename: Option<&'a PathBuf>,
     new_filename: Option<&'a PathBuf>,
-    modified_files: &HashMap<PathBuf, InternedFile, H>)
+    modified_files: &HashMap<PathBuf, InternedFile<'arena, 'interner>, H>)
     -> &'a PathBuf
 {
     match (old_filename, new_filename) {
@@ -298,10 +300,10 @@ pub fn get_interned_file<
     H: BuildHasher>
 (
     filename: &PathBuf,
-    modified_files: &'modified_files mut HashMap<PathBuf, InternedFile, H>,
+    modified_files: &'modified_files mut HashMap<PathBuf, InternedFile<'arena, 'interner>, H>,
     arena: &'arena dyn Arena,
-    interner: &'interner mut LineInterner<'arena>)
-    -> Result<&'modified_files mut InternedFile, io::Error>
+    interner: &'interner RefCell<LineInterner<'arena>>)
+    -> Result<&'modified_files mut InternedFile<'arena, 'interner>, io::Error>
 {
     // Load the file or create it empty
     let item = match modified_files.entry(filename.clone() /* <-TODO: Avoid clone */) {
@@ -313,7 +315,7 @@ pub fn get_interned_file<
 
                 // If the file doesn't exist, make empty one.
                 Err(ref error) if error.kind() == io::ErrorKind::NotFound =>
-                    entry.insert(InternedFile::new_non_existent()),
+                    entry.insert(InternedFile::new_non_existent(interner)),
 
                 Err(error) => return Err(error),
             }
@@ -348,15 +350,15 @@ pub fn apply_one_file_patch<
     text_file_patch: TextFilePatch<'arena>,
     reverse: bool,
     applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
-    modified_files: &mut HashMap<PathBuf, InternedFile, H>,
+    modified_files: &mut HashMap<PathBuf, InternedFile<'arena, 'interner>, H>,
     arena: &'arena dyn Arena,
-    interner: &'interner mut LineInterner<'arena>,
+    interner: &'interner RefCell<LineInterner<'arena>>,
     analyses: &'analyses AnalysisSet,
     fn_analysis_note: &'fn_analysis_note Fn(&dyn Note, &InternedFilePatch))
     -> Result<bool, Error>
 {
     // Intern the `FilePatch`
-    let file_patch = text_file_patch.intern(interner);
+    let file_patch = text_file_patch.intern(&mut interner.borrow_mut());
 
     // Get the file to patch
     let target_filename = choose_filename_to_patch(file_patch.old_filename(), file_patch.new_filename(), modified_files).clone();
@@ -436,10 +438,10 @@ pub fn apply_one_file_patch<
 }
 
 /// Rolls back single applied `FilePatch`
-pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
+pub fn rollback_applied_patch<'a: 'b, 'b, 'arena: 'interner, 'interner, H: BuildHasher>(
     applied_patch: &PatchStatus,
-    modified_files: &'a mut HashMap<PathBuf, InternedFile, H>)
-    -> &'b InternedFile
+    modified_files: &'a mut HashMap<PathBuf, InternedFile<'arena, 'interner>, H>)
+    -> &'b InternedFile<'arena, 'interner>
 {
     {
         let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
@@ -467,11 +469,11 @@ pub fn rollback_applied_patch<'a: 'b, 'b, H: BuildHasher>(
 
 /// Rolls back all `FilePatch`es belonging to the `rejected_patch_index` and save
 /// ".rej" files for each `FilePatch` that failed applying
-pub fn rollback_and_save_rej_files<H: BuildHasher>(
+pub fn rollback_and_save_rej_files<'arena: 'interner, 'interner, H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus>,
-    modified_files: &mut HashMap<PathBuf, InternedFile, H>,
+    modified_files: &mut HashMap<PathBuf, InternedFile<'arena, 'interner>, H>,
     rejected_patch_index: usize,
-    interner: &LineInterner,
+    interner: &RefCell<LineInterner>,
     verbosity: Verbosity)
     -> Result<(), Error>
 {
@@ -492,7 +494,7 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
 
             File::create(&rej_filename).and_then(|output| {
                 let mut writer = BufWriter::new(output);
-                applied_patch.file_patch.write_rej_to(&interner, &mut writer, &applied_patch.report)
+                applied_patch.file_patch.write_rej_to(&interner.borrow(), &mut writer, &applied_patch.report)
             }).with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
         }
 
@@ -504,10 +506,10 @@ pub fn rollback_and_save_rej_files<H: BuildHasher>(
 
 /// Rolls back all `FilePatch`es up to the one belonging to patch with
 /// `down_to_index` index and generates quilt backup files for all of them.
-pub fn rollback_and_save_backup_files<H: BuildHasher>(
+pub fn rollback_and_save_backup_files<'arena: 'interner, 'interner, H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus>,
-    modified_files: &mut HashMap<PathBuf, InternedFile, H>,
-    interner: &LineInterner,
+    modified_files: &mut HashMap<PathBuf, InternedFile<'arena, 'interner>, H>,
+    interner: &RefCell<LineInterner>,
     down_to_index: usize,
     verbosity: Verbosity)
     -> Result<(), Error>

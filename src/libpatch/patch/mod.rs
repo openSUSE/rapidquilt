@@ -42,8 +42,8 @@ use smallvec::SmallVec;
 use crate::analysis::{Analysis, AnalysisSet, Note, fn_analysis_note_noop};
 use crate::line::LineId;
 use crate::line_interner::LineInterner;
-use crate::interned_file::InternedFile;
-use crate::util::Searcher;
+use crate::interned_file::{InternedFile, InternedFileContent};
+use crate::util::{HayStack, Searcher};
 
 pub mod unified;
 
@@ -263,7 +263,7 @@ impl<'a> TextHunk<'a> {
 fn try_apply_hunk<'a, 'hunk>(
     hunk_view: &InternedHunkView<'a, 'hunk>,
     my_index: usize,
-    interned_file: &InternedFile,
+    interned_file: &mut InternedFile,
     apply_mode: ApplyMode,
     last_hunk_offset: isize,
     last_frozen_line: isize)
@@ -311,7 +311,7 @@ fn try_apply_hunk<'a, 'hunk>(
     }
 
     // Helper function to decide if the needle matches haystack at give offset.
-    fn matches(needle: &[LineId], haystack: &[LineId], at: isize) -> bool {
+    fn matches(needle: &[LineId], haystack: &mut InternedFileContent, at: isize) -> bool {
         if at < 0 {
             return false;
         }
@@ -321,11 +321,11 @@ fn try_apply_hunk<'a, 'hunk>(
             return false;
         }
 
-        &haystack[at..(at + needle.len())] == needle
+        *haystack.slice(at..(at + needle.len())) == *needle
     }
 
     // Check if the part we want to remove is at the originally intended target_line
-    if !matches(&remove_content, &interned_file.content, target_line) {
+    if !matches(&remove_content, &mut interned_file.content, target_line) {
         // It is not on the indended target_line...
 
         // If we are in rollback mode, we are in big trouble. Fail early.
@@ -349,7 +349,7 @@ fn try_apply_hunk<'a, 'hunk>(
         // to the `target_line`
         let mut best_target_line: Option<isize> = None;
 
-        for possible_target_line in Searcher::new(&remove_content).search_in(&interned_file.content) {
+        for possible_target_line in Searcher::new(&remove_content).search_in(&mut interned_file.content) {
             let possible_target_line = possible_target_line as isize;
 
             // WARNING: The "<=" in the comparison below is important! If a hunk can be placed with two offsets that
@@ -763,7 +763,7 @@ impl<'a> InternedFilePatch<'a> {
         };
 
         // Just copy in it the content of our single hunk and we are done.
-        interned_file.content = new_content.clone().into_vec();
+        interned_file.content.replace_all_lines(new_content.clone().into_vec());
         interned_file.deleted = false;
 
         FilePatchApplyReport::single_hunk_success(0, 0, new_content.len() as isize, direction, fuzz)
@@ -791,7 +791,7 @@ impl<'a> InternedFilePatch<'a> {
         };
 
         // If we are deleting it, it must contain exactly what we want to remove.
-        if &expected_content[..] != &interned_file.content[..] {
+        if &expected_content[..] != &*interned_file.content.full_slice() {
             return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::DeletingFileThatDoesNotMatch, direction, fuzz);
         }
 
@@ -887,7 +887,8 @@ impl<'a> InternedFilePatch<'a> {
                     let target_line = *line + modification_offset;
                     *rollback_line = target_line;
                     let range = (target_line as usize)..(target_line as usize + hunk_view.remove_content().len());
-                    interned_file.content.splice(range.clone(), hunk_view.add_content().to_vec()); // TODO: No to_vec here?
+//                    interned_file.content.splice(range.clone(), hunk_view.add_content().to_vec()); // TODO: No to_vec here?
+                    interned_file.content.replace_lines(range.clone(), hunk_view.add_content().to_vec()); // TODO: No to_vec here?
 
                     modification_offset += *line_count_diff;
                 }

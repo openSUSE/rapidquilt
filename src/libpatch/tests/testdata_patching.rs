@@ -9,6 +9,7 @@ use crate::interned_file::InternedFile;
 use crate::patch::PatchDirection;
 use crate::patch::unified::parser::parse_patch;
 use crate::line_interner::LineInterner;
+use std::cell::RefCell;
 
 
 #[cfg(test)]
@@ -55,9 +56,9 @@ fn all_files() -> Result<(), Error> {
         let file = fs::read(path.with_file_name(file_patch.old_filename().expect("old_filename missing!")))?;
 
         // Intern the patch and file
-        let mut interner = LineInterner::new();
-        let file_patch = file_patch.intern(&mut interner);
-        let mut interned_file = InternedFile::new(&mut interner, &file, true);
+        let mut interner = RefCell::new(LineInterner::new());
+        let file_patch = file_patch.intern(&mut interner.borrow_mut());
+        let mut interned_file = InternedFile::new(&interner, &file, true);
 
         // Patch it
         let report = file_patch.apply(&mut interned_file, PatchDirection::Forward, fuzz, &AnalysisSet::default(), &fn_analysis_note_noop);
@@ -79,7 +80,7 @@ fn all_files() -> Result<(), Error> {
 
         // Write the output to a buffer
         let mut output = Vec::<u8>::new();
-        interned_file.write_to(&interner, &mut output)?;
+        interned_file.write_to(&mut output)?;
 
         // Compare with the expected output
         let expected_output = fs::read(path.with_extension("out"))?;

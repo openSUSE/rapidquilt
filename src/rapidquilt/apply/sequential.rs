@@ -23,11 +23,12 @@ use libpatch::patch::InternedFilePatch;
 use libpatch::patch::unified::parser::parse_patch;
 use libpatch::line_interner::LineInterner;
 use libpatch::interned_file::InternedFile;
+use std::cell::RefCell;
 
 
 pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
     -> Result<ApplyResult, Error> {
-    let mut interner = LineInterner::new();
+    let mut interner = RefCell::new(LineInterner::new());
 
     let mut applied_patches = Vec::<PatchStatus>::new();
 
@@ -71,7 +72,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
                                      &mut applied_patches,
                                      &mut modified_files,
                                      arena,
-                                     &mut interner,
+                                     &interner,
                                      &analyses,
                                      &fn_analysis_note)?
             {
@@ -81,7 +82,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
 
         if any_report_failed {
             // Analyze failure, in case there was any
-            analyze_patch_failure(config.verbosity, index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
+//            analyze_patch_failure(config.verbosity, index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
 
             if !config.dry_run {
                 rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, &interner, config.verbosity)?;
@@ -126,7 +127,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     }
 
     if config.stats {
-        println!("{}", interner.stats());
+        println!("{}", interner.borrow().stats());
         println!("{}", arena.stats());
     }
 

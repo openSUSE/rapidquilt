@@ -2,50 +2,76 @@ use std::cmp::min;
 use std::collections::HashSet;
 use std::hash::Hash;
 use std::hash::BuildHasherDefault;
-use std::ops::Index;
-use std::ops::Range;
+use std::ops::{Index, Range, RangeFull};
+use std::cell::Ref;
 
 
 // TODO: Any standard trait to use instead of this?
-pub trait HayStack<T> : Index<usize, Output = T> + Index<Range<usize>, Output = [T]> {
+pub trait HayStack<T> /*: Index<usize, Output = T> +
+                        Index<Range<usize>, Output = [T]> +
+                        Index<RangeFull, Output = [T]>*/
+{
     fn len(&self) -> usize;
+
+    fn get(&self, index: usize) -> Ref<T>;
+    fn slice(&self, range: Range<usize>) -> Ref<[T]>;
+    fn full_slice(&self) -> Ref<[T]>;
 }
 
-//pub trait HayStack<T, U>: Deref<Target = U> where U: Index<usize, Output = T> + Index<Range<usize>, Output = [T]> {
-//    fn len(&self) -> usize;
+//impl<T, A> HayStack<T> for A
+//    where A: AsRef<[T]> + Index<usize, Output = T> +
+//    Index<Range<usize>, Output = [T]> +
+//    Index<RangeFull, Output = [T]>
+//{
+//    fn len(&self) -> usize {
+//        self.as_ref().len()
+//    }
 //}
 
-//impl<T> HayStack<T> for [T] {
+//impl<T, A> HayStack<T> for A
+//    where A: AsRef<[T]> + Index<usize, Output = T> +
+//    Index<Range<usize>, Output = [T]> +
+//    Index<RangeFull, Output = [T]>
+//{
 //    fn len(&self) -> usize {
-//        self.len()
+//        self.as_ref().len()
 //    }
-//}
 //
-//impl<T> HayStack<T> for Vec<T> {
-//    fn len(&self) -> usize {
-//        self.len()
+//    fn get(&self, index: usize) -> Ref<&T> {
+//        &self[index]
+//    }
+//
+//    fn slice(&self, range: Range<usize>) -> &[T] {
+//        &self[range]
+//    }
+//
+//    fn full_slice(&self) -> &[T] {
+//        &self[..]
 //    }
 //}
+
+/*
+pub trait HayStack<T> {
+    fn get(&self, idx: usize) -> Option<&T>;
+
+    /// Panics if the range is out-of-range! If sometihng is in range can be deremined only by the
+    /// `get` function.
+    fn slice(&self, range: Range<usize>) -> &[T];
+}
 
 impl<T, A> HayStack<T> for A where A: AsRef<[T]> + Index<usize, Output = T> + Index<Range<usize>, Output = [T]> {
-    fn len(&self) -> usize {
-        self.as_ref().len()
+    fn get(&self, idx: usize) -> Option<&T> {
+        if idx < self.as_ref().len() {
+            Some(&self[idx])
+        } else {
+            None
+        }
     }
-}
 
-//impl<T, X> Index<usize> for &X where X: Index<usize, Output = T> {
-//    type Output = T;
-//
-//    fn index(&self, index: usize) -> &Self::Output {
-//        self.index(usize)
-//    }
-//}
-
-//impl<'a, T, X> HayStack<T> for &'a X where X: HayStack<T>, &'a X: Index<usize, Output = T> + Index<Range<usize>, Output = [T]> {
-//    fn len(&self) -> usize {
-//        self.len()
-//    }
-//}
+    fn slice(&self, range: Range<usize>) -> &[T] {
+        &self[range]
+    }
+}*/
 
 
 
@@ -111,11 +137,11 @@ where T: Clone + Eq + Hash + PartialEq,
             }
 
             // Check if the last element in the current window is one of the needle's characters...
-            let last_item = &self.haystack[self.position + self.searcher.needle.len() - 1];
-            if self.searcher.filter.contains(last_item) {
+            let last_item = self.haystack.get(self.position + self.searcher.needle.len() - 1);
+            if self.searcher.filter.contains(&*last_item) {
                 // ... it is one of them, manually explore the current window.
                 for pos in self.position..min(self.position + self.searcher.needle.len(), self.haystack.len() + 1 - self.searcher.needle.len()) {
-                    if &self.haystack[pos..(pos + self.searcher.needle.len())] == self.searcher.needle {
+                    if &*self.haystack.slice(pos..(pos + self.searcher.needle.len())) == self.searcher.needle {
                         // We found one! Move position behind it and return it.
                         self.position = pos + 1;
                         return Some(self.position - 1);

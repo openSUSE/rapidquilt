@@ -92,6 +92,7 @@ pub fn test_apply_after_reverting_other<H: BuildHasher>(
     apply_report.ok()
 }
 
+/*
 /// Render a report into `writer` about why the `broken_patch_index` failed to
 /// apply.
 pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
@@ -416,6 +417,7 @@ pub fn print_difference_to_closest_match<W: Write>(
 
     Ok(())
 }
+*/
 
 /// This function prints note from libpatch'es analysis
 pub fn print_analysis_note(patch_filename: &Path, note: &Note, file_patch: &InternedFilePatch) -> Result<(), io::Error> {
