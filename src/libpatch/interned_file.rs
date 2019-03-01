@@ -33,16 +33,19 @@ impl<'arena: 'interner, 'interner> InternedFileContent<'arena, 'interner> {
     pub fn new(bytes: &'arena [u8], interner: &'interner RefCell<LineInterner<'arena>>) -> Self {
         let mut lines = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
 
-        lines.push(LineId::from_offset(0));
+        let mut previous_offset = 0;
         lines.extend(
             memchr_iter(b'\n', bytes)
             .map(|offset| {
-                LineId::from_offset(offset as u64 + 1)
+                let length = offset - previous_offset + 1;
+                let line_id = LineId::from_offset_and_length(previous_offset as u32, length as u32);
+                previous_offset = offset + 1;
+                line_id
             })
         );
 
-        if lines.last() == Some(&LineId::from_offset(bytes.len() as u64)) {
-            lines.pop();
+        if !bytes.is_empty() && bytes.last() != Some(&b'\n') {
+            lines.push(LineId::from_offset_and_length(previous_offset as u32, (bytes.len() - previous_offset) as u32));
         }
 
         InternedFileContent {
@@ -78,7 +81,7 @@ impl<'arena: 'interner, 'interner> InternedFileContent<'arena, 'interner> {
         self.lines.borrow_mut().splice(range, replace_with);
     }
 
-    fn line_known_as_offset_line(&self, index: usize) -> &'arena [u8] {
+    /*fn line_known_as_offset_line(&self, index: usize) -> &'arena [u8] {
         let borrowed_lines = self.lines.borrow();
 
         let line_offset: usize = borrowed_lines[index].as_offset() as usize;
@@ -98,7 +101,7 @@ impl<'arena: 'interner, 'interner> InternedFileContent<'arena, 'interner> {
         };
 
         &self.bytes[line_offset..next_line_offset]
-    }
+    }*/
 
     pub fn line(&self, index: usize) -> &'arena [u8] {
         // Get the line. This will panic if it is out of bounds
@@ -106,10 +109,11 @@ impl<'arena: 'interner, 'interner> InternedFileContent<'arena, 'interner> {
 
         // If it is interned, get the line from interner
         if line_id.is_line_id() {
-            return self.interner.borrow().get(line_id).unwrap(); // NOTE(unwrap): It must be there, we placed it in there.
+            self.interner.borrow().get(line_id).unwrap() // NOTE(unwrap): It must be there, we placed it in there.
+        } else {
+            let (offset, length) = line_id.as_offset_and_length();
+            &self.bytes[offset as usize..(offset + length) as usize]
         }
-
-        self.line_known_as_offset_line(index)
     }
 }
 
@@ -126,7 +130,8 @@ impl<'arena: 'interner, 'interner> HayStack<LineId> for InternedFileContent<'are
         }
 
         // Otherwise it is in offset form and we must intern it
-        let line = self.line_known_as_offset_line(index);
+        let (offset, length) = line_id.as_offset_and_length();
+        let line = &self.bytes[offset as usize..(offset + length) as usize];
 //        println!("Adding index {} line {:?}", index, line);
         let line_id = self.interner.borrow_mut().add(line);
 
