@@ -18,7 +18,7 @@ impl fmt::Display for Stats {
 
 /// ID that is given to every unique line
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
-pub struct LineId(u32); // 4G interned slices ought to be enough for everybody...
+pub struct LineId(u64);
 
 impl<'a> fmt::Debug for LineId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -52,7 +52,7 @@ impl<'a> LineInterner<'a> {
         // otherwise it would not exist.
         debug_assert!(!bytes.is_empty());
 
-        LineId(self.set.insert_full(bytes).0 as u32)
+        LineId(self.set.insert_full(bytes).0 as u64)
     }
 
     /// Get the line for given `LineId`. Returns `None` if that id isn't known.
