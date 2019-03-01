@@ -12,6 +12,10 @@ impl LineId {
 
         LineId(v as u64)
     }
+
+    pub fn as_usize(&self) -> usize {
+        self.0 as usize
+    }
 }
 
 #[derive(Clone, Copy, Eq, Hash, PartialEq)]
@@ -32,6 +36,18 @@ impl LineIdOrOffset {
     pub fn is_offset(&self) -> bool {
         self.0 & DISTINGUISHING_BIT != 0
     }
+
+   /* pub fn as_line_id(&self) -> LineId {
+        debug_assert!(self.is_line_id());
+
+        LineId(self.0)
+    }
+
+    pub fn as_offset(&self) -> LineOffset {
+        debug_assert!(self.is_line_id());
+
+        LineId(self.0)
+    }*/
 }
 
 impl From<LineOffset> for LineIdOrOffset {

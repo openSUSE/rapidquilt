@@ -1,11 +1,12 @@
 // Licensed under the MIT license. See LICENSE.md
 
+use std::cell::RefCell;
 use std::fs::Permissions;
 use std::io::{self, BufWriter, Write};
 
-use crate::line_interner::{LineId, LineInterner};
+use crate::line::LineIdOrOffset;
+use crate::line_interner::LineInterner;
 use crate::util::split_lines_with_endings;
-use std::cell::RefCell;
 
 
 /*struct Region<'a> {
@@ -30,16 +31,41 @@ struct InternedFileContent {
 // TODO: IDEA: Just keep simple (original_before, modified_interned, original_after)
 
 
+#[derive(Clone, Debug)]
+pub struct InternedFileContent<'arena, 'interner: 'arena> {
+    bytes: &'arena [u8],
+
+    interner: &'interner RefCell<LineInterner<'arena>>,
+
+    content: Vec<LineIdOrOffset>,
+
+    lines_split_up_to: usize,
+}
+
+impl<'arena, 'interner: 'arena> InternedFileContent<'arena, 'interner> {
+    pub fn new(bytes: &'arena [u8], interner: &'interner RefCell<LineInterner<'arena>>) -> Self {
+        let mut content = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
+
+        InternedFileContent {
+            bytes,
+            interner,
+            content,
+            lines_split_up_to: 0,
+        }
+    }
+
+    pub fn new_empty(interner: &'interner RefCell<LineInterner<'arena>>) -> Self {
+        Self::new(&[], interner)
+    }
+}
 
 
 /// This represents a file that had lines interned by an interner.
 /// Additionally it keeps information on whether the file originally existed
 /// on disk and whether it was deleted.
 #[derive(Clone, Debug)]
-pub struct InternedFile<'area, 'interner: 'area> {
-    interner: &'interner RefCell<LineInterner<'area>>,
-
-    content: Vec<LineId>,
+pub struct InternedFile<'arena, 'interner: 'arena> {
+    content: InternedFileContent<'arena, 'interner>,
 
     /// Did the file originally existed on disk? This captures the original state on the disk, it
     /// is not changed by any patches.
@@ -58,15 +84,15 @@ pub struct InternedFile<'area, 'interner: 'area> {
 
 const AVG_LINE_LENGTH: usize = 30; // Heuristics, for initial estimation of line count.
 
-impl InternedFile {
+impl<'arena, 'interner: 'arena> InternedFile<'arena, 'interner> {
     /// Create new `InternedFile` by interning given `bytes` using the `interner`.
-    pub fn new<'a, 'b: 'a>(interner: &mut LineInterner<'a>, bytes: &'b [u8], existed: bool) -> Self {
-        let mut content = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
+    pub fn new(interner: &'interner RefCell<LineInterner<'arena>>, bytes: &'arena [u8], existed: bool) -> Self {
+        let content = InternedFileContent::new(bytes, interner);
 
-        content.extend(
-            split_lines_with_endings(bytes)
-            .map(|line| interner.add(line))
-        );
+//        content.extend(
+//            split_lines_with_endings(bytes)
+//            .map(|line| interner.add(line))
+//        );
 
         InternedFile {
             content,
@@ -77,9 +103,11 @@ impl InternedFile {
     }
 
     /// Create new empty `InternedFile`
-    pub fn new_non_existent() -> Self {
+    pub fn new_non_existent(interner: &'interner RefCell<LineInterner<'arena>>) -> Self {
+        let content = InternedFileContent::new_empty(interner);
+
         InternedFile {
-            content: Vec::new(),
+            content,
             deleted: true,
             existed: false,
             permissions: None,
@@ -90,7 +118,7 @@ impl InternedFile {
     /// This InternedFile must stay as a record that the original was deleted,
     /// but the content is taken away.
     pub fn move_out(&mut self) -> Self {
-        let mut out_content = Vec::new();
+        let mut out_content = InternedFileContent::new_empty(self.content.interner);
         std::mem::swap(&mut self.content, &mut out_content);
 
         self.deleted = true;

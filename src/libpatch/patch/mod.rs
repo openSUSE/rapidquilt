@@ -40,7 +40,8 @@ use derive_builder::Builder;
 use smallvec::SmallVec;
 
 use crate::analysis::{Analysis, AnalysisSet, Note, fn_analysis_note_noop};
-use crate::line_interner::{LineId, LineInterner};
+use crate::line::LineId;
+use crate::line_interner::LineInterner;
 use crate::interned_file::InternedFile;
 use crate::util::Searcher;
 

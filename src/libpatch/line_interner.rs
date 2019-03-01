@@ -44,12 +44,12 @@ impl<'a> LineInterner<'a> {
         // otherwise it would not exist.
         debug_assert!(!bytes.is_empty());
 
-        LineId(self.set.insert_full(bytes).0 as u64)
+        LineId::from_usize(self.set.insert_full(bytes).0)
     }
 
     /// Get the line for given `LineId`. Returns `None` if that id isn't known.
     pub fn get(&self, id: LineId) -> Option<&'a [u8]> {
-        self.set.get_index(id.0 as usize).cloned() // Cloned for Option<&&[u8]> -> Option<&[u8]>
+        self.set.get_index(id.as_usize()).cloned() // Cloned for Option<&&[u8]> -> Option<&[u8]>
     }
 
     /// Get statistics
