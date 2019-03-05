@@ -37,7 +37,6 @@ use std::vec::Vec;
 use std::path::{Path, PathBuf};
 
 use derive_builder::Builder;
-use smallvec::SmallVec;
 
 use crate::analysis::{Analysis, AnalysisSet, Note, fn_analysis_note_noop};
 use crate::line_interner::{LineId, LineInterner};
@@ -47,7 +46,7 @@ use crate::util::Searcher;
 pub mod unified;
 
 
-type ContentVec<Line> = SmallVec<[Line; 13]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
+type ContentVec<Line> = Vec<Line>;
 
 /// This is part of hunk representing the lines to be added or removed together
 /// with the target line.
@@ -64,7 +63,7 @@ impl<'a> HunkPart<&'a [u8]> {
     /// Consumes this text-based HunkPart and produces interned HunkPart.
     pub fn intern(mut self, interner: &mut LineInterner<'a>) -> HunkPart<LineId> {
         HunkPart {
-            content: self.content.drain().map(|line| interner.add(line)).collect(),
+            content: self.content.drain(..).map(|line| interner.add(line)).collect(),
 
             target_line: self.target_line,
         }
@@ -557,7 +556,7 @@ impl FilePatchApplyReport {
     pub fn fuzz(&self) -> usize { self.fuzz }
 }
 
-pub type HunksVec<'a, Line> = SmallVec<[Hunk<'a, Line>; 2]>; // Optimal size found empirically on SUSE's kernel patches. It may change in future.
+pub type HunksVec<'a, Line> = Vec<Hunk<'a, Line>>;
 
 /// This represents all changes done to single file.
 #[derive(Builder, Clone, Debug)]
@@ -647,7 +646,7 @@ impl<'a> TextFilePatch<'a> {
             old_permissions: self.old_permissions,
             new_permissions: self.new_permissions,
 
-            hunks: self.hunks.drain().map(|hunk| hunk.intern(interner)).collect(),
+            hunks: self.hunks.drain(..).map(|hunk| hunk.intern(interner)).collect(),
         }
     }
 }
@@ -762,7 +761,7 @@ impl<'a> InternedFilePatch<'a> {
         };
 
         // Just copy in it the content of our single hunk and we are done.
-        interned_file.content = new_content.clone().into_vec();
+        interned_file.content = new_content.clone();
         interned_file.deleted = false;
 
         FilePatchApplyReport::single_hunk_success(0, 0, new_content.len() as isize, direction, fuzz)
