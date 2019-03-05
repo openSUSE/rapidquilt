@@ -1,10 +1,10 @@
 use std::io::{self, Write};
 use std::vec::Vec;
 
-use crate::interned_file::InternedFile;
+use crate::modified_file::ModifiedFile;
 use crate::patch::{
     FilePatchApplyReport,
-    InternedFilePatch,
+    TextFilePatch,
     PatchDirection,
 };
 
@@ -36,20 +36,20 @@ pub trait Note : Debug {
 pub trait Analysis: Sync {
     fn before_modifications(
         &self,
-        _interned_file: &InternedFile,
-        _file_patch: &InternedFilePatch,
+        _modified_file: &ModifiedFile,
+        _file_patch: &TextFilePatch,
         _direction: PatchDirection,
         _report: &FilePatchApplyReport,
-        _fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+        _fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
         {}
 
     fn after_modifications(
         &self,
-        _interned_file: &InternedFile,
-        _file_patch: &InternedFilePatch,
+        _modified_file: &ModifiedFile,
+        _file_patch: &TextFilePatch,
         _direction: PatchDirection,
         _report: &FilePatchApplyReport,
-        _fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+        _fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
         {}
 
     // TODO: Add more check points if needed.
@@ -77,15 +77,15 @@ impl AnalysisSet {
 impl Analysis for AnalysisSet {
     fn before_modifications(
         &self,
-        interned_file: &InternedFile,
-        file_patch: &InternedFilePatch,
+        modified_file: &ModifiedFile,
+        file_patch: &TextFilePatch,
         direction: PatchDirection,
         report: &FilePatchApplyReport,
-        fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+        fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
     {
         for analysis in &self.analyses {
             analysis.before_modifications(
-                interned_file, file_patch, direction, report,
+                modified_file, file_patch, direction, report,
                 fn_analysis_note
             )
         }
@@ -93,15 +93,15 @@ impl Analysis for AnalysisSet {
 
     fn after_modifications(
         &self,
-        interned_file: &InternedFile,
-        file_patch: &InternedFilePatch,
+        modified_file: &ModifiedFile,
+        file_patch: &TextFilePatch,
         direction: PatchDirection,
         report: &FilePatchApplyReport,
-        fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+        fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
     {
         for analysis in &self.analyses {
             analysis.after_modifications(
-                interned_file, file_patch, direction, report,
+                modified_file, file_patch, direction, report,
                 fn_analysis_note
             );
         }
@@ -109,5 +109,5 @@ impl Analysis for AnalysisSet {
 }
 
 /// NOOP analysis function. Use this if you don't want any analysis printed out.
-pub fn fn_analysis_note_noop(_note: &Note, _interned_filepatch: &InternedFilePatch) {
+pub fn fn_analysis_note_noop(_note: &Note, _modified_filepatch: &TextFilePatch) {
 }

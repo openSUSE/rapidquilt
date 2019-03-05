@@ -7,8 +7,8 @@ use std::collections::HashSet;
 
 
 /// Horspool-like algorithm optimized for searching with huge alphabets where
-/// letters are rarely repeated. I.e. useful for searching arrays of `LineId`s
-/// representing interned files.
+/// letters are rarely repeated. I.e. useful for searching arrays of byte slices
+/// representing lines in files.
 pub struct Searcher<'needle, T>
 where T: Clone + Eq + Hash + PartialEq {
     needle: &'needle [T],

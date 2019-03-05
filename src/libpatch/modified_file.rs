@@ -3,16 +3,15 @@
 use std::fs::Permissions;
 use std::io::{self, BufWriter, Write};
 
-use crate::line_interner::{LineId, LineInterner};
 use crate::util::split_lines_with_endings;
 
 
-/// This represents a file that had lines interned by an interner.
+/// This represents a file that have been modified by some patches.
 /// Additionally it keeps information on whether the file originally existed
 /// on disk and whether it was deleted.
 #[derive(Clone, Debug)]
-pub struct InternedFile {
-    pub content: Vec<LineId>,
+pub struct ModifiedFile<'a> {
+    pub content: Vec<&'a [u8]>,
 
     /// Did the file originally existed on disk? This captures the original state on the disk, it
     /// is not changed by any patches.
@@ -31,17 +30,16 @@ pub struct InternedFile {
 
 const AVG_LINE_LENGTH: usize = 30; // Heuristics, for initial estimation of line count.
 
-impl InternedFile {
-    /// Create new `InternedFile` by interning given `bytes` using the `interner`.
-    pub fn new<'a, 'b: 'a>(interner: &mut LineInterner<'a>, bytes: &'b [u8], existed: bool) -> Self {
+impl<'arena> ModifiedFile<'arena> {
+    /// Create new `ModifiedFile` with lines from given `bytes`.
+    pub fn new(bytes: &'arena [u8], existed: bool) -> Self {
         let mut content = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
 
         content.extend(
             split_lines_with_endings(bytes)
-            .map(|line| interner.add(line))
         );
 
-        InternedFile {
+        ModifiedFile {
             content,
             deleted: false,
             existed,
@@ -49,9 +47,9 @@ impl InternedFile {
         }
     }
 
-    /// Create new empty `InternedFile`
+    /// Create new empty `ModifiedFile`
     pub fn new_non_existent() -> Self {
-        InternedFile {
+        ModifiedFile {
             content: Vec::new(),
             deleted: true,
             existed: false,
@@ -60,7 +58,7 @@ impl InternedFile {
     }
 
     /// Intended to be used when renaming files.
-    /// This InternedFile must stay as a record that the original was deleted,
+    /// This ModifiedFile must stay as a record that the original was deleted,
     /// but the content is taken away.
     pub fn move_out(&mut self) -> Self {
         let mut out_content = Vec::new();
@@ -69,7 +67,7 @@ impl InternedFile {
         self.deleted = true;
         // self.existed remains as it was
 
-        InternedFile {
+        ModifiedFile {
             content: out_content,
             deleted: false,
             existed: false,
@@ -78,9 +76,9 @@ impl InternedFile {
     }
 
     /// Intended to be used when renaming files.
-    /// The content of this interned file is replaced by the `other` one, but
+    /// The content of this modified file is replaced by the `other` one, but
     /// only if this one was empty. Otherwise false is returned.
-    pub fn move_in(&mut self, other: &mut InternedFile) -> bool {
+    pub fn move_in(&mut self, other: &mut ModifiedFile<'arena>) -> bool {
         if !self.content.is_empty() && !self.deleted {
             return false;
         }
@@ -95,20 +93,15 @@ impl InternedFile {
         true
     }
 
-    /// Write this file into given `writer` using lines from the `interner`.
-    ///
-    /// # Panic
-    ///
-    /// Panics if the interner is not the one originally used for creating
-    /// this file.
-    pub fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
+    /// Write this file into given `writer`.
+    pub fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
         // Note: Even self.deleted files can be saved - quilt backup file for a file
         //       that did not exist is an empty file.
 
         let mut writer = BufWriter::new(writer);
 
-        for line_id in &self.content {
-            writer.write_all(interner.get(*line_id).unwrap())?; // NOTE(unwrap): It must be in the interner, otherwise we panick
+        for line in &self.content {
+            writer.write_all(line)?;
         }
 
         Ok(())

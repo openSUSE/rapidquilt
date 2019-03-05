@@ -3,11 +3,11 @@ use std::io::{self, Write};
 use std::ops::Range;
 
 use crate::analysis::*;
-use crate::interned_file::InternedFile;
+use crate::modified_file::ModifiedFile;
 use crate::patch::{
     FilePatchApplyReport,
     HunkApplyReport,
-    InternedFilePatch,
+    TextFilePatch,
     PatchDirection,
     HunkPosition,
 };
@@ -55,11 +55,11 @@ impl Analysis for MultiApplyAnalysis {
 
     fn before_modifications(
         &self,
-        interned_file: &InternedFile,
-        file_patch: &InternedFilePatch,
+        modified_file: &ModifiedFile,
+        file_patch: &TextFilePatch,
         direction: PatchDirection,
         report: &FilePatchApplyReport,
-        fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+        fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
     {
         for (i, (hunk, hunk_report)) in file_patch.hunks().iter().zip(report.hunk_reports()).enumerate() {
             // We only care if the hunk was applied
@@ -79,7 +79,7 @@ impl Analysis for MultiApplyAnalysis {
             // Check if there are any more places where the hunk could apply,
             // we must exclude places where some hunk already applied.
             let places: Vec<Range<isize>> = Searcher::new(&remove_content)
-                .search_in(&interned_file.content)
+                .search_in(&modified_file.content)
                 .map(|line| (line as isize)..((line + remove_content.len()) as isize))
                 .filter(|range| {
                     for (other_hunk, other_hunk_report) in file_patch.hunks().iter().zip(report.hunk_reports()) {

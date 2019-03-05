@@ -17,12 +17,10 @@ use smallvec::{SmallVec, smallvec};
 use strsim::levenshtein;
 use colored::*;
 use libpatch::analysis::{AnalysisSet, Note, NoteSeverity, fn_analysis_note_noop};
-use libpatch::interned_file::InternedFile;
-use libpatch::line_interner::LineInterner;
+use libpatch::modified_file::ModifiedFile;
 
-use libpatch::patch::{InternedFilePatch, HunkApplyFailureReason, HunkApplyReport, PatchDirection};
+use libpatch::patch::{TextFilePatch, TextHunk, HunkApplyFailureReason, HunkApplyReport, PatchDirection};
 use libpatch::patch::unified::writer::UnifiedPatchHunkHeaderWriter;
-use libpatch::patch::InternedHunk;
 use libpatch::patch::FilePatchApplyReport;
 
 use crate::apply::common::*;
@@ -32,7 +30,7 @@ use crate::apply::Verbosity;
 /// Try if the patch would apply with some fuzz. It doesn't do any permanent changes.
 pub fn test_apply_with_fuzzes<H: BuildHasher>(
     patch_status: &PatchStatus,
-    modified_files: &HashMap<PathBuf, InternedFile, H>)
+    modified_files: &HashMap<PathBuf, ModifiedFile, H>)
     -> Option<usize>
 {
     let file = modified_files.get(&patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
@@ -67,7 +65,7 @@ pub fn test_apply_with_fuzzes<H: BuildHasher>(
 pub fn test_apply_after_reverting_other<H: BuildHasher>(
     failed_patch_status: &PatchStatus,
     suspect_patch_status: &PatchStatus,
-    modified_files: &HashMap<PathBuf, InternedFile, H>)
+    modified_files: &HashMap<PathBuf, ModifiedFile, H>)
     -> bool
 {
     let file = modified_files.get(&failed_patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
@@ -98,8 +96,7 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
     verbosity: Verbosity,
     broken_patch_index: usize,
     applied_patches: &Vec<PatchStatus>,
-    modified_files: &HashMap<PathBuf, InternedFile, H>,
-    interner: &LineInterner,
+    modified_files: &HashMap<PathBuf, ModifiedFile, H>,
     writer: &mut W)
     -> Result<(), io::Error>
 {
@@ -170,7 +167,6 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
                         print_difference_to_closest_match(&patch_status.report,
                                                           &patch_status.file_patch.hunks()[i],
                                                           &modified_files[&patch_status.target_filename],
-                                                          interner,
                                                           writer,
                                                           "      ")?;
                     }
@@ -239,9 +235,8 @@ pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
 /// Figure out where the hunk was supposed to apply and print it out with highlighted differences.
 pub fn print_difference_to_closest_match<W: Write>(
     report: &FilePatchApplyReport,
-    hunk: &InternedHunk,
-    interned_file: &InternedFile,
-    interner: &LineInterner,
+    hunk: &TextHunk,
+    modified_file: &ModifiedFile,
     writer: &mut W,
     prefix: &str)
     -> Result<(), io::Error>
@@ -257,16 +252,14 @@ pub fn print_difference_to_closest_match<W: Write>(
     // and some added.
     //
     // Regular patch works with a line precision. The whole line either matches or not, nothing in
-    // between. But we need to be smarter and work on the character level, so we start by
-    // de-interning the file and the hunk back into a vector of strings.
+    // between. But we need to be smarter and work on the character level, so we start by turning
+    // the file and the hunk into a vector of strings.
 
-    let file_content_txt = interned_file.content.iter().map(|line_id| {
-        let line =  interner.get(*line_id).unwrap(); // NOTE(unwrap): Must succeed. If it is not there, it is a bug.
+    let file_content_txt = modified_file.content.iter().map(|line| {
         String::from_utf8_lossy(line)
     }).collect::<Vec<_>>();
 
-    let hunk_content_txt = hunk_view.remove_content().iter().map(|line_id| {
-        let line =  interner.get(*line_id).unwrap(); // NOTE(unwrap): Must succeed. If it is not there, it is a bug.
+    let hunk_content_txt = hunk_view.remove_content().iter().map(|line| {
         String::from_utf8_lossy(line)
     }).collect::<Vec<_>>();
 
@@ -418,7 +411,7 @@ pub fn print_difference_to_closest_match<W: Write>(
 }
 
 /// This function prints note from libpatch'es analysis
-pub fn print_analysis_note(patch_filename: &Path, note: &Note, file_patch: &InternedFilePatch) -> Result<(), io::Error> {
+pub fn print_analysis_note(patch_filename: &Path, note: &Note, file_patch: &TextFilePatch) -> Result<(), io::Error> {
     let stderr = io::stderr();
     let mut out = stderr.lock();
 

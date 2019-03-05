@@ -5,8 +5,7 @@
 extern crate test;
 
 pub mod analysis;
-pub mod interned_file;
-pub mod line_interner;
+pub mod modified_file;
 pub mod patch;
 mod util;
 

@@ -29,9 +29,7 @@
 //! # Step 3 - multi-threaded
 //!
 //! The threads then each independently apply their `FilePatch`es to their files.
-//! The `FilePatch`es are interned by the threads, each using their own interner.
-//! The affected files are loaded and interned there as well. Then the `FilePatch`
-//! is applied.
+//! The affected files are loaded, then the `FilePatch` is applied.
 //!
 //! If any application fails, the thread signals the others. At that point the
 //! others may be ahead or behind. They will either catch up, or rollback to
@@ -65,10 +63,9 @@ use crate::apply::diagnostics::*;
 use crate::arena::Arena;
 
 use libpatch::analysis::{AnalysisSet, Note};
-use libpatch::patch::{InternedFilePatch, PatchDirection, TextFilePatch};
+use libpatch::patch::{PatchDirection, TextFilePatch};
 use libpatch::patch::unified::parser::parse_patch;
-use libpatch::line_interner::LineInterner;
-use libpatch::interned_file::InternedFile;
+use libpatch::modified_file::ModifiedFile;
 
 
 /// This is tool that distributes filenames among threads. Currently it doesn't
@@ -197,9 +194,8 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     analyses: &AnalysisSet)
     -> Result<WorkerReport, Error>
 {
-    let mut interner = LineInterner::new();
     let mut applied_patches = Vec::<PatchStatus>::new();
-    let mut modified_files = HashMap::<PathBuf, InternedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut modified_files = HashMap::<PathBuf, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
     for (index, text_file_patch) in thread_file_patches {
@@ -211,7 +207,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
             break;
         }
 
-        let fn_analysis_note = |note: &Note, file_patch: &InternedFilePatch| {
+        let fn_analysis_note = |note: &Note, file_patch: &TextFilePatch| {
             // We ignore any error here because currently we don't have a way to propagate it out
             // of this callback. It's not so tragic, error here would most likely be IO error from
             // writing to terminal.
@@ -226,7 +222,6 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                                    &mut applied_patches,
                                    &mut modified_files,
                                    arena,
-                                   &mut interner,
                                    &analyses,
                                    &fn_analysis_note) {
             Ok(false) => {
@@ -313,12 +308,12 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
     // Analyze failure, in case there was any
     let mut failure_analysis = Vec::<u8>::new();
-    analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &interner, &mut failure_analysis)?;
+    analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &mut failure_analysis)?;
 
     // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, &interner, config.verbosity)?;
+        rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, config.verbosity)?;
 
         if config.verbosity >= Verbosity::Normal && thread_id == 0 {
             println!("Saving modified files...");
@@ -326,7 +321,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 
         // Save all the files we modified
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        save_modified_files(&modified_files, &mut directories_for_cleaning, &interner, config.verbosity)?;
+        save_modified_files(&modified_files, &mut directories_for_cleaning, config.verbosity)?;
         barrier.wait();
         clean_empty_directories(directories_for_cleaning)?;
 
@@ -350,12 +345,8 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, &interner, down_to_index, config.verbosity)?;
+            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, down_to_index, config.verbosity)?;
         }
-    }
-
-    if config.stats {
-        println!("{}", interner.stats());
     }
 
     Ok(WorkerReport {

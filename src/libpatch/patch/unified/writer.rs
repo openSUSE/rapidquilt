@@ -11,15 +11,15 @@ pub trait UnifiedPatchHunkHeaderWriter {
 }
 
 pub trait UnifiedPatchHunkWriter: UnifiedPatchHunkHeaderWriter {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error>;
+    fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error>;
 }
 
 pub trait UnifiedPatchWriter {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error>;
+    fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error>;
 }
 
 pub trait UnifiedPatchRejWriter {
-    fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error>;
+    fn write_rej_to<W: Write>(&self, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error>;
 }
 
 impl<'a, Line> UnifiedPatchHunkHeaderWriter for Hunk<'a, Line> {
@@ -49,13 +49,13 @@ impl<'a, Line> UnifiedPatchHunkHeaderWriter for Hunk<'a, Line> {
     }
 }
 
-impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
+impl<'a> UnifiedPatchHunkWriter for TextHunk<'a> {
+    fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
         self.write_header_to(writer)?;
 
         writer.write_all(b"\n")?;
 
-        fn find_closest_match(a: &[LineId], b: &[LineId]) -> (usize, usize) {
+        fn find_closest_match<'a>(a: &[&'a [u8]], b: &[&'a [u8]]) -> (usize, usize) {
             for i in 0..(a.len() + b.len()) {
                 for j in 0..std::cmp::min(i + 1, a.len()) {
                     if (i - j) < b.len() && a[j] == b[i - j] {
@@ -67,9 +67,7 @@ impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
             (a.len(), b.len())
         }
 
-        let mut write_line = |c: u8, line_id: LineId| -> Result<(), io::Error> {
-            let line = interner.get(line_id).unwrap(); // NOTE(unwrap): Must succeed, we are printing patch that was already interned. If it is not there, it is a bug.
-
+        let mut write_line = |c: u8, line: &'a [u8]| -> Result<(), io::Error> {
             writer.write_all(&[c])?;
             writer.write_all(line)?;
             if line.last() != Some(&b'\n') {
@@ -111,7 +109,7 @@ impl<'a> UnifiedPatchHunkWriter for Hunk<'a, LineId> {
 }
 
 
-fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, writer: &mut W) -> Result<(), io::Error> {
+fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, &'a [u8]>, writer: &mut W) -> Result<(), io::Error> {
     // TODO: Currently we are writing patches with `strip` level 0, which is exactly
     //       what we need for .rej files. But we could add option to configure it?
 
@@ -177,20 +175,20 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, LineId>, w
     Ok(())
 }
 
-impl<'a> UnifiedPatchWriter for FilePatch<'a, LineId> {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
+impl<'a> UnifiedPatchWriter for FilePatch<'a, &'a [u8]> {
+    fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
         write_file_patch_header_to(self, writer)?;
 
         for hunk in &self.hunks {
-            hunk.write_to(interner, writer)?;
+            hunk.write_to(writer)?;
         }
 
         Ok(())
     }
 }
 
-impl<'a> UnifiedPatchRejWriter for FilePatch<'a, LineId> {
-    fn write_rej_to<W: Write>(&self, interner: &LineInterner, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error> {
+impl<'a> UnifiedPatchRejWriter for FilePatch<'a, &'a [u8]> {
+    fn write_rej_to<W: Write>(&self, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error> {
         if report.ok() {
             return Ok(())
         }
@@ -199,7 +197,7 @@ impl<'a> UnifiedPatchRejWriter for FilePatch<'a, LineId> {
 
         for (hunk, report) in self.hunks.iter().zip(report.hunk_reports()) {
             if let HunkApplyReport::Failed(..) = report {
-                hunk.write_to(interner, writer)?;
+                hunk.write_to(writer)?;
             }
         }
 
@@ -207,14 +205,14 @@ impl<'a> UnifiedPatchRejWriter for FilePatch<'a, LineId> {
     }
 }
 
-impl<'a> UnifiedPatchWriter for Patch<'a, LineId> {
-    fn write_to<W: Write>(&self, interner: &LineInterner, writer: &mut W) -> Result<(), io::Error> {
+impl<'a> UnifiedPatchWriter for Patch<'a, &'a [u8]> {
+    fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
         for header_line in &self.header {
             writer.write(header_line)?;
         }
 
         for file_patch in &self.file_patches {
-            file_patch.write_to(interner, writer)?;
+            file_patch.write_to(writer)?;
         }
 
         Ok(())

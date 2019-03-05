@@ -1,7 +1,7 @@
 // Licensed under the MIT license. See LICENSE.md
 
 //! This module defines the structures representing a patch and algorithms for
-//! applying them on `InternedFile`s.
+//! applying them on `ModifiedFile`s.
 //!
 //! The hierarchy is:
 //! Top: `Patch`              ... a single "blabla.patch" file
@@ -17,11 +17,6 @@
 //!                   patches come from parser.
 //!                   Type aliases `TextPatch`, `TextFilePatch` and `TextHunk`
 //!                   can be used as shortcut.
-//!
-//! * `Line = LineId`: The line is a unique 32-bit ID. This is how patches look
-//!                    after interning.
-//!                    Type aliases `InternedPatch`, `InternedFilePatch` and
-//!                    `InternedHunk` can be used as shortcut.
 //!
 //! Other line representations would be possible, for example one where
 //! `Line = String` for a patch that owns its data.
@@ -39,8 +34,7 @@ use std::path::{Path, PathBuf};
 use derive_builder::Builder;
 
 use crate::analysis::{Analysis, AnalysisSet, Note, fn_analysis_note_noop};
-use crate::line_interner::{LineId, LineInterner};
-use crate::interned_file::InternedFile;
+use crate::modified_file::ModifiedFile;
 use crate::util::Searcher;
 
 pub mod unified;
@@ -57,17 +51,6 @@ pub struct HunkPart<Line> {
     /// Numbered from zero. Could be usize, but this makes calculating
     /// offsets easier.
     pub target_line: isize,
-}
-
-impl<'a> HunkPart<&'a [u8]> {
-    /// Consumes this text-based HunkPart and produces interned HunkPart.
-    pub fn intern(mut self, interner: &mut LineInterner<'a>) -> HunkPart<LineId> {
-        HunkPart {
-            content: self.content.drain(..).map(|line| interner.add(line)).collect(),
-
-            target_line: self.target_line,
-        }
-    }
 }
 
 /// Represents the expected relative placement of the hunk.
@@ -138,7 +121,6 @@ impl<'a, Line> Hunk<'a, Line> {
 }
 
 pub type TextHunk<'a> = Hunk<'a, &'a [u8]>;
-pub type InternedHunk<'a> = Hunk<'a, LineId>;
 
 #[derive(Clone, Debug)]
 pub struct HunkView<'a, 'hunk, Line> {
@@ -228,30 +210,17 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
 }
 
 pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
-pub type InternedHunkView<'a, 'hunk> = HunkView<'a, 'hunk, LineId>;
 
-impl<'a> TextHunk<'a> {
-    /// Consumes this text-based Hunk and produces interned Hunk.
-    pub fn intern(self, interner: &mut LineInterner<'a>) -> InternedHunk<'a> {
-        Hunk {
-            remove: self.remove.intern(interner),
-            add: self.add.intern(interner),
-            prefix_context: self.prefix_context,
-            suffix_context: self.suffix_context,
-            function: self.function,
-        }
-    }
-}
 
-/// Try to apply given `HunkView` of an interned hunk onto the `InternedFile`.
-/// This function does not really modify the interned_file, only returns report
+/// Try to apply given `HunkView` onto the `ModifiedFile`.
+/// This function does not really modify the modified_file, only returns report
 /// describing if application is possible and where would it go.
 ///
 /// `hunk`: the `HunkView` to apply
 ///
 /// `my_index`: the index of this hunk in the `FilePatch`
 ///
-/// `interned_file`: the application is tried on this file
+/// `modified_file`: the application is tried on this file
 ///
 /// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
 ///
@@ -259,16 +228,16 @@ impl<'a> TextHunk<'a> {
 ///
 /// `last_frozen_line`: last line that was modified by previous hunk. We must not edit anything before that line.
 fn try_apply_hunk<'a, 'hunk>(
-    hunk_view: &InternedHunkView<'a, 'hunk>,
+    hunk_view: &TextHunkView<'a, 'hunk>,
     my_index: usize,
-    interned_file: &InternedFile,
+    modified_file: &ModifiedFile,
     apply_mode: ApplyMode,
     last_hunk_offset: isize,
     last_frozen_line: isize)
     -> HunkApplyReport
 {
     // If the file doesn't exist, fail immediatelly
-    if interned_file.deleted {
+    if modified_file.deleted {
         return HunkApplyReport::Failed(HunkApplyFailureReason::FileDoesNotExist);
     }
 
@@ -289,7 +258,7 @@ fn try_apply_hunk<'a, 'hunk>(
             //             previous hunk.."
             HunkPosition::Middle => hunk_view.remove_target_line() + last_hunk_offset,
 
-            HunkPosition::End => (interned_file.content.len() as isize - remove_content.len() as isize),
+            HunkPosition::End => (modified_file.content.len() as isize - remove_content.len() as isize),
         },
 
         // In rollback mode, take it from the report
@@ -304,12 +273,12 @@ fn try_apply_hunk<'a, 'hunk>(
 
     // If the hunk tries to remove more than the file has, reject it now.
     // So in the following code we can assume that it is smaller or equal.
-    if remove_content.len() > interned_file.content.len() {
+    if remove_content.len() > modified_file.content.len() {
         return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
     }
 
     // Helper function to decide if the needle matches haystack at give offset.
-    fn matches(needle: &[LineId], haystack: &[LineId], at: isize) -> bool {
+    fn matches(needle: &[&[u8]], haystack: &[&[u8]], at: isize) -> bool {
         if at < 0 {
             return false;
         }
@@ -323,7 +292,7 @@ fn try_apply_hunk<'a, 'hunk>(
     }
 
     // Check if the part we want to remove is at the originally intended target_line
-    if !matches(&remove_content, &interned_file.content, target_line) {
+    if !matches(&remove_content, &modified_file.content, target_line) {
         // It is not on the indended target_line...
 
         // If we are in rollback mode, we are in big trouble. Fail early.
@@ -347,7 +316,7 @@ fn try_apply_hunk<'a, 'hunk>(
         // to the `target_line`
         let mut best_target_line: Option<isize> = None;
 
-        for possible_target_line in Searcher::new(&remove_content).search_in(&interned_file.content) {
+        for possible_target_line in Searcher::new(&remove_content).search_in(&modified_file.content) {
             let possible_target_line = possible_target_line as isize;
 
             // WARNING: The "<=" in the comparison below is important! If a hunk can be placed with two offsets that
@@ -630,26 +599,6 @@ impl<'a, Line> FilePatch<'a, Line> {
 }
 
 pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
-pub type InternedFilePatch<'a> = FilePatch<'a, LineId>;
-
-impl<'a> TextFilePatch<'a> {
-    /// Consumes this text-based FilePatch and produces interned FilePatch.
-    pub fn intern(mut self, interner: &mut LineInterner<'a>) -> InternedFilePatch<'a> {
-        FilePatch {
-            kind: self.kind,
-
-            old_filename: self.old_filename,
-            new_filename: self.new_filename,
-
-            is_rename: self.is_rename,
-
-            old_permissions: self.old_permissions,
-            new_permissions: self.new_permissions,
-
-            hunks: self.hunks.drain(..).map(|hunk| hunk.intern(interner)).collect(),
-        }
-    }
-}
 
 /// The mode of application. This is different from `PatchDirection`.
 #[derive(Copy, Clone, Debug)]
@@ -664,29 +613,29 @@ enum ApplyMode<'a> {
     Rollback(&'a FilePatchApplyReport),
 }
 
-impl<'a> InternedFilePatch<'a> {
-    /// Apply (or revert - based on `direction`) this patch to the `interned_file` using the given `fuzz`.
+impl<'a> TextFilePatch<'a> {
+    /// Apply (or revert - based on `direction`) this patch to the `modified_file` using the given `fuzz`.
     pub fn apply(&self,
-                 interned_file: &mut InternedFile,
+                 modified_file: &mut ModifiedFile<'a>,
                  direction: PatchDirection,
                  fuzz: usize,
                  analyses: &AnalysisSet,
-                 fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+                 fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
                  -> FilePatchApplyReport
     {
-        self.apply_internal(interned_file, direction, fuzz, ApplyMode::Normal, analyses, fn_analysis_note)
+        self.apply_internal(modified_file, direction, fuzz, ApplyMode::Normal, analyses, fn_analysis_note)
     }
 
-    /// Rollback the application (or the revertion - based on direction) of this patch from the `interned_file`
+    /// Rollback the application (or the revertion - based on direction) of this patch from the `modified_file`
     /// using the information from the `apply_report`.
     pub fn rollback(&self,
-                    interned_file: &mut InternedFile,
+                    modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
                     apply_report: &FilePatchApplyReport)
     {
         assert!(self.hunks.len() == apply_report.hunk_reports().len());
 
-        let result = self.apply_internal(interned_file, direction.opposite(), 0, ApplyMode::Rollback(apply_report),
+        let result = self.apply_internal(modified_file, direction.opposite(), 0, ApplyMode::Rollback(apply_report),
                                          &AnalysisSet::default(), &fn_analysis_note_noop);
 
         // Rollback must apply cleanly. If not, we have a bug somewhere.
@@ -697,26 +646,26 @@ impl<'a> InternedFilePatch<'a> {
 
     /// Internal function that does the function of both `apply` and `rollback`.
     fn apply_internal(&self,
-                      interned_file: &mut InternedFile,
+                      modified_file: &mut ModifiedFile<'a>,
                       direction: PatchDirection,
                       fuzz: usize,
                       apply_mode: ApplyMode,
                       analyses: &AnalysisSet,
-                      fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+                      fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
                       -> FilePatchApplyReport
     {
         // Call the appropriate specialized function
         let mut report = match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
-                self.apply_modify(interned_file, direction, fuzz, apply_mode, analyses, fn_analysis_note),
+                self.apply_modify(modified_file, direction, fuzz, apply_mode, analyses, fn_analysis_note),
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
-                self.apply_create(interned_file, direction, fuzz, apply_mode),
+                self.apply_create(modified_file, direction, fuzz, apply_mode),
 
             (FilePatchKind::Delete, PatchDirection::Forward) |
             (FilePatchKind::Create, PatchDirection::Revert) =>
-                self.apply_delete(interned_file, direction, fuzz, apply_mode),
+                self.apply_delete(modified_file, direction, fuzz, apply_mode),
         };
 
         // Set new mode to the file, if there is any
@@ -726,9 +675,9 @@ impl<'a> InternedFilePatch<'a> {
             (ApplyMode::Normal, PatchDirection::Revert) => &self.old_permissions,
         };
         report.previous_permissions = if let Some(change_permissions_to) = change_permissions_to {
-            interned_file.permissions.replace(change_permissions_to.clone())
+            modified_file.permissions.replace(change_permissions_to.clone())
         } else {
-            interned_file.permissions.clone()
+            modified_file.permissions.clone()
         };
 
         report
@@ -736,7 +685,7 @@ impl<'a> InternedFilePatch<'a> {
 
     /// Apply this `FilePatchKind::Create` patch on the file.
     fn apply_create(&self,
-                    interned_file: &mut InternedFile,
+                    modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
                     fuzz: usize,
                     apply_mode: ApplyMode)
@@ -751,7 +700,7 @@ impl<'a> InternedFilePatch<'a> {
         }
 
         // If we are creating it, it must be empty.
-        if !interned_file.content.is_empty() {
+        if !modified_file.content.is_empty() {
             return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::CreatingFileThatExists, direction, fuzz);
         }
 
@@ -761,15 +710,15 @@ impl<'a> InternedFilePatch<'a> {
         };
 
         // Just copy in it the content of our single hunk and we are done.
-        interned_file.content = new_content.clone();
-        interned_file.deleted = false;
+        modified_file.content = new_content.clone();
+        modified_file.deleted = false;
 
         FilePatchApplyReport::single_hunk_success(0, 0, new_content.len() as isize, direction, fuzz)
     }
 
     /// Apply this `FilePatchKind::Delete` patch on the file.
     fn apply_delete(&self,
-                    interned_file: &mut InternedFile,
+                    modified_file: &mut ModifiedFile,
                     direction: PatchDirection,
                     fuzz: usize,
                     apply_mode: ApplyMode)
@@ -789,25 +738,25 @@ impl<'a> InternedFilePatch<'a> {
         };
 
         // If we are deleting it, it must contain exactly what we want to remove.
-        if &expected_content[..] != &interned_file.content[..] {
+        if &expected_content[..] != &modified_file.content[..] {
             return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::DeletingFileThatDoesNotMatch, direction, fuzz);
         }
 
         // Just delete everything and we are done
-        interned_file.content.clear();
-        interned_file.deleted = true;
+        modified_file.content.clear();
+        modified_file.deleted = true;
 
         FilePatchApplyReport::single_hunk_success(0, 0, -(expected_content.len() as isize), direction, fuzz)
     }
 
     /// Apply this `FilePatchKind::Modify` patch on the file.
     fn apply_modify(&self,
-                    interned_file: &mut InternedFile,
+                    modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
                     fuzz: usize,
                     apply_mode: ApplyMode,
                     analyses: &AnalysisSet,
-                    fn_analysis_note: &Fn(&dyn Note, &InternedFilePatch))
+                    fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
                     -> FilePatchApplyReport
     {
         let mut report = FilePatchApplyReport::new_with_capacity(direction, fuzz, self.hunks.len());
@@ -853,7 +802,7 @@ impl<'a> InternedFilePatch<'a> {
                 // Attempt to apply the hunk at the right fuzz level...
                 let hunk_view = &hunk.view(direction, current_fuzz);
 
-                hunk_report = try_apply_hunk(hunk_view, i, interned_file,
+                hunk_report = try_apply_hunk(hunk_view, i, modified_file,
                                              apply_mode, last_hunk_offset,
                                              last_frozen_line);
 
@@ -869,13 +818,13 @@ impl<'a> InternedFilePatch<'a> {
             report.push_hunk_report(hunk_report);
         }
 
-        analyses.before_modifications(interned_file, self, direction, &report, fn_analysis_note);
+        analyses.before_modifications(modified_file, self, direction, &report, fn_analysis_note);
 
         // Now apply all changes on the file.
         // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
         //       splices is that they move the tail of the file multiple times. Alternative is to
-        //       generate new Vec and copy every LineId at most once, but that seems to be even
-        //       slower. Ideally we would need some in-place modification that moves every LineId
+        //       generate new Vec and copy every Line at most once, but that seems to be even
+        //       slower. Ideally we would need some in-place modification that moves every Line
         //       at most once. But I don't think it is possible in general case.
         {
             let mut modification_offset = 0;
@@ -885,14 +834,14 @@ impl<'a> InternedFilePatch<'a> {
                     let target_line = *line + modification_offset;
                     *rollback_line = target_line;
                     let range = (target_line as usize)..(target_line as usize + hunk_view.remove_content().len());
-                    interned_file.content.splice(range.clone(), hunk_view.add_content().to_vec()); // TODO: No to_vec here?
+                    modified_file.content.splice(range.clone(), hunk_view.add_content().to_vec()); // TODO: No to_vec here?
 
                     modification_offset += *line_count_diff;
                 }
             }
         }
 
-        analyses.after_modifications(interned_file, self, direction, &report, fn_analysis_note);
+        analyses.after_modifications(modified_file, self, direction, &report, fn_analysis_note);
 
         report
     }
@@ -910,14 +859,3 @@ pub struct Patch<'a, Line> {
 }
 
 pub type TextPatch<'a> = Patch<'a, &'a [u8]>;
-pub type InternedPatch<'a> = Patch<'a, LineId>;
-
-impl<'a> TextPatch<'a> {
-    /// Consumes this text-based Patch and produces interned Patch.
-    pub fn intern(mut self, interner: &mut LineInterner<'a>) -> InternedPatch<'a> {
-        InternedPatch {
-            header: self.header,
-            file_patches: self.file_patches.drain(..).map(|file_patch| file_patch.intern(interner)).collect(),
-        }
-    }
-}
