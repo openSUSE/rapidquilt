@@ -381,7 +381,7 @@ pub fn print_difference_to_closest_match<W: Write>(
             writeln!(writer)?;
             writeln!(writer, "{}      {}{}", prefix, " ".repeat(line_str.len()), "^ no new line".bright_red())?;
         }
-        if !line_str.ends_with("\r\n") {
+        if line_str.ends_with("\r\n") {
             writeln!(writer, "{}      {}{}", prefix, " ".repeat(line_str.len()), "^ windows new line".bright_red())?;
         }
 
