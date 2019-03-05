@@ -1,5 +1,9 @@
 # Unreleased changes
 
+# Version 0.5.6
+
+* Fix incorrect warning about Windows-style end of lines
+
 # Version 0.5.5
 
 * Fix race condition when deleting empty directories
