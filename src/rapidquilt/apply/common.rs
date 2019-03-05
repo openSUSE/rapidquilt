@@ -247,6 +247,10 @@ pub fn choose_filename_to_patch<'a, H: BuildHasher>(
         (Some(old_filename), None) => old_filename,
         (None, Some(new_filename)) => new_filename,
 
+        // If there are both and are the same, there is nothing to decide
+        (Some(old_filename), Some(new_filename))
+            if old_filename == new_filename => old_filename,
+
         // If there are both...
         (Some(old_filename), Some(new_filename)) => {
             // If the old one exists (loaded or on disk), return that
