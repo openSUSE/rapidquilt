@@ -1358,7 +1358,7 @@ new mode 100755
     assert_eq!(file_patch.hunks.len(), 0);
 }
 
-pub fn parse_patch<'a>(bytes: &'a [u8], strip: usize, mut wants_header: bool) -> Result<TextPatch<'a>, Error> {
+pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, Error> {
     let mut input = CompleteByteSlice(bytes);
 
     let mut header = Vec::new();

@@ -31,7 +31,7 @@ pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
 }
 
 /// Delete all directories and their parents if they are empty.
-pub fn clean_empty_directories<'a, P: AsRef<Path>, I: IntoIterator<Item = P>>(directories_for_cleaning: I) -> Result<(), io::Error> {
+pub fn clean_empty_directories<P: AsRef<Path>, I: IntoIterator<Item = P>>(directories_for_cleaning: I) -> Result<(), io::Error> {
     // Warning: This function can be called by multiple threads at the same time for the same
     //          directories (or nested directories), so things may disappear under its hands, it
     //          must be able to deal with it.
@@ -154,9 +154,7 @@ pub fn save_modified_file<P: AsRef<Path>, H: BuildHasher>(
 
 /// Save all `modified_files` to disk. It also takes care of creating/deleting
 /// the files and containing directories.
-pub fn save_modified_files<
-    'arena,
-    H: BuildHasher>
+pub fn save_modified_files<H: BuildHasher>
 (
     modified_files: &HashMap<PathBuf, ModifiedFile, H>,
     directories_for_cleaning: &mut HashSet<PathBuf, H>,

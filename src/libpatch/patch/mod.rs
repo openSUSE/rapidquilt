@@ -498,11 +498,8 @@ impl FilePatchApplyReport {
 
     /// Add a hunk report
     fn push_hunk_report(&mut self, hunk_report: HunkApplyReport) {
-        match hunk_report {
-            HunkApplyReport::Failed(..) => {
-                self.any_failed = true;
-            }
-            _ => {}
+        if let HunkApplyReport::Failed(..) = hunk_report {
+            self.any_failed = true;
         }
         self.hunk_reports.push(hunk_report);
     }
@@ -594,7 +591,7 @@ impl<'a, Line> FilePatch<'a, Line> {
     /// Return the maximum fuzz that can be applied to this file patch. Applying
     /// more has no effect because there would be no more context lines to ignore.
     pub fn max_useable_fuzz(&self) -> usize {
-        self.hunks.iter().map(|hunk| hunk.max_useable_fuzz()).max().unwrap_or(0)
+        self.hunks.iter().map(Hunk::max_useable_fuzz).max().unwrap_or(0)
     }
 }
 
@@ -738,7 +735,7 @@ impl<'a> TextFilePatch<'a> {
         };
 
         // If we are deleting it, it must contain exactly what we want to remove.
-        if &expected_content[..] != &modified_file.content[..] {
+        if expected_content != &modified_file.content {
             return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::DeletingFileThatDoesNotMatch, direction, fuzz);
         }
 

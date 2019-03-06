@@ -208,7 +208,7 @@ impl<'a> UnifiedPatchRejWriter for FilePatch<'a, &'a [u8]> {
 impl<'a> UnifiedPatchWriter for Patch<'a, &'a [u8]> {
     fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
         for header_line in &self.header {
-            writer.write(header_line)?;
+            writer.write_all(header_line)?;
         }
 
         for file_patch in &self.file_patches {
