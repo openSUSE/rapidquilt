@@ -32,10 +32,10 @@ use std::vec::Vec;
 use std::path::{Path, PathBuf};
 
 use derive_builder::Builder;
+use itertools::Itertools;
 
 use crate::analysis::{Analysis, AnalysisSet, Note, fn_analysis_note_noop};
 use crate::modified_file::ModifiedFile;
-use crate::util::Searcher;
 
 pub mod unified;
 
@@ -312,29 +312,12 @@ fn try_apply_hunk<'a, 'hunk>(
         // "If that is not the correct place, patch scans both forwards and
         // backwards for a set of lines matching the context given in the hunk."
 
-        // We'll find every occurence of `remove_content` in the file and pick the one that is closest
-        // to the `target_line`
         let mut best_target_line: Option<isize> = None;
-
-        for possible_target_line in Searcher::new(&remove_content).search_in(&modified_file.content) {
-            let possible_target_line = possible_target_line as isize;
-
-            // WARNING: The "<=" in the comparison below is important! If a hunk can be placed with two offsets that
-            // have the same magnitude, but one positive and the other other negative, patch prefers the positive one!
-            if best_target_line.is_none() || (possible_target_line - target_line).abs() <= (best_target_line.unwrap() - target_line).abs() {
-                // We found a position that is better (or there was no best position yet), remember it.
+            let forward_indexes = (target_line + 1)..=(modified_file.content.len() as isize - remove_content.len() as isize);
+            let backward_indexes = (0..target_line).rev();
+            for possible_target_line in forward_indexes.interleave(backward_indexes) { // It is important that `forward_indexes` go first! E.g. offset +5 should be selected over -5.
+                if matches(&remove_content, &modified_file.content, possible_target_line) {
                 best_target_line = Some(possible_target_line);
-
-                if possible_target_line > target_line {
-                    // We found a match on a line that is after the expected target_line.
-                    // We can stop the search right now because any future matches will
-                    // have bigger offset so have no chance of being selected.
-                    break;
-                }
-            } else {
-                // We found a position that is worse than the best one so far. We are searching the file from start to end, so the
-                // possible_target_line will be getting closer and closer to the target_line until we pass it and it will
-                // start getting worse. At that point we can cut off the search.
                 break;
             }
         }

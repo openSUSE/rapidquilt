@@ -78,7 +78,7 @@ impl Analysis for MultiApplyAnalysis {
 
             // Check if there are any more places where the hunk could apply,
             // we must exclude places where some hunk already applied.
-            let places: Vec<Range<isize>> = Searcher::new(&remove_content)
+            let places: Vec<Range<isize>> = Searcher::new(&remove_content) // TODO: We no longer use Searcher in patch::try_apply_hunk and we could stop using it here and remove it completely...
                 .search_in(&modified_file.content)
                 .map(|line| (line as isize)..((line + remove_content.len()) as isize))
                 .filter(|range| {
