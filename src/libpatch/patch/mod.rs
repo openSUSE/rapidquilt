@@ -829,7 +829,7 @@ impl<'a> TextFilePatch<'a> {
                     let target_line = *line + modification_offset;
                     *rollback_line = target_line;
                     let range = (target_line as usize)..(target_line as usize + hunk_view.remove_content().len());
-                    modified_file.content.splice(range.clone(), hunk_view.add_content().to_vec()); // TODO: No to_vec here?
+                    modified_file.content.splice(range.clone(), hunk_view.add_content().iter().cloned()); // Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
 
                     modification_offset += *line_count_diff;
                 }
