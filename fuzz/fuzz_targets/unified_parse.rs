@@ -4,5 +4,5 @@
 use libpatch::patch::unified::parser::parse_patch;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = parse_patch(data, 0);
+    let _ = parse_patch(data, 0, true);
 });
