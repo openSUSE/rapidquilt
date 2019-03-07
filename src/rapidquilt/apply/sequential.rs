@@ -4,10 +4,11 @@
 //!
 //! Patches are read, parsed and applied one by one.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::hash::BuildHasherDefault;
-use std::path::PathBuf;
+use std::path::Path;
 
 use colored::*;
 use failure::{Error, ResultExt};
@@ -24,11 +25,11 @@ use libpatch::patch::unified::parser::parse_patch;
 use libpatch::modified_file::ModifiedFile;
 
 
-pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
+pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
     -> Result<ApplyResult, Error> {
     let mut applied_patches = Vec::<PatchStatus>::new();
 
-    let mut modified_files = HashMap::<PathBuf, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut modified_files = HashMap::<Cow<'arena, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     let mut final_patch = 0;
 

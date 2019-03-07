@@ -44,10 +44,11 @@
 
 
 use std;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::io::{self, Write};
 use std::hash::{BuildHasherDefault, Hash};
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Barrier, Mutex};
 
@@ -195,7 +196,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     -> Result<WorkerReport, Error>
 {
     let mut applied_patches = Vec::<PatchStatus>::new();
-    let mut modified_files = HashMap::<PathBuf, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut modified_files = HashMap::<Cow<'a, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
     for (index, text_file_patch) in thread_file_patches {
@@ -266,7 +267,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
                 break;
             }
 
-            let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+            let mut file = modified_files.get_mut(applied_patch.final_filename.as_ref()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
             applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
             applied_patches.pop();
@@ -355,7 +356,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
 }
 
 /// Apply all patches from the `config` in parallel
-pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
+pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
     -> Result<ApplyResult, Error>
 {
     let threads = rayon::current_num_threads();
@@ -384,7 +385,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
     }
 
     // Distribute the patches to queues for worker threads
-    let mut filename_distributor = FilenameDistributor::<PathBuf>::new(threads);
+    let mut filename_distributor = FilenameDistributor::<Cow<Path>>::new(threads);
     for text_patch in &text_patches {
         // Error checking later, here we'll look at the ok ones
         if let Ok(text_patch) = text_patch {
@@ -412,7 +413,7 @@ pub fn apply_patches<'a>(config: &'a ApplyConfig, arena: &dyn Arena, analyses: &
                     (None, None) => unreachable!(),
                 };
 
-                filename_distributor.add(filename.clone(), rename_to_filename.cloned()); // TODO: Get rid of clone?
+                filename_distributor.add(filename.clone(), rename_to_filename.cloned()); // Note: clone/cloned is used on Cow, so most of the time it will be just copy of reference
             }
         }
     }

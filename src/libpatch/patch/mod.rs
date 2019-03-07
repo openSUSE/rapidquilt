@@ -26,10 +26,11 @@
 //! remove-line and add-line.
 
 
+use std::borrow::Cow;
 use std::cmp::{max, min};
 use std::fs;
 use std::vec::Vec;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use derive_builder::Builder;
 use itertools::Itertools;
@@ -515,12 +516,16 @@ pub struct FilePatch<'a, Line> {
     kind: FilePatchKind,
 
     /// The old filename (e.g. after --- line)
+    /// It may be a `Path` wrapping a byte slice from the original patch file, or owned `PathBuf` if
+    /// byte slice was not possible.
     #[builder(default)]
-    old_filename: Option<PathBuf>,
+    old_filename: Option<Cow<'a, Path>>,
 
     /// The new filename (e.g. after +++ line)
+    /// It may be a `Path` wrapping a byte slice from the original patch file, or owned `PathBuf` if
+    /// byte slice was not possible.
     #[builder(default)]
-    new_filename: Option<PathBuf>,
+    new_filename: Option<Cow<'a, Path>>,
 
     #[builder(default)]
     is_rename: bool,
@@ -540,8 +545,8 @@ pub struct FilePatch<'a, Line> {
 impl<'a, Line> FilePatch<'a, Line> {
     pub fn kind(&self) -> FilePatchKind { self.kind }
 
-    pub fn old_filename(&self) -> Option<&PathBuf> { self.old_filename.as_ref() }
-    pub fn new_filename(&self) -> Option<&PathBuf> { self.new_filename.as_ref() }
+    pub fn old_filename(&self) -> Option<&Cow<'a, Path>> { self.old_filename.as_ref() }
+    pub fn new_filename(&self) -> Option<&Cow<'a, Path>> { self.new_filename.as_ref() }
 
     #[allow(dead_code)]
     pub fn is_rename(&self) -> bool { self.is_rename }
@@ -555,19 +560,29 @@ impl<'a, Line> FilePatch<'a, Line> {
 
     /// Strip the leading path from the filename and new_filename
     pub fn strip(&mut self, strip: usize) {
-        fn strip_path(path: &Path, strip: usize) -> PathBuf {
-            let mut components = path.components();
-            for _ in 0..strip { components.next(); }
-            components.as_path().to_path_buf()
+        fn strip_path(path: &mut Cow<Path>, strip: usize) {
+            match path {
+                // TODO: De-duplicate code in those two branches?
+                Cow::Owned(pathbuf) => {
+                    let mut components = pathbuf.components();
+                    for _ in 0..strip { components.next(); }
+                    *path = Cow::Owned(components.as_path().to_path_buf());
+                }
+                Cow::Borrowed(path_ref) => {
+                    let mut components = path_ref.components();
+                    for _ in 0..strip { components.next(); }
+                    *path = Cow::Borrowed(components.as_path());
+                }
+            }
 
             // TODO: Handle error if it is too short!
         }
 
-        if let Some(old_filename) = &self.old_filename {
-            self.old_filename = Some(strip_path(old_filename, strip));
+        if let Some(old_filename) = &mut self.old_filename {
+            strip_path(old_filename, strip);
         }
-        if let Some(new_filename) = &self.new_filename {
-            self.new_filename = Some(strip_path(new_filename, strip));
+        if let Some(new_filename) = &mut self.new_filename {
+            strip_path(new_filename, strip);
         }
     }
 

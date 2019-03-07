@@ -51,7 +51,7 @@ fn all_files() -> Result<(), Error> {
         // Load the target file
         // Note: In this case we always expect the old_filename to exist, so we
         //       select it directly.
-        let file = fs::read(path.with_file_name(file_patch.old_filename().expect("old_filename missing!")))?;
+        let file = fs::read(path.with_file_name(file_patch.old_filename().expect("old_filename missing!").as_ref()))?;
         let mut modified_file = ModifiedFile::new(&file, true);
 
         // Patch it

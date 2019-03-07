@@ -1,7 +1,8 @@
 // Licensed under the MIT license. See LICENSE.md
 
+use std::borrow::Cow;
 use std::fs::Permissions;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::vec::Vec;
 
@@ -158,10 +159,14 @@ named!(take_until_newline_incl<CompleteByteSlice, CompleteByteSlice>,
     recognize!(pair!(call!(take_until_newline), take!(1)))
 );
 
+/// Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
+/// of the path as-is in the input data.
 named!(parse_filename_direct<CompleteByteSlice, CompleteByteSlice>,
     take_till1!(is_whitespace)
 );
 
+/// Parses a quoted filename that may contain escaped characters. Returns owned buffer with the
+/// unescaped filename.
 /// Similar to `parse_c_string` function in patch.
 named!(parse_filename_quoted<CompleteByteSlice, Vec<u8>>,
     do_parse!(
@@ -197,28 +202,13 @@ named!(parse_filename_quoted<CompleteByteSlice, Vec<u8>>,
 );
 
 #[derive(Debug, PartialEq)]
-enum Filename {
-    Real(PathBuf),
+enum Filename<'a> {
+    /// Actual filename, either as byte slice of the patch file or owned buffer.
+    Real(Cow<'a, Path>),
+
+    /// The special "/dev/null" filename.
     DevNull,
 }
-
-#[cfg(unix)]
-fn bytes_to_pathbuf(bytes: &[u8]) -> PathBuf {
-    use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
-
-    PathBuf::from(OsStr::from_bytes(bytes))
-}
-
-#[cfg(not(unix))]
-fn bytes_to_pathbuf(bytes: &[u8]) -> PathBuf {
-    // XXX: This may not work in case of some really weird paths (control characters
-    //      and what not). But I guess those can not be legaly saved in patch files
-    //      anyway.
-
-    PathBuf::from(String::from_utf8_lossy(bytes).as_ref())
-}
-
 
 /// Parses a filename.
 ///
@@ -229,20 +219,65 @@ named!(parse_filename<CompleteByteSlice, Filename>,
     do_parse!(
         take_while!(is_space) >>
         filename: alt!(
-            // This looks like the same function is applied on both branches,
-            // but one works with Vec, other with CompleteByteSlice...
-            map!(parse_filename_quoted, |f| {
-                if &f[..] == NULL_FILENAME {
+            // First attempt to parse it as quoted filename. This will reject it quickly if it does
+            // not start with '"' character
+            map!(parse_filename_quoted, |filename_vec| {
+                if &filename_vec[..] == NULL_FILENAME {
                     Filename::DevNull
                 } else {
-                    Filename::Real(bytes_to_pathbuf(&f[..]))
+                    let pathbuf = match () {
+                        #[cfg(unix)]
+                        () => {
+                            // We have owned buffer, so we must turn it into allocated `PathBuf`, but
+                            // no conversion of encoding is necessary on unix systems.
+
+                            use std::ffi::OsString;
+                            use std::os::unix::ffi::OsStringExt;
+                            PathBuf::from(OsString::from_vec(filename_vec))
+                        }
+
+                        #[cfg(not(unix))]
+                        () => {
+                            // In non-unix systems, we don't know how is `Path` represented, so we can
+                            // not just take the byte slice and use it as `Path`. For example on Windows
+                            // paths are a form of UTF-16, while the content of patch file has undefined
+                            // encoding and we assume UTF-8. So conversion has to happen.
+
+                            PathBuf::from(String::from_utf8_lossy(bytes).owned())
+                        }
+                    };
+
+                    Filename::Real(Cow::Owned(pathbuf))
                 }
             }) |
-            map!(parse_filename_direct, |f| {
-                if &f[..] == NULL_FILENAME {
+            // Then attempt to parse it as direct filename (without quotes, spaces or escapes)
+            map!(parse_filename_direct, |filename| {
+                if &filename[..] == NULL_FILENAME {
                     Filename::DevNull
                 } else {
-                    Filename::Real(bytes_to_pathbuf(&f[..]))
+                    let path = match () {
+                        #[cfg(unix)]
+                        () => {
+                            // We have a byte slice, which we can wrap into `Path` and use it without
+                            // any heap allocation.
+
+                            use std::ffi::OsStr;
+                            use std::os::unix::ffi::OsStrExt;
+                            Cow::Borrowed(Path::new(OsStr::from_bytes(filename.0)))
+                        }
+
+                        #[cfg(not(unix))]
+                        () => {
+                            // In non-unix systems, we don't know how is `Path` represented, so we can
+                            // not just take the byte slice and use it as `Path`. For example on Windows
+                            // paths are a form of UTF-16, while the content of patch file has undefined
+                            // encoding and we assume UTF-8. So conversion has to happen.
+
+                            Cow::Owned(PathBuf::from(String::from_utf8_lossy(bytes).owned()))
+                        }
+                    };
+
+                    Filename::Real(path)
                 }
             })
         ) >>
@@ -254,7 +289,7 @@ named!(parse_filename<CompleteByteSlice, Filename>,
 #[test]
 fn test_parse_filename() {
     fn assert_path(input: &[u8], result: &str) {
-        assert_parsed!(parse_filename, input, Filename::Real(PathBuf::from(result)));
+        assert_parsed!(parse_filename, input, Filename::Real(Cow::Owned(PathBuf::from(result))));
     }
 
     assert_path(b"aaa", "aaa");
@@ -309,11 +344,11 @@ fn test_parse_mode() {
 }
 
 #[derive(Debug, PartialEq)]
-enum MetadataLine {
-    GitDiffSeparator(Filename, Filename),
+enum MetadataLine<'a> {
+    GitDiffSeparator(Filename<'a>, Filename<'a>),
 
-    MinusFilename(Filename),
-    PlusFilename(Filename),
+    MinusFilename(Filename<'a>),
+    PlusFilename(Filename<'a>),
 
     OldMode(u32),
     NewMode(u32),
@@ -360,10 +395,10 @@ fn test_parse_metadata_line() {
     use self::MetadataLine::*;
 
     // All of them in basic form
-    assert_parsed!(parse_metadata_line, b"diff --git aaa bbb\n", GitDiffSeparator(Filename::Real(PathBuf::from("aaa")), Filename::Real(PathBuf::from("bbb"))));
+    assert_parsed!(parse_metadata_line, b"diff --git aaa bbb\n", GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb")))));
 
-    assert_parsed!(parse_metadata_line, b"--- aaa\n", MinusFilename(Filename::Real(PathBuf::from("aaa"))));
-    assert_parsed!(parse_metadata_line, b"+++ aaa\n", PlusFilename(Filename::Real(PathBuf::from("aaa"))));
+    assert_parsed!(parse_metadata_line, b"--- aaa\n", MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa")))));
+    assert_parsed!(parse_metadata_line, b"+++ aaa\n", PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa")))));
 
     assert_parsed!(parse_metadata_line, b"old mode 100644\n",         OldMode(0o100644));
     assert_parsed!(parse_metadata_line, b"new mode 100644\n",         NewMode(0o100644));
@@ -379,14 +414,14 @@ fn test_parse_metadata_line() {
     assert_parsed!(parse_metadata_line, b"GIT binary patch ???\n", GitBinaryPatch);
 
     // Filename with date
-    assert_parsed!(parse_metadata_line, b"--- a/bla/ble.c	2013-09-23 18:41:09.000000000 -0400\n", MinusFilename(Filename::Real(PathBuf::from("a/bla/ble.c"))));
+    assert_parsed!(parse_metadata_line, b"--- a/bla/ble.c	2013-09-23 18:41:09.000000000 -0400\n", MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("a/bla/ble.c")))));
 
 }
 
 #[derive(Debug, PartialEq)]
 enum PatchLine<'a> {
     Garbage(&'a [u8]),
-    Metadata(MetadataLine),
+    Metadata(MetadataLine<'a>),
     StartOfHunk,
     EndOfPatch,
 }
@@ -406,8 +441,8 @@ fn test_parse_patch_line() {
     use self::PatchLine::*;
     use self::MetadataLine::*;
 
-    assert_parsed!(parse_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(PathBuf::from("aaa")), Filename::Real(PathBuf::from("bbb")))));
-    assert_parsed!(parse_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(PathBuf::from("aaa")))));
+    assert_parsed!(parse_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
+    assert_parsed!(parse_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
 
     assert_parsed!(parse_patch_line, b"@@ -1 +1 @@\n", StartOfHunk);
 
@@ -789,20 +824,20 @@ Other content.
 }
 
 #[derive(Debug, Default)]
-struct FilePatchMetadata {
-    old_filename: Option<Filename>,
-    new_filename: Option<Filename>,
+struct FilePatchMetadata<'a> {
+    old_filename: Option<Filename<'a>>,
+    new_filename: Option<Filename<'a>>,
     rename_from: bool,
     rename_to: bool,
     old_permissions: Option<Permissions>,
     new_permissions: Option<Permissions>,
 }
 
-enum FilePatchMetadataBuildError {
-    MissingFilenames(FilePatchMetadata),
+enum FilePatchMetadataBuildError<'a> {
+    MissingFilenames(FilePatchMetadata<'a>),
 }
 
-impl FilePatchMetadata {
+impl<'a> FilePatchMetadata<'a> {
     pub fn recognize_kind(&self, hunks: &[TextHunk]) -> FilePatchKind {
         // First check the filenames
         if self.old_filename.as_ref() == Some(&Filename::DevNull) {
@@ -837,7 +872,7 @@ impl FilePatchMetadata {
     }
 
     /// This function will return `None` if some necessary metadata is missing
-    pub fn build_filepatch<'a>(self, hunks: HunksVec<'a, &'a [u8]>) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError> {
+    pub fn build_filepatch(self, hunks: HunksVec<'a, &'a [u8]>) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError<'a>> {
         let builder = FilePatchBuilder::<&[u8]>::default();
 
         // Set the kind
@@ -895,7 +930,7 @@ impl FilePatchMetadata {
     }
 
     /// This function will return `None` if some necessary metadata is missing
-    pub fn build_hunkless_filepatch<'a>(self) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError> {
+    pub fn build_hunkless_filepatch(self) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError<'a>> {
         self.build_filepatch(HunksVec::new())
     }
 }
@@ -1055,8 +1090,8 @@ Other content.
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1084,7 +1119,7 @@ garbage3
 
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
     assert_eq!(file_patch.old_filename(), None);
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1111,8 +1146,8 @@ garbage3
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1139,7 +1174,7 @@ garbage3
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.new_filename(), None);
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
@@ -1167,8 +1202,8 @@ garbage3
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1204,8 +1239,8 @@ Other content.
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 0);
@@ -1230,8 +1265,8 @@ rename to filename2
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 0);
@@ -1259,8 +1294,8 @@ rename to filename2
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename2")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1310,8 +1345,8 @@ new mode 100755
 
     let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
     assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
     assert_eq!(file_patch.hunks.len(), 1);
@@ -1336,8 +1371,8 @@ diff --git filename2 filename2
 
     let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
     assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
     assert_eq!(file_patch.hunks.len(), 0);
@@ -1354,8 +1389,8 @@ new mode 100755
 
     let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patch.new_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
     assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
     assert_eq!(file_patch.hunks.len(), 0);
@@ -1438,13 +1473,13 @@ garbage7
 
     assert_eq!(file_patches.len(), 2);
 
-    assert_eq!(file_patches[0].old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patches[0].new_filename(), Some(&PathBuf::from("filename1")));
+    assert_eq!(file_patches[0].old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patches[0].new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patches[0].hunks.len(), 1);
     assert_eq!(file_patches[0].hunks[0].add.content[0], s!(b"mmm\n"));
 
-    assert_eq!(file_patches[1].old_filename(), Some(&PathBuf::from("filename2")));
-    assert_eq!(file_patches[1].new_filename(), Some(&PathBuf::from("filename2")));
+    assert_eq!(file_patches[1].old_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
+    assert_eq!(file_patches[1].new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
     assert_eq!(file_patches[1].hunks.len(), 1);
     assert_eq!(file_patches[1].hunks[0].add.content[0], s!(b"aaa\n"));
 
@@ -1483,20 +1518,20 @@ rename to filename7
 
     assert_eq!(file_patches.len(), 4);
 
-    assert_eq!(file_patches[0].old_filename(), Some(&PathBuf::from("filename1")));
-    assert_eq!(file_patches[0].new_filename(), Some(&PathBuf::from("filename2")));
+    assert_eq!(file_patches[0].old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patches[0].new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
     assert_eq!(file_patches[0].hunks.len(), 0);
 
-    assert_eq!(file_patches[1].old_filename(), Some(&PathBuf::from("filename3")));
-    assert_eq!(file_patches[1].new_filename(), Some(&PathBuf::from("filename4")));
+    assert_eq!(file_patches[1].old_filename(), Some(&Cow::Owned(PathBuf::from("filename3"))));
+    assert_eq!(file_patches[1].new_filename(), Some(&Cow::Owned(PathBuf::from("filename4"))));
     assert_eq!(file_patches[1].hunks.len(), 0);
 
-    assert_eq!(file_patches[2].old_filename(), Some(&PathBuf::from("filename5")));
-    assert_eq!(file_patches[2].new_filename(), Some(&PathBuf::from("filename6")));
+    assert_eq!(file_patches[2].old_filename(), Some(&Cow::Owned(PathBuf::from("filename5"))));
+    assert_eq!(file_patches[2].new_filename(), Some(&Cow::Owned(PathBuf::from("filename6"))));
     assert_eq!(file_patches[2].hunks.len(), 1);
 
-    assert_eq!(file_patches[3].old_filename(), Some(&PathBuf::from("filename7")));
-    assert_eq!(file_patches[3].new_filename(), Some(&PathBuf::from("filename8")));
+    assert_eq!(file_patches[3].old_filename(), Some(&Cow::Owned(PathBuf::from("filename7"))));
+    assert_eq!(file_patches[3].new_filename(), Some(&Cow::Owned(PathBuf::from("filename8"))));
     assert_eq!(file_patches[3].hunks.len(), 0);
 }
 

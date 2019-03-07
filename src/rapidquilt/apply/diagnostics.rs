@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::io::{self, Write};
 use std::hash::BuildHasher;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use smallvec::{SmallVec, smallvec};
 
@@ -28,9 +28,9 @@ use crate::apply::Verbosity;
 
 
 /// Try if the patch would apply with some fuzz. It doesn't do any permanent changes.
-pub fn test_apply_with_fuzzes<H: BuildHasher>(
+pub fn test_apply_with_fuzzes<'arena, H: BuildHasher>(
     patch_status: &PatchStatus,
-    modified_files: &HashMap<PathBuf, ModifiedFile, H>)
+    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
     -> Option<usize>
 {
     let file = modified_files.get(&patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
@@ -62,10 +62,10 @@ pub fn test_apply_with_fuzzes<H: BuildHasher>(
     None
 }
 
-pub fn test_apply_after_reverting_other<H: BuildHasher>(
+pub fn test_apply_after_reverting_other<'arena, H: BuildHasher>(
     failed_patch_status: &PatchStatus,
     suspect_patch_status: &PatchStatus,
-    modified_files: &HashMap<PathBuf, ModifiedFile, H>)
+    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
     -> bool
 {
     let file = modified_files.get(&failed_patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
@@ -92,11 +92,11 @@ pub fn test_apply_after_reverting_other<H: BuildHasher>(
 
 /// Render a report into `writer` about why the `broken_patch_index` failed to
 /// apply.
-pub fn analyze_patch_failure<H: BuildHasher, W: Write>(
+pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
     verbosity: Verbosity,
     broken_patch_index: usize,
-    applied_patches: &Vec<PatchStatus>,
-    modified_files: &HashMap<PathBuf, ModifiedFile, H>,
+    applied_patches: &Vec<PatchStatus<'arena, '_>>,
+    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
     writer: &mut W)
     -> Result<(), io::Error>
 {

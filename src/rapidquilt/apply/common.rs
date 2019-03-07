@@ -3,6 +3,7 @@
 //! This module contains functions shared between the `parallel` and
 //! `sequential` modules.
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::fs::{self, File};
 use std::io::{self, BufWriter};
@@ -91,17 +92,15 @@ pub fn clean_empty_directories<P: AsRef<Path>, I: IntoIterator<Item = P>>(direct
 
 /// Save the `file` to disk. It also takes care of creating/deleting the file
 /// and containing directories.
-pub fn save_modified_file<P: AsRef<Path>, H: BuildHasher>(
-    filename: P,
+pub fn save_modified_file<'arena, H: BuildHasher>(
+    filename: &Cow<'arena, Path>,
     file: &ModifiedFile,
-    directories_for_cleaning: &mut HashSet<PathBuf, H>,
+    directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>,
     verbosity: Verbosity)
     -> Result<(), io::Error>
 {
-    let filename = filename.as_ref();
-
     if verbosity >= Verbosity::ExtraVerbose {
-        println!("Saving modified file: {:?}: existed: {:?} deleted: {:?} len: {}", filename, file.existed, file.deleted, file.content.len());
+        println!("Saving modified file: {:?}: existed: {:?} deleted: {:?} len: {}", filename.as_ref(), file.existed, file.deleted, file.content.len());
     }
 
     if file.existed {
@@ -126,8 +125,16 @@ pub fn save_modified_file<P: AsRef<Path>, H: BuildHasher>(
         // If the file was deleted and existed before, its parent directory may be empty and so
         // needs to be checked for cleaning.
         if file.existed {
-            if let Some(parent) = filename.parent() {
-                directories_for_cleaning.insert(parent.to_path_buf());
+            // The filename may be owned or be a reference into the arena. If it is reference, we can
+            // keep the parent as reference with the same lifetime. But if it is owned, we must make
+            // a copy.
+            let parent = match filename {
+                Cow::Borrowed(path_ref) => path_ref.parent().map(Cow::Borrowed),
+                Cow::Owned(path_buf) => path_buf.parent().map(|parent| Cow::Owned(parent.to_path_buf())),
+            };
+
+            if let Some(parent) = parent {
+                directories_for_cleaning.insert(parent);
             }
         }
     } else {
@@ -154,16 +161,16 @@ pub fn save_modified_file<P: AsRef<Path>, H: BuildHasher>(
 
 /// Save all `modified_files` to disk. It also takes care of creating/deleting
 /// the files and containing directories.
-pub fn save_modified_files<H: BuildHasher>
+pub fn save_modified_files<'arena, H: BuildHasher>
 (
-    modified_files: &HashMap<PathBuf, ModifiedFile, H>,
-    directories_for_cleaning: &mut HashSet<PathBuf, H>,
+    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
+    directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>,
     verbosity: Verbosity)
     -> Result<(), Error>
 {
     for (filename, file) in modified_files {
         save_modified_file(filename, file, directories_for_cleaning, verbosity)
-            .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.clone() })?;
+            .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.to_path_buf() })?;
     }
 
     Ok(())
@@ -209,11 +216,11 @@ pub struct PatchStatus<'a, 'b> {
     /// which files exist on the disk.
     /// Note that the file may have been renamed by the same `FilePatch`. The
     /// final form with be in `final_filename`.
-    pub target_filename: PathBuf,
+    pub target_filename: Cow<'a, Path>,
 
     /// The final filename of the file when this patch was done with it. Typically
     /// it will be the same as `target_filename`, unless the file was renamed.
-    pub final_filename: PathBuf,
+    pub final_filename: Cow<'a, Path>,
 
     /// Report from `FilePatch::apply`
     pub report: FilePatchApplyReport,
@@ -229,11 +236,11 @@ pub struct PatchStatus<'a, 'b> {
 /// # panics
 ///
 /// Panics if both `old_filename` and `new_filename` are `None`.
-pub fn choose_filename_to_patch<'a, H: BuildHasher>(
-    old_filename: Option<&'a PathBuf>,
-    new_filename: Option<&'a PathBuf>,
-    modified_files: &HashMap<PathBuf, ModifiedFile, H>)
-    -> &'a PathBuf
+pub fn choose_filename_to_patch<'a, 'b, H: BuildHasher>(
+    old_filename: Option<&'b Cow<'a, Path>>,
+    new_filename: Option<&'b Cow<'a, Path>>,
+    modified_files: &HashMap<Cow<'a, Path>, ModifiedFile, H>)
+    -> &'b Cow<'a, Path>
 {
     match (old_filename, new_filename) {
         // If there is only one of them, that's the one we'll return
@@ -293,17 +300,17 @@ pub fn get_modified_file<
     'modified_files,
     H: BuildHasher>
 (
-    filename: &PathBuf,
-    modified_files: &'modified_files mut HashMap<PathBuf, ModifiedFile<'arena>, H>,
+    filename: &Cow<'arena, Path>,
+    modified_files: &'modified_files mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     arena: &'arena dyn Arena)
     -> Result<&'modified_files mut ModifiedFile<'arena>, io::Error>
 {
     // Load the file or create it empty
-    let item = match modified_files.entry(filename.clone() /* <-TODO: Avoid clone */) {
+    let item = match modified_files.entry(filename.clone()) {
         Entry::Occupied(entry) => entry.into_mut(),
 
         Entry::Vacant(entry) => {
-            match arena.load_file(filename) {
+            match arena.load_file(filename.as_ref()) {
                 Ok(data) => entry.insert(ModifiedFile::new(&data, true)),
 
                 // If the file doesn't exist, make empty one.
@@ -341,7 +348,7 @@ pub fn apply_one_file_patch<
     file_patch: TextFilePatch<'arena>,
     reverse: bool,
     applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
-    modified_files: &mut HashMap<PathBuf, ModifiedFile<'arena>, H>,
+    modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     arena: &'arena dyn Arena,
     analyses: &'analyses AnalysisSet,
     fn_analysis_note: &'fn_analysis_note Fn(&dyn Note, &TextFilePatch))
@@ -350,7 +357,7 @@ pub fn apply_one_file_patch<
     // Get the file to patch
     let target_filename = choose_filename_to_patch(file_patch.old_filename(), file_patch.new_filename(), modified_files).clone();
     let file = get_modified_file(&target_filename, modified_files, arena)
-        .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.clone() })?;
+        .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
 
     // If the patch renames the file. do it now...
     let (mut file, final_filename) = if file_patch.is_rename() {
@@ -369,7 +376,7 @@ pub fn apply_one_file_patch<
         let mut tmp_file = file.move_out();
 
         let new_file = get_modified_file(new_filename, modified_files, arena)
-            .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.clone() })?;
+            .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.to_path_buf() })?;
 
         if !new_file.move_in(&mut tmp_file) {
             // Regular patch will just happily overwrite existing file if there is any...
@@ -383,7 +390,7 @@ pub fn apply_one_file_patch<
 
             // Put the content back to the old file.
             let file = get_modified_file(&target_filename, modified_files, arena)
-                .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.clone() })?;
+                .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
             file.move_in(&mut tmp_file);
 
             // Note that we don't place anything into applied_patches - the patch
@@ -427,7 +434,7 @@ pub fn apply_one_file_patch<
 /// Rolls back single applied `FilePatch`
 pub fn rollback_applied_patch<'arena, 'a: 'b, 'b, 'c, H: BuildHasher>(
     applied_patch: &PatchStatus<'arena, 'c>,
-    modified_files: &'a mut HashMap<PathBuf, ModifiedFile<'arena>, H>)
+    modified_files: &'a mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>)
     -> &'b ModifiedFile<'arena>
 {
     {
@@ -458,7 +465,7 @@ pub fn rollback_applied_patch<'arena, 'a: 'b, 'b, 'c, H: BuildHasher>(
 /// ".rej" files for each `FilePatch` that failed applying
 pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus<'arena, '_>>,
-    modified_files: &mut HashMap<PathBuf, ModifiedFile<'arena>, H>,
+    modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     rejected_patch_index: usize,
     verbosity: Verbosity)
     -> Result<(), Error>
@@ -494,7 +501,7 @@ pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
 /// `down_to_index` index and generates quilt backup files for all of them.
 pub fn rollback_and_save_backup_files<'arena, H: BuildHasher>(
     applied_patches: &mut Vec<PatchStatus<'arena, '_>>,
-    modified_files: &mut HashMap<PathBuf, ModifiedFile<'arena>, H>,
+    modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     down_to_index: usize,
     verbosity: Verbosity)
     -> Result<(), Error>
