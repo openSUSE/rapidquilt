@@ -437,26 +437,22 @@ pub fn rollback_applied_patch<'arena, 'a: 'b, 'b, 'c, H: BuildHasher>(
     modified_files: &'a mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>)
     -> &'b ModifiedFile<'arena>
 {
-    {
-        let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+    let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
 
-        applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+    applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
 
-        // XXX: `file` is here dropped and later got again. I would prefer to just keep it, but
-        // can't get it to pass borrowcheck
-    }
 
     if applied_patch.file_patch.is_rename() {
-        // Now we have to do the rename backwards
-        let file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+        // Now we have to rename backwards
         let mut tmp_file = file.move_out();
 
         let old_file = modified_files.get_mut(&applied_patch.target_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
         let ok = old_file.move_in(&mut tmp_file);
-        assert!(ok); // It must be ok during rollback, otherwise we made mistake during applying
+        assert!(ok); // It must be ok during rollback, otherwise we have bug in the applying code
 
         old_file
     } else {
+        // TODO: Here we just search for `file` again. It would be nicer to just return `file`, but borrow checker does not like that.
         modified_files.get(&applied_patch.final_filename).unwrap() // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
     }
 }
