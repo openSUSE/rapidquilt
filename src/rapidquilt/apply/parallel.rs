@@ -195,7 +195,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     analyses: &AnalysisSet)
     -> Result<WorkerReport, Error>
 {
-    let mut applied_patches = Vec::<PatchStatus>::new();
+    let mut applied_patches = Vec::<PatchStatus>::with_capacity(thread_file_patches.len());
     let mut modified_files = HashMap::<Cow<'a, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
