@@ -1,5 +1,9 @@
 # Unreleased changes
 
+# Version 0.6.0
+
+* Major speedup and simplification of the implementation 
+
 # Version 0.5.6
 
 * Fix incorrect warning about Windows-style end of lines
