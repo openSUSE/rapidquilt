@@ -202,31 +202,31 @@ pub fn save_backup_file(patch_filename: &Path,
 }
 
 #[derive(Debug)]
-pub struct PatchStatus<'a, 'b> {
+pub struct PatchStatus<'arena, 'config> {
     /// The index of this `FilePatch` in the original list of **patches**. Note
     /// that there can be multiple `FilePatch`es with the same index if they
     /// came from the same patch.
     pub index: usize,
 
     /// The applied `FilePatch`
-    pub file_patch: TextFilePatch<'a>,
+    pub file_patch: TextFilePatch<'arena>,
 
     /// Which filename was actually patched. Because patch has to choose between
     /// `old_filename` and `new_filename` (in some cases even more) based on
     /// which files exist on the disk.
     /// Note that the file may have been renamed by the same `FilePatch`. The
     /// final form with be in `final_filename`.
-    pub target_filename: Cow<'a, Path>,
+    pub target_filename: Cow<'arena, Path>,
 
     /// The final filename of the file when this patch was done with it. Typically
     /// it will be the same as `target_filename`, unless the file was renamed.
-    pub final_filename: Cow<'a, Path>,
+    pub final_filename: Cow<'arena, Path>,
 
     /// Report from `FilePatch::apply`
     pub report: FilePatchApplyReport,
 
     /// The filename of the patch file, e.g. "blabla.patch"
-    pub patch_filename: &'b Path,
+    pub patch_filename: &'config Path,
 }
 
 /// Decides which filename to use, old or new, depending on which
@@ -236,11 +236,11 @@ pub struct PatchStatus<'a, 'b> {
 /// # panics
 ///
 /// Panics if both `old_filename` and `new_filename` are `None`.
-pub fn choose_filename_to_patch<'a, 'b, H: BuildHasher>(
-    old_filename: Option<&'b Cow<'a, Path>>,
-    new_filename: Option<&'b Cow<'a, Path>>,
-    modified_files: &HashMap<Cow<'a, Path>, ModifiedFile, H>)
-    -> &'b Cow<'a, Path>
+pub fn choose_filename_to_patch<'arena, 'filename, H: BuildHasher>(
+    old_filename: Option<&'filename Cow<'arena, Path>>,
+    new_filename: Option<&'filename Cow<'arena, Path>>,
+    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
+    -> &'filename Cow<'arena, Path>
 {
     match (old_filename, new_filename) {
         // If there is only one of them, that's the one we'll return
@@ -432,10 +432,10 @@ pub fn apply_one_file_patch<
 }
 
 /// Rolls back single applied `FilePatch`
-pub fn rollback_applied_patch<'arena, 'a: 'b, 'b, 'c, H: BuildHasher>(
-    applied_patch: &PatchStatus<'arena, 'c>,
-    modified_files: &'a mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>)
-    -> &'b ModifiedFile<'arena>
+pub fn rollback_applied_patch<'arena, 'modified_files, H: BuildHasher>(
+    applied_patch: &PatchStatus<'arena, '_>,
+    modified_files: &'modified_files mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>)
+    -> &'modified_files ModifiedFile<'arena>
 {
     let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
 

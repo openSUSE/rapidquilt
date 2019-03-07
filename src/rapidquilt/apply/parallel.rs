@@ -182,13 +182,13 @@ struct WorkerReport {
 /// `broadcast_message`: Function that sends given `Message` to all threads (including self).
 /// `earliest_broken_patch_index`: Atomic variable for sharing the index of the earlier patch that failed to apply.
 /// `analyses`: Set of analyses to run.
-fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
-    config: &'a ApplyConfig,
-    arena: &'a dyn Arena,
+fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
+    config: &'config ApplyConfig,
+    arena: &'arena dyn Arena,
     thread_id: usize,
     threads: usize,
     barrier: &Barrier,
-    thread_file_patches: Vec<(usize, TextFilePatch<'a>)>,
+    thread_file_patches: Vec<(usize, TextFilePatch<'arena>)>,
     receiver: &mpsc::Receiver<Message>,
     broadcast_message: BroadcastFn,
     earliest_broken_patch_index: &AtomicUsize,
@@ -196,7 +196,7 @@ fn apply_worker_task<'a, BroadcastFn: Fn(Message)> (
     -> Result<WorkerReport, Error>
 {
     let mut applied_patches = Vec::<PatchStatus>::with_capacity(thread_file_patches.len());
-    let mut modified_files = HashMap::<Cow<'a, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut modified_files = HashMap::<Cow<'arena, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
     for (index, text_file_patch) in thread_file_patches {
