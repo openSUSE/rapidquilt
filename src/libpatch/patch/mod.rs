@@ -509,7 +509,7 @@ pub type HunksVec<'a, Line> = Vec<Hunk<'a, Line>>;
 
 /// This represents all changes done to single file.
 #[derive(Builder, Clone, Debug)]
-#[builder]
+#[builder(pattern = "owned")] // The pattern = "owned" is important to prevent clone in the final build function!
 pub struct FilePatch<'a, Line> {
     /// Does it create, delete or modify a file?
     kind: FilePatchKind,

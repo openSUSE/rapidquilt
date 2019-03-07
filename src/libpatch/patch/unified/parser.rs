@@ -838,10 +838,10 @@ impl FilePatchMetadata {
 
     /// This function will return `None` if some necessary metadata is missing
     pub fn build_filepatch<'a>(self, hunks: HunksVec<'a, &'a [u8]>) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError> {
-        let mut builder = FilePatchBuilder::<&[u8]>::default();
+        let builder = FilePatchBuilder::<&[u8]>::default();
 
         // Set the kind
-        builder.kind(self.recognize_kind(&hunks));
+        let builder = builder.kind(self.recognize_kind(&hunks));
 
         // Set the filenames
         let has_old_filename = match self.old_filename {
@@ -853,19 +853,21 @@ impl FilePatchMetadata {
             _ => false,
         };
 
-        if self.rename_from && self.rename_to {
+        let builder = if self.rename_from && self.rename_to {
             // If it is renaming patch, we must have both filenames
             if !has_old_filename || !has_new_filename {
                 return Err(FilePatchMetadataBuildError::MissingFilenames(self));
             }
 
-            builder.is_rename(true);
+            builder.is_rename(true)
         } else {
             // If it is non-renaming patch, we must have at least one filename
             if !has_old_filename && !has_new_filename {
                 return Err(FilePatchMetadataBuildError::MissingFilenames(self));
             }
-        }
+
+            builder
+        };
 
         // Move out the filenames
         let old_filename = match self.old_filename {
@@ -877,15 +879,16 @@ impl FilePatchMetadata {
             _ => None,
         };
 
-        builder.old_filename(old_filename);
-        builder.new_filename(new_filename);
+        let builder = builder
+            .old_filename(old_filename)
+            .new_filename(new_filename)
 
-        // Set the permissions
-        builder.old_permissions(self.old_permissions);
-        builder.new_permissions(self.new_permissions);
+            // Set the permissions
+            .old_permissions(self.old_permissions)
+            .new_permissions(self.new_permissions)
 
-        // Set the hunks
-        builder.hunks(hunks);
+            // Set the hunks
+            .hunks(hunks);
 
         // Build
         Ok(builder.build().unwrap()) // NOTE(unwrap): It would be our bug if we didn't provide all necessary values.
