@@ -191,7 +191,7 @@ pub fn save_backup_file(patch_filename: &Path,
         println!("Saving backup file {:?}", path);
     }
 
-    (|| -> Result<(), io::Error> { // TODO: Replace me with try-block when stable.
+    (|| -> Result<(), io::Error> { // TODO: Replace me with try-block when stable. (feature "try_blocks")
         let path_parent = path.parent().unwrap(); // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
 
         fs::create_dir_all(path_parent)?;

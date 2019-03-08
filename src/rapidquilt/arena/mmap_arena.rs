@@ -46,7 +46,7 @@ impl<'a> MmapArena<'a> {
 impl<'a> Arena for MmapArena<'a> {
     /// Load the file and return byte slice of its complete content. The slice
     /// is valid as long as this object is alive. (Same lifetimes.)
-    fn load_file(&self, path: &Path) -> Result<&/*'a */[u8], io::Error> {
+    fn load_file(&self, path: &Path) -> Result<&[u8], io::Error> {
         let file = File::open(path)?;
         let size = file.metadata()?.len() as usize;
         let fd = file.as_raw_fd();
@@ -97,7 +97,7 @@ impl<'a> Drop for MmapArena<'a> {
         if let Ok(mappings) = self.mappings.lock() {
             for mapping in mappings.iter() {
                 unsafe {
-                    libc::munmap(mapping.start as *mut libc::c_void, mapping.size);
+                    libc::munmap(mapping.start, mapping.size);
                 }
             }
         }

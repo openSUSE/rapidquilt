@@ -177,6 +177,7 @@ struct WorkerReport {
 /// `arena`: This arena is used for loading files.
 /// `thread_id`: Id of this thread. (Only used for logging)
 /// `threads`: The total amount of threads. Needed to count `Message::ThreadDoneApplying` messages.
+/// `barrier`: Barrier set up for `threads` amount of threads for synchronizing.
 /// `thread_file_patches`: The `FilePatch`es for this thread and the indexes of the original patch files they came from.
 /// `receiver`: Receiving part for `Message`s.
 /// `broadcast_message`: Function that sends given `Message` to all threads (including self).
@@ -229,6 +230,7 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
                 // Patch failed to apply...
 
                 // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
+                // TODO: Use `AtomicUsize::fetch_min` once it is stable. Feature "atomic_min_max".
                 let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
                 while index < current {
                     current = earliest_broken_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
@@ -304,7 +306,7 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
 
     // So at this point everybody has met on the same patch (last one or the first failed)
 
-    // Make a last atomic load. From now on it won't be changing.
+    // Load the atomic for the last time. From now on it won't be changing.
     let earliest_broken_patch_index = earliest_broken_patch_index.load(Ordering::Acquire);
 
     // Analyze failure, in case there was any
@@ -323,7 +325,7 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
         // Save all the files we modified
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
         save_modified_files(&modified_files, &mut directories_for_cleaning, config.verbosity)?;
-        barrier.wait();
+        barrier.wait(); // We must wait for everybody to be done with creating and deleting files before we proceed to delete empty directories.
         clean_empty_directories(directories_for_cleaning)?;
 
         // Maybe save some backup files

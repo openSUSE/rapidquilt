@@ -46,7 +46,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
         final_patch = index;
 
-        let patch = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable.
+        let patch = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable. (feature "try_blocks")
             let data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
             let patch = parse_patch(&data, series_patch.strip, false)?;
             Ok(patch)

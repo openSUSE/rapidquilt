@@ -772,8 +772,8 @@ xxxxx
     assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
 }
 
-// named!(parse_hunks<CompleteByteSlice, SmallVec<[TextHunk; 4]>>, many1!(parse_hunk)); // FIXME: many1 will hide even nom::Err::Failure errors, so any failure from inside is not propagated up. :-(
-
+// We use hand-written function instead of just `named!` with `many1!` combinator, because `many1!`
+// hides `nom::Err::Failure` errors, so they were not propagated up.
 fn parse_hunks(mut input: CompleteByteSlice) -> IResult<CompleteByteSlice, HunksVec<&[u8]>> {
     let mut hunks = HunksVec::<&[u8]>::new();
     loop {

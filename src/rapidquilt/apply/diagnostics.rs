@@ -313,7 +313,7 @@ pub fn print_difference_to_closest_match<W: Write>(
         // to them.
         |&(x, y)| -> SmallVec<[((usize, usize), Score); 3]> {
             // TODO: Change this into generator once they are stable, so we don't have to allocate
-            //       and return SmallVec with all successors at once.
+            //       and return SmallVec with all successors at once. (feature "generators")
 
             // If this is the artificial starting node, we can make step to every node in the left
             // side. This basically gives us multiple starting points.
