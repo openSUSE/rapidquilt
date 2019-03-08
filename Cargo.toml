@@ -1,7 +1,7 @@
 [package]
 name = "rapidquilt"
 description = "This is very specialized reimplementation of quilt & patch in one. It supports only the push command. The goal is to be very fast."
-repository = "https://github.com/michalsrb/rapidquilt"
+repository = "https://github.com/openSUSE/rapidquilt"
 version = "0.6.0"
 authors = ["Michal Srb <michalsrb@gmail.com>"]
 license = "MIT"

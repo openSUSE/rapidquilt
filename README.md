@@ -1,9 +1,9 @@
 # Rapidquilt
 
-[![Build Status](https://travis-ci.org/michalsrb/rapidquilt.svg?branch=master)](
-https://travis-ci.org/michalsrb/rapidquilt)
+[![Build Status](https://travis-ci.org/openSUSE/rapidquilt.svg?branch=master)](
+https://travis-ci.org/openSUSE/rapidquilt)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](
-https://github.com/michalsrb/rapidquilt)
+https://github.com/openSUSE/rapidquilt)
 [![Rust 1.31+](https://img.shields.io/badge/rust-1.31+-lightgray.svg)](
 https://www.rust-lang.org)
 
@@ -72,4 +72,4 @@ only the `push` command. The goal is to be very fast.
 
 Patch application failure:
 
-![example-apply-failure](https://raw.githubusercontent.com/michalsrb/rapidquilt/master/doc/example-apply-failure.png "Example Apply Failure")
+![example-apply-failure](https://raw.githubusercontent.com/openSUSE/rapidquilt/master/doc/example-apply-failure.png "Example Apply Failure")
