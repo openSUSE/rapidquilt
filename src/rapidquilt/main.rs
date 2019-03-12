@@ -252,8 +252,10 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         apply_patches_parallel(&config, &*arena, &analyses)?
     };
 
-    save_applied_patches(&config.series_patches[0..apply_result.applied_patches])
-        .with_context(|_| "When saving applied patches.")?;
+    if !config.dry_run {
+        save_applied_patches(&config.series_patches[0..apply_result.applied_patches])
+            .with_context(|_| "When saving applied patches.")?;
+    }
 
     Ok(apply_result.skipped_patches == 0)
 }
