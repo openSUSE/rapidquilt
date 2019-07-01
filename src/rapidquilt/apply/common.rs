@@ -477,14 +477,37 @@ pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
         if applied_patch.report.failed() {
             let rej_filename = make_rej_filename(&applied_patch.target_filename);
 
+            let file = match File::create(&rej_filename) {
+                Ok(file) => {
+                    file
+                }
+
+                Err(ref err) if err.kind() == io::ErrorKind::NotFound => {
+                    // This proably means the target directory doesn't exist.
+                    // In that case quilt doesn't create the reject file, so we do the same.
+                    // We still have to keep going, as other patches might be rejected.
+                    applied_patches.pop();
+
+                    if verbosity >= Verbosity::Normal {
+                        println!("Bypassing reject {:?} as directory doesn't exist", rej_filename);
+                    }
+
+                    continue
+                }
+
+                Err(err) => {
+                    return Err(Error::from_boxed_compat(Box::new(err)));
+                }
+            };
+
             if verbosity >= Verbosity::Normal {
                 println!("Saving rejects to {:?}", rej_filename);
             }
 
-            File::create(&rej_filename).and_then(|output| {
-                let mut writer = BufWriter::new(output);
-                applied_patch.file_patch.write_rej_to(&mut writer, &applied_patch.report)
-            }).with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
+            let mut writer = BufWriter::new(file);
+
+            applied_patch.file_patch.write_rej_to(&mut writer, &applied_patch.report).
+                with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
         }
 
         applied_patches.pop();
