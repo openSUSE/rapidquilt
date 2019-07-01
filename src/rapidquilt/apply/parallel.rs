@@ -311,12 +311,18 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
 
     // Analyze failure, in case there was any
     let mut failure_analysis = Vec::<u8>::new();
-    analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &mut failure_analysis)?;
+    if let Err(err) = analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &mut failure_analysis) {
+        barrier.wait(); // We're forced to wait on the barrier before leaving, if not, the rest of threads will hang
+        return Err(Error::from_boxed_compat(Box::new(err)));
+    }
 
     // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, config.verbosity)?;
+        if let Err(err) = rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, config.verbosity) {
+            barrier.wait(); // We're forced to wait on the barrier before leaving, if not, the rest of threads will hang
+            return Err(err);
+        }
 
         if config.verbosity >= Verbosity::Normal && thread_id == 0 {
             println!("Saving modified files...");
@@ -324,7 +330,10 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
 
         // Save all the files we modified
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        save_modified_files(&modified_files, &mut directories_for_cleaning, config.verbosity)?;
+        if let Err(err) = save_modified_files(&modified_files, &mut directories_for_cleaning, config.verbosity) {
+            barrier.wait(); // We're forced to wait on the barrier before leaving, if not, the rest of threads will hang
+            return Err(err);
+        }
         barrier.wait(); // We must wait for everybody to be done with creating and deleting files before we proceed to delete empty directories.
         clean_empty_directories(directories_for_cleaning)?;
 
