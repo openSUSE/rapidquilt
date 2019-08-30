@@ -1,5 +1,10 @@
 # Unreleased changes
 
+# Version 0.6.1
+
+* Fix hangs on failure
+* Fix --dry-run
+
 # Version 0.6.0
 
 * Major speedup and simplification of the implementation 
