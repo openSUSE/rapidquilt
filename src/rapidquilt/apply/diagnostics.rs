@@ -411,7 +411,7 @@ pub fn print_difference_to_closest_match<W: Write>(
 }
 
 /// This function prints note from libpatch'es analysis
-pub fn print_analysis_note(patch_filename: &Path, note: &Note, file_patch: &TextFilePatch) -> Result<(), io::Error> {
+pub fn print_analysis_note(patch_filename: &Path, note: &dyn Note, file_patch: &TextFilePatch) -> Result<(), io::Error> {
     let stderr = io::stderr();
     let mut out = stderr.lock();
 

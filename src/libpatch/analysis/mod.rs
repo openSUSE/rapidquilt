@@ -25,7 +25,7 @@ pub trait Note : Debug {
     fn hunk(&self) -> Option<usize>;
 
     /// Clones itself into a `Box`. Use this if you need to type-erase the note for storage.
-    fn boxed_clone(&self) -> Box<Note>;
+    fn boxed_clone(&self) -> Box<dyn Note>;
 
     fn severity(&self) -> NoteSeverity;
 
@@ -40,7 +40,7 @@ pub trait Analysis: Sync {
         _file_patch: &TextFilePatch,
         _direction: PatchDirection,
         _report: &FilePatchApplyReport,
-        _fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
+        _fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
         {}
 
     fn after_modifications(
@@ -49,7 +49,7 @@ pub trait Analysis: Sync {
         _file_patch: &TextFilePatch,
         _direction: PatchDirection,
         _report: &FilePatchApplyReport,
-        _fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
+        _fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
         {}
 
     // TODO: Add more check points if needed.
@@ -57,7 +57,7 @@ pub trait Analysis: Sync {
 
 #[derive(Default)]
 pub struct AnalysisSet {
-    analyses: Vec<Box<Analysis>>,
+    analyses: Vec<Box<dyn Analysis>>,
 }
 
 impl AnalysisSet {
@@ -65,7 +65,7 @@ impl AnalysisSet {
         Default::default()
     }
 
-    pub fn add(&mut self, analysis: Box<Analysis>) {
+    pub fn add(&mut self, analysis: Box<dyn Analysis>) {
         self.analyses.push(analysis);
     }
 
@@ -81,7 +81,7 @@ impl Analysis for AnalysisSet {
         file_patch: &TextFilePatch,
         direction: PatchDirection,
         report: &FilePatchApplyReport,
-        fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
+        fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
     {
         for analysis in &self.analyses {
             analysis.before_modifications(
@@ -97,7 +97,7 @@ impl Analysis for AnalysisSet {
         file_patch: &TextFilePatch,
         direction: PatchDirection,
         report: &FilePatchApplyReport,
-        fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
+        fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
     {
         for analysis in &self.analyses {
             analysis.after_modifications(
@@ -109,5 +109,5 @@ impl Analysis for AnalysisSet {
 }
 
 /// NOOP analysis function. Use this if you don't want any analysis printed out.
-pub fn fn_analysis_note_noop(_note: &Note, _modified_filepatch: &TextFilePatch) {
+pub fn fn_analysis_note_noop(_note: &dyn Note, _modified_filepatch: &TextFilePatch) {
 }

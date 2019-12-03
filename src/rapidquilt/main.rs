@@ -261,7 +261,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
 }
 
 #[cfg(unix)]
-fn build_arena(use_mmap: bool) -> Box<Arena> {
+fn build_arena(use_mmap: bool) -> Box<dyn Arena> {
     if use_mmap {
         Box::new(MmapArena::new())
     } else {

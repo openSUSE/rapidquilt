@@ -615,7 +615,7 @@ impl<'a> TextFilePatch<'a> {
                  direction: PatchDirection,
                  fuzz: usize,
                  analyses: &AnalysisSet,
-                 fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
+                 fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
                  -> FilePatchApplyReport
     {
         self.apply_internal(modified_file, direction, fuzz, ApplyMode::Normal, analyses, fn_analysis_note)
@@ -646,7 +646,7 @@ impl<'a> TextFilePatch<'a> {
                       fuzz: usize,
                       apply_mode: ApplyMode,
                       analyses: &AnalysisSet,
-                      fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
+                      fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
                       -> FilePatchApplyReport
     {
         // Call the appropriate specialized function
@@ -751,7 +751,7 @@ impl<'a> TextFilePatch<'a> {
                     fuzz: usize,
                     apply_mode: ApplyMode,
                     analyses: &AnalysisSet,
-                    fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
+                    fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
                     -> FilePatchApplyReport
     {
         let mut report = FilePatchApplyReport::new_with_capacity(direction, fuzz, self.hunks.len());
