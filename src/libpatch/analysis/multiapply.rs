@@ -27,7 +27,7 @@ impl Note for MultiApplyNote {
         Some(self.hunk)
     }
 
-    fn boxed_clone(&self) -> Box<Note> {
+    fn boxed_clone(&self) -> Box<dyn Note> {
         Box::new(self.clone())
     }
 
@@ -59,7 +59,7 @@ impl Analysis for MultiApplyAnalysis {
         file_patch: &TextFilePatch,
         direction: PatchDirection,
         report: &FilePatchApplyReport,
-        fn_analysis_note: &Fn(&dyn Note, &TextFilePatch))
+        fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
     {
         for (i, (hunk, hunk_report)) in file_patch.hunks().iter().zip(report.hunk_reports()).enumerate() {
             // We only care if the hunk was applied

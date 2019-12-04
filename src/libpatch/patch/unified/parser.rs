@@ -159,15 +159,15 @@ named!(take_until_newline_incl<CompleteByteSlice, CompleteByteSlice>,
     recognize!(pair!(call!(take_until_newline), take!(1)))
 );
 
-/// Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
-/// of the path as-is in the input data.
+// Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
+// of the path as-is in the input data.
 named!(parse_filename_direct<CompleteByteSlice, CompleteByteSlice>,
     take_till1!(is_whitespace)
 );
 
-/// Parses a quoted filename that may contain escaped characters. Returns owned buffer with the
-/// unescaped filename.
-/// Similar to `parse_c_string` function in patch.
+// Parses a quoted filename that may contain escaped characters. Returns owned buffer with the
+// unescaped filename.
+// Similar to `parse_c_string` function in patch.
 named!(parse_filename_quoted<CompleteByteSlice, Vec<u8>>,
     do_parse!(
         tag!(c!(b'\"')) >>
@@ -210,11 +210,11 @@ enum Filename<'a> {
     DevNull,
 }
 
-/// Parses a filename.
-///
-/// Either written directly without any whitespace or inside quotation marks.
-///
-/// Similar to `parse_name` function in patch.
+// Parses a filename.
+//
+// Either written directly without any whitespace or inside quotation marks.
+//
+// Similar to `parse_name` function in patch.
 named!(parse_filename<CompleteByteSlice, Filename>,
     do_parse!(
         take_while!(is_space) >>
@@ -468,7 +468,7 @@ fn test_parse_number_usize() {
     assert_parse_error_code!(parse_number_usize, b"123456789012345678901234567890", ParseErrorCode::NumberTooBig as u32);
 }
 
-/// Parses line and count like "3,4" or just "3"
+// Parses line and count like "3,4" or just "3"
 named!(parse_hunk_line_and_count<CompleteByteSlice, (usize, usize)>,
     do_parse!(
         line: parse_number_usize >>
@@ -502,7 +502,7 @@ struct HunkHeader<'a> {
     pub function: &'a [u8],
 }
 
-/// Parses the line like "@@ -3,4 +5,6 @@ function\n"
+// Parses the line like "@@ -3,4 +5,6 @@ function\n"
 named!(parse_hunk_header<CompleteByteSlice, HunkHeader>,
     do_parse!(
         tag!(s!(b"@@ -")) >>

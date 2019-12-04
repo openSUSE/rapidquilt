@@ -209,7 +209,7 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
             break;
         }
 
-        let fn_analysis_note = |note: &Note, file_patch: &TextFilePatch| {
+        let fn_analysis_note = |note: &dyn Note, file_patch: &TextFilePatch| {
             // We ignore any error here because currently we don't have a way to propagate it out
             // of this callback. It's not so tragic, error here would most likely be IO error from
             // writing to terminal.

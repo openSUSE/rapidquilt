@@ -351,7 +351,7 @@ pub fn apply_one_file_patch<
     modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     arena: &'arena dyn Arena,
     analyses: &'analyses AnalysisSet,
-    fn_analysis_note: &'fn_analysis_note Fn(&dyn Note, &TextFilePatch))
+    fn_analysis_note: &'fn_analysis_note dyn Fn(&dyn Note, &TextFilePatch))
     -> Result<bool, Error>
 {
     // Get the file to patch
