@@ -213,7 +213,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         PushGoal::Count(n) => std::cmp::min(first_patch + n, series_patches.len()),
         PushGoal::UpTo(patch_filename) => {
             if let Some(index) = series_patches.iter().position(|item| item.filename == patch_filename) {
-                if index <= first_patch {
+                if index < first_patch {
                     return Err(format_err!("Patch already applied: {:?}", patch_filename));
                 }
                 index + 1
