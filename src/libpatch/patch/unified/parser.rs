@@ -447,6 +447,29 @@ enum PatchLine<'a> {
     EndOfPatch,
 }
 
+named!(parse_start_patch_line<CompleteByteSlice, PatchLine>,
+    alt!(
+        map!(parse_metadata_line, PatchLine::Metadata) |
+        map!(take_until_newline_incl, |line| PatchLine::Garbage(line.0)) |
+        value!(PatchLine::EndOfPatch, eof!())
+    )
+);
+
+#[cfg(test)]
+#[test]
+fn test_parse_start_patch_line() {
+    use self::PatchLine::*;
+    use self::MetadataLine::*;
+
+    assert_parsed!(parse_start_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
+    assert_parsed!(parse_start_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
+    assert_parsed!(parse_start_patch_line, b"+++ bbb\n", Metadata(PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
+
+    assert_parsed!(parse_start_patch_line, b"@@ -1 +1 @@\n", Garbage(b"@@ -1 +1 @@\n"));
+
+    assert_parsed!(parse_start_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
+}
+
 named!(parse_patch_line<CompleteByteSlice, PatchLine>,
     alt!(
         map!(parse_metadata_line, PatchLine::Metadata) |
@@ -1027,6 +1050,7 @@ fn permissions_from_mode(mode: u32) -> Option<Permissions> {
 #[derive(Debug, PartialEq)]
 enum MetadataState {
     Start,
+    Normal,
     GitDiff,
 }
 
@@ -1041,7 +1065,8 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
     // First we read metadata lines or garbage and wait until we find a first hunk.
     loop {
         let (input_, patch_line) = match state {
-            MetadataState::Start => parse_patch_line(input)?,
+            MetadataState::Start => parse_start_patch_line(input)?,
+            MetadataState::Normal => parse_patch_line(input)?,
             MetadataState::GitDiff => parse_git_patch_line(input)?,
         };
 
@@ -1099,9 +1124,11 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
             }
             Metadata(PlusFilename(filename)) => {
                 metadata.new_filename = Some(filename);
+                state = MetadataState::Normal;
             }
             Metadata(MinusFilename(filename)) => {
                 metadata.old_filename = Some(filename);
+                state = MetadataState::Normal;
             }
 
             GitMetadata(RenameFrom) => {
@@ -1644,6 +1671,44 @@ rename from old name is just garbage, no git
     assert_eq!(file_patches[0].hunks[0].add.content[0], s!(b"aaa\n"));
     assert_eq!(file_patches[0].hunks[0].add.content[1], s!(b"bbb\n"));
     assert_eq!(file_patches[0].hunks[0].add.content[2], s!(b"ccc\n"));
+
+    // Misleading garbage line
+    let patch_txt = br#"The following is not a patch:
+8<---
+@@ -465,6 +465,9 @@ static int foo(void)
+ 		if (aaa)
+ 			continue;
+
++		if (bbb)
++			continue;
++
+ 		ccc(4);
+ 		ddd(5);
+
+8<---
+
+diff --git a/filename.c b/filename.c
+index 0123456789ab..cdefedcba987 100644
+--- a/filename.c
++++ b/filename.c
+@@ -1879,7 +1879,11 @@ static int foo(void)
+ 	} else
+ 		ok = false;
+ 
+-	bar(&err);
++	if (ok)
++		ok = bar(&err);
++
++	if (!ok)
++		return -err;
+ 
+ 	return 0;
+ }
+"#;
+
+    let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert_eq!(patch.header.len(), 14);
 }
 
 #[cfg(test)]

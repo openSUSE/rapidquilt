@@ -1,5 +1,8 @@
 # Unreleased changes
 
+* Fix parsing of lines that look like start of a hunk, but are in fact part of
+  the initial comment
+
 # Version 0.6.1
 
 * Fix hangs on failure
