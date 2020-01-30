@@ -352,7 +352,7 @@ enum MetadataLine<'a> {
 
     OldMode(u32),
     NewMode(u32),
-    DeleteFileMode(u32),
+    DeletedFileMode(u32),
     NewFileMode(u32),
 
     RenameFrom,
@@ -384,7 +384,7 @@ named!(parse_metadata_line<CompleteByteSlice, MetadataLine>,
 
         do_parse!(tag!(s!(b"old mode "))         >> mode: parse_mode >> newline >> (MetadataLine::OldMode(mode))) |
         do_parse!(tag!(s!(b"new mode "))         >> mode: parse_mode >> newline >> (MetadataLine::NewMode(mode))) |
-        do_parse!(tag!(s!(b"delete file mode ")) >> mode: parse_mode >> newline >> (MetadataLine::DeleteFileMode(mode))) |
+        do_parse!(tag!(s!(b"deleted file mode ")) >> mode: parse_mode >> newline >> (MetadataLine::DeletedFileMode(mode))) |
         do_parse!(tag!(s!(b"new file mode "))    >> mode: parse_mode >> newline >> (MetadataLine::NewFileMode(mode)))
     )
 );
@@ -402,7 +402,7 @@ fn test_parse_metadata_line() {
 
     assert_parsed!(parse_metadata_line, b"old mode 100644\n",         OldMode(0o100644));
     assert_parsed!(parse_metadata_line, b"new mode 100644\n",         NewMode(0o100644));
-    assert_parsed!(parse_metadata_line, b"delete file mode 100644\n", DeleteFileMode(0o100644));
+    assert_parsed!(parse_metadata_line, b"deleted file mode 100644\n", DeletedFileMode(0o100644));
     assert_parsed!(parse_metadata_line, b"new file mode 100644\n",    NewFileMode(0o100644));
 
     assert_parsed!(parse_metadata_line, b"rename from blabla\n", RenameFrom);
@@ -1028,7 +1028,7 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
             }
 
             Metadata(OldMode(mode)) |
-            Metadata(DeleteFileMode(mode)) => {
+            Metadata(DeletedFileMode(mode)) => {
                 metadata.old_permissions = permissions_from_mode(mode);
             }
             Metadata(NewMode(mode)) |
