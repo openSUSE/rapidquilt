@@ -350,19 +350,6 @@ enum MetadataLine<'a> {
     MinusFilename(Filename<'a>),
     PlusFilename(Filename<'a>),
 
-    OldMode(u32),
-    NewMode(u32),
-    DeletedFileMode(u32),
-    NewFileMode(u32),
-
-    RenameFrom,
-    RenameTo,
-
-    CopyFrom,
-    CopyTo,
-
-    GitBinaryPatch,
-
     // ...?
 }
 
@@ -371,21 +358,7 @@ named!(parse_metadata_line<CompleteByteSlice, MetadataLine>,
         do_parse!(tag!(s!(b"diff --git ")) >> old_filename: parse_filename >> new_filename: parse_filename >> take_until_newline_incl >> (MetadataLine::GitDiffSeparator(old_filename, new_filename))) |
 
         do_parse!(tag!(s!(b"--- ")) >> filename: parse_filename >> take_until_newline_incl >> (MetadataLine::MinusFilename(filename))) |
-        do_parse!(tag!(s!(b"+++ ")) >> filename: parse_filename >> take_until_newline_incl >> (MetadataLine::PlusFilename(filename))) |
-
-        // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
-        do_parse!(tag!(s!(b"rename from ")) >> take_until_newline_incl >> (MetadataLine::RenameFrom)) |
-        do_parse!(tag!(s!(b"rename to "))   >> take_until_newline_incl >> (MetadataLine::RenameTo)) |
-
-        do_parse!(tag!(s!(b"copy from ")) >> take_until_newline_incl >> (MetadataLine::CopyFrom)) |
-        do_parse!(tag!(s!(b"copy to "))   >> take_until_newline_incl >> (MetadataLine::CopyTo)) |
-
-        do_parse!(tag!(s!(b"GIT binary patch")) >> take_until_newline_incl >> (MetadataLine::GitBinaryPatch)) |
-
-        do_parse!(tag!(s!(b"old mode "))         >> mode: parse_mode >> newline >> (MetadataLine::OldMode(mode))) |
-        do_parse!(tag!(s!(b"new mode "))         >> mode: parse_mode >> newline >> (MetadataLine::NewMode(mode))) |
-        do_parse!(tag!(s!(b"deleted file mode ")) >> mode: parse_mode >> newline >> (MetadataLine::DeletedFileMode(mode))) |
-        do_parse!(tag!(s!(b"new file mode "))    >> mode: parse_mode >> newline >> (MetadataLine::NewFileMode(mode)))
+        do_parse!(tag!(s!(b"+++ ")) >> filename: parse_filename >> take_until_newline_incl >> (MetadataLine::PlusFilename(filename)))
     )
 );
 
@@ -400,28 +373,76 @@ fn test_parse_metadata_line() {
     assert_parsed!(parse_metadata_line, b"--- aaa\n", MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa")))));
     assert_parsed!(parse_metadata_line, b"+++ aaa\n", PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa")))));
 
-    assert_parsed!(parse_metadata_line, b"old mode 100644\n",         OldMode(0o100644));
-    assert_parsed!(parse_metadata_line, b"new mode 100644\n",         NewMode(0o100644));
-    assert_parsed!(parse_metadata_line, b"deleted file mode 100644\n", DeletedFileMode(0o100644));
-    assert_parsed!(parse_metadata_line, b"new file mode 100644\n",    NewFileMode(0o100644));
-
-    assert_parsed!(parse_metadata_line, b"rename from blabla\n", RenameFrom);
-    assert_parsed!(parse_metadata_line, b"rename to blabla\n", RenameTo);
-
-    assert_parsed!(parse_metadata_line, b"copy from blabla\n", CopyFrom);
-    assert_parsed!(parse_metadata_line, b"copy to blabla\n", CopyTo);
-
-    assert_parsed!(parse_metadata_line, b"GIT binary patch ???\n", GitBinaryPatch);
-
     // Filename with date
     assert_parsed!(parse_metadata_line, b"--- a/bla/ble.c	2013-09-23 18:41:09.000000000 -0400\n", MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("a/bla/ble.c")))));
 
 }
 
 #[derive(Debug, PartialEq)]
+enum GitMetadataLine {
+    Index,
+
+    OldMode(u32),
+    NewMode(u32),
+    DeletedFileMode(u32),
+    NewFileMode(u32),
+
+    RenameFrom,
+    RenameTo,
+
+    CopyFrom,
+    CopyTo,
+
+    GitBinaryPatch,
+}
+
+named!(parse_git_metadata_line<CompleteByteSlice, GitMetadataLine>,
+    alt!(
+        do_parse!(tag!(s!(b"index ")) >> take_until_newline_incl >> (GitMetadataLine::Index)) |
+
+        // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
+        do_parse!(tag!(s!(b"rename from ")) >> take_until_newline_incl >> (GitMetadataLine::RenameFrom)) |
+        do_parse!(tag!(s!(b"rename to "))   >> take_until_newline_incl >> (GitMetadataLine::RenameTo)) |
+
+        do_parse!(tag!(s!(b"copy from ")) >> take_until_newline_incl >> (GitMetadataLine::CopyFrom)) |
+        do_parse!(tag!(s!(b"copy to "))   >> take_until_newline_incl >> (GitMetadataLine::CopyTo)) |
+
+        do_parse!(tag!(s!(b"GIT binary patch")) >> take_until_newline_incl >> (GitMetadataLine::GitBinaryPatch)) |
+
+        do_parse!(tag!(s!(b"old mode "))         >> mode: parse_mode >> newline >> (GitMetadataLine::OldMode(mode))) |
+        do_parse!(tag!(s!(b"new mode "))         >> mode: parse_mode >> newline >> (GitMetadataLine::NewMode(mode))) |
+        do_parse!(tag!(s!(b"deleted file mode ")) >> mode: parse_mode >> newline >> (GitMetadataLine::DeletedFileMode(mode))) |
+        do_parse!(tag!(s!(b"new file mode "))    >> mode: parse_mode >> newline >> (GitMetadataLine::NewFileMode(mode)))
+    )
+);
+
+#[cfg(test)]
+#[test]
+fn test_parse_git_metadata_line() {
+    use self::GitMetadataLine::*;
+
+    // All of them in basic form
+    assert_parsed!(parse_git_metadata_line, b"index 123456789ab..fecdba98765 100644\n", Index);
+
+    assert_parsed!(parse_git_metadata_line, b"old mode 100644\n",         OldMode(0o100644));
+    assert_parsed!(parse_git_metadata_line, b"new mode 100644\n",         NewMode(0o100644));
+    assert_parsed!(parse_git_metadata_line, b"deleted file mode 100644\n", DeletedFileMode(0o100644));
+    assert_parsed!(parse_git_metadata_line, b"new file mode 100644\n",    NewFileMode(0o100644));
+
+    assert_parsed!(parse_git_metadata_line, b"rename from blabla\n", RenameFrom);
+    assert_parsed!(parse_git_metadata_line, b"rename to blabla\n", RenameTo);
+
+    assert_parsed!(parse_git_metadata_line, b"copy from blabla\n", CopyFrom);
+    assert_parsed!(parse_git_metadata_line, b"copy to blabla\n", CopyTo);
+
+    assert_parsed!(parse_git_metadata_line, b"GIT binary patch ???\n", GitBinaryPatch);
+}
+
+#[derive(Debug, PartialEq)]
 enum PatchLine<'a> {
     Garbage(&'a [u8]),
     Metadata(MetadataLine<'a>),
+    GitMetadata(GitMetadataLine),
     StartOfHunk,
     EndOfPatch,
 }
@@ -447,6 +468,57 @@ fn test_parse_patch_line() {
     assert_parsed!(parse_patch_line, b"@@ -1 +1 @@\n", StartOfHunk);
 
     assert_parsed!(parse_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
+
+    assert_parsed!(parse_patch_line, b"index 0123456789a..fedcba98765 100644\n", Garbage(b"index 0123456789a..fedcba98765 100644\n"));
+
+    assert_parsed!(parse_patch_line, b"old mode 100644\n", Garbage(b"old mode 100644\n"));
+    assert_parsed!(parse_patch_line, b"new mode 100755\n", Garbage(b"new mode 100755\n"));
+    assert_parsed!(parse_patch_line, b"deleted file mode 100644\n", Garbage(b"deleted file mode 100644\n"));
+    assert_parsed!(parse_patch_line, b"new file mode 100644\n", Garbage(b"new file mode 100644\n"));
+
+    assert_parsed!(parse_patch_line, b"rename from oldname\n", Garbage(b"rename from oldname\n"));
+    assert_parsed!(parse_patch_line, b"rename to newname\n", Garbage(b"rename to newname\n"));
+    assert_parsed!(parse_patch_line, b"copy from oldname\n", Garbage(b"copy from oldname\n"));
+    assert_parsed!(parse_patch_line, b"copy to newname\n", Garbage(b"copy to newname\n"));
+    assert_parsed!(parse_patch_line, b"GIT binary patch\n", Garbage(b"GIT binary patch\n"));
+}
+
+named!(parse_git_patch_line<CompleteByteSlice, PatchLine>,
+    alt!(
+        map!(parse_metadata_line, PatchLine::Metadata) |
+        map!(parse_git_metadata_line, PatchLine::GitMetadata) |
+        value!(PatchLine::StartOfHunk, peek!(parse_hunk_header)) |
+        map!(take_until_newline_incl, |line| PatchLine::Garbage(line.0)) |
+        value!(PatchLine::EndOfPatch, eof!())
+    )
+);
+
+#[cfg(test)]
+#[test]
+fn test_parse_git_patch_line() {
+    use self::PatchLine::*;
+    use self::MetadataLine::*;
+    use self::GitMetadataLine::*;
+
+    assert_parsed!(parse_git_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
+    assert_parsed!(parse_git_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
+
+    assert_parsed!(parse_git_patch_line, b"@@ -1 +1 @@\n", StartOfHunk);
+
+    assert_parsed!(parse_git_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
+
+    assert_parsed!(parse_git_patch_line, b"index 0123456789a..fedcba98765 100644\n", GitMetadata(Index));
+
+    assert_parsed!(parse_git_patch_line, b"old mode 100644\n",          GitMetadata(OldMode(0o100644)));
+    assert_parsed!(parse_git_patch_line, b"new mode 100755\n",          GitMetadata(NewMode(0o100755)));
+    assert_parsed!(parse_git_patch_line, b"deleted file mode 100644\n", GitMetadata(DeletedFileMode(0o100644)));
+    assert_parsed!(parse_git_patch_line, b"new file mode 100644\n",     GitMetadata(NewFileMode(0o100644)));
+
+    assert_parsed!(parse_git_patch_line, b"rename from oldname\n", GitMetadata(RenameFrom));
+    assert_parsed!(parse_git_patch_line, b"rename to newname\n", GitMetadata(RenameTo));
+    assert_parsed!(parse_git_patch_line, b"copy from oldname\n", GitMetadata(CopyFrom));
+    assert_parsed!(parse_git_patch_line, b"copy to newname\n", GitMetadata(CopyTo));
+    assert_parsed!(parse_git_patch_line, b"GIT binary patch\n", GitMetadata(GitBinaryPatch));
 }
 
 fn parse_number_usize(input: CompleteByteSlice) -> IResult<CompleteByteSlice, usize> {
@@ -952,19 +1024,30 @@ fn permissions_from_mode(mode: u32) -> Option<Permissions> {
     None
 }
 
+#[derive(Debug, PartialEq)]
+enum MetadataState {
+    Start,
+    GitDiff,
+}
+
 fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
     -> IResult<CompleteByteSlice, (Vec<&'a [u8]>, TextFilePatch<'a>)>
 {
     let mut header = Vec::new();
+    let mut state = MetadataState::Start;
 
     let mut metadata = FilePatchMetadata::default();
 
     // First we read metadata lines or garbage and wait until we find a first hunk.
     loop {
-        let (input_, patch_line) = parse_patch_line(input)?;
+        let (input_, patch_line) = match state {
+            MetadataState::Start => parse_patch_line(input)?,
+            MetadataState::GitDiff => parse_git_patch_line(input)?,
+        };
 
         use self::PatchLine::*;
         use self::MetadataLine::*;
+        use self::GitMetadataLine::*;
 
         match patch_line {
             Garbage(garbage) => {
@@ -1007,6 +1090,7 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
                             metadata = FilePatchMetadata::default();
                             metadata.old_filename = Some(old_filename);
                             metadata.new_filename = Some(new_filename);
+                            state = MetadataState::GitDiff;
                         } else {
                             metadata = incomplete_metadata;
                         }
@@ -1020,27 +1104,27 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
                 metadata.old_filename = Some(filename);
             }
 
-            Metadata(RenameFrom) => {
+            GitMetadata(RenameFrom) => {
                 metadata.rename_from = true;
             }
-            Metadata(RenameTo) => {
+            GitMetadata(RenameTo) => {
                 metadata.rename_to = true;
             }
 
-            Metadata(OldMode(mode)) |
-            Metadata(DeletedFileMode(mode)) => {
+            GitMetadata(OldMode(mode)) |
+            GitMetadata(DeletedFileMode(mode)) => {
                 metadata.old_permissions = permissions_from_mode(mode);
             }
-            Metadata(NewMode(mode)) |
-            Metadata(NewFileMode(mode)) => {
+            GitMetadata(NewMode(mode)) |
+            GitMetadata(NewFileMode(mode)) => {
                 metadata.new_permissions = permissions_from_mode(mode);
             }
 
-            Metadata(GitBinaryPatch) => {
+            GitMetadata(GitBinaryPatch) => {
                 return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::UnsupportedMetadata as u32))));
             }
 
-            Metadata(_) => {
+            GitMetadata(_) => {
                 // Other metadata lines are ignored for now.
                 // TODO: Implement some of them...
             }
@@ -1533,6 +1617,33 @@ rename to filename7
     assert_eq!(file_patches[3].old_filename(), Some(&Cow::Owned(PathBuf::from("filename7"))));
     assert_eq!(file_patches[3].new_filename(), Some(&Cow::Owned(PathBuf::from("filename8"))));
     assert_eq!(file_patches[3].hunks.len(), 0);
+
+    let patch_txt = br#"Looks like git diff extended headers:
+rename from old name is just garbage, no git
+--- filename
++++ filename
+@@ -100,2 +100,3 @@ place2
+ aaa
++bbb
+ ccc
+"#;
+
+    let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert_eq!(patch.header.len(), 2);
+    assert_eq!(patch.header[0], s!(b"Looks like git diff extended headers:\n"));
+    assert_eq!(patch.header[1], s!(b"rename from old name is just garbage, no git\n"));
+
+    let file_patches = patch.file_patches;
+
+    assert_eq!(file_patches.len(), 1);
+
+    assert_eq!(file_patches[0].old_filename(), Some(&Cow::Owned(PathBuf::from("filename"))));
+    assert_eq!(file_patches[0].new_filename(), Some(&Cow::Owned(PathBuf::from("filename"))));
+    assert_eq!(file_patches[0].hunks.len(), 1);
+    assert_eq!(file_patches[0].hunks[0].add.content[0], s!(b"aaa\n"));
+    assert_eq!(file_patches[0].hunks[0].add.content[1], s!(b"bbb\n"));
+    assert_eq!(file_patches[0].hunks[0].add.content[2], s!(b"ccc\n"));
 }
 
 #[cfg(test)]
