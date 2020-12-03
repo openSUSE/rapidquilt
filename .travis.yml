@@ -1,9 +1,13 @@
 language: rust
 
-rust:
-  # Minimal supported
-  - 1.31.0
-  - stable
-  - nightly
+jobs:
+  include:
+    - rust: 1.31.0  # Minimal supported
+    - rust: stable
+    - name: rustfmt
+      rust: stable
+      before_install: rustup component add rustfmt
+      script: cargo fmt -- --check
+    - rust: nightly
 
 cache: cargo
