@@ -6,37 +6,46 @@
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
 use std::hash::BuildHasherDefault;
+use std::io::{self, Write};
 use std::path::Path;
 
 use colored::*;
 use failure::{Error, ResultExt};
 use seahash;
 
-use crate::apply::*;
 use crate::apply::common::*;
 use crate::apply::diagnostics::*;
+use crate::apply::*;
 use crate::arena::Arena;
 
 use libpatch::analysis::{AnalysisSet, Note};
-use libpatch::patch::TextFilePatch;
-use libpatch::patch::unified::parser::parse_patch;
 use libpatch::modified_file::ModifiedFile;
+use libpatch::patch::unified::parser::parse_patch;
+use libpatch::patch::TextFilePatch;
 
-
-pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
-    -> Result<ApplyResult, Error> {
+pub fn apply_patches<'a, 'arena>(
+    config: &'a ApplyConfig,
+    arena: &'arena dyn Arena,
+    analyses: &AnalysisSet,
+) -> Result<ApplyResult, Error> {
     let mut applied_patches = Vec::<PatchStatus>::new();
 
-    let mut modified_files = HashMap::<Cow<'arena, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut modified_files = HashMap::<
+        Cow<'arena, Path>,
+        ModifiedFile,
+        BuildHasherDefault<seahash::SeaHasher>,
+    >::default();
 
     let mut final_patch = 0;
 
     let mut failure_analysis = Vec::<u8>::new();
 
     if config.verbosity >= Verbosity::Normal {
-        println!("Applying {} patches single-threaded...", config.series_patches.len());
+        println!(
+            "Applying {} patches single-threaded...",
+            config.series_patches.len()
+        );
     }
 
     for (index, series_patch) in config.series_patches.iter().enumerate() {
@@ -46,11 +55,15 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
         final_patch = index;
 
-        let patch = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable. (feature "try_blocks")
+        let patch = (|| -> Result<_, Error> {
+            // TODO: Replace me with try-block once it is stable. (feature "try_blocks")
             let data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
             let patch = parse_patch(&data, series_patch.strip, false)?;
             Ok(patch)
-        })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
+        })()
+        .with_context(|_| ApplyError::PatchLoad {
+            patch_filename: config.series_patches[index].filename.clone(),
+        })?;
 
         let mut any_report_failed = false;
 
@@ -62,26 +75,38 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
                 let _ = print_analysis_note(&series_patch.filename, note, file_patch);
             };
 
-            if !apply_one_file_patch(config,
-                                     index,
-                                     text_file_patch,
-                                     series_patch.reverse,
-                                     &mut applied_patches,
-                                     &mut modified_files,
-                                     arena,
-                                     &analyses,
-                                     &fn_analysis_note)?
-            {
+            if !apply_one_file_patch(
+                config,
+                index,
+                text_file_patch,
+                series_patch.reverse,
+                &mut applied_patches,
+                &mut modified_files,
+                arena,
+                &analyses,
+                &fn_analysis_note,
+            )? {
                 any_report_failed = true;
             }
         }
 
         if any_report_failed {
             // Analyze failure, in case there was any
-            analyze_patch_failure(config.verbosity, index, &applied_patches, &modified_files, &mut failure_analysis)?;
+            analyze_patch_failure(
+                config.verbosity,
+                index,
+                &applied_patches,
+                &modified_files,
+                &mut failure_analysis,
+            )?;
 
             if !config.dry_run {
-                rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, index, config.verbosity)?;
+                rollback_and_save_rej_files(
+                    &mut applied_patches,
+                    &mut modified_files,
+                    index,
+                    config.verbosity,
+                )?;
             }
 
             break;
@@ -93,13 +118,18 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             println!("Saving modified files...");
         }
 
-        let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        save_modified_files(&modified_files, &mut directories_for_cleaning, config.verbosity)?;
+        let mut directories_for_cleaning =
+            HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
+        save_modified_files(
+            &modified_files,
+            &mut directories_for_cleaning,
+            config.verbosity,
+        )?;
         clean_empty_directories(directories_for_cleaning)?;
 
-        if config.do_backups == ApplyConfigDoBackups::Always ||
-          (config.do_backups == ApplyConfigDoBackups::OnFail &&
-            final_patch != config.series_patches.len() - 1)
+        if config.do_backups == ApplyConfigDoBackups::Always
+            || (config.do_backups == ApplyConfigDoBackups::OnFail
+                && final_patch != config.series_patches.len() - 1)
         {
             if config.verbosity >= Verbosity::Normal {
                 println!("Saving quilt backup files ({})...", config.backup_count);
@@ -107,10 +137,21 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
             let down_to_index = match config.backup_count {
                 ApplyConfigBackupCount::All => 0,
-                ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+                ApplyConfigBackupCount::Last(n) => {
+                    if final_patch > n {
+                        final_patch - n
+                    } else {
+                        0
+                    }
+                }
             };
 
-            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, down_to_index, config.verbosity)?;
+            rollback_and_save_backup_files(
+                &mut applied_patches,
+                &mut modified_files,
+                down_to_index,
+                config.verbosity,
+            )?;
         }
     }
 
@@ -118,7 +159,13 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
         let stderr = io::stderr();
         let mut out = stderr.lock();
 
-        writeln!(out, "{} {} {}", "Patch".yellow(), config.series_patches[final_patch].filename.display(), "FAILED".bright_red().bold())?;
+        writeln!(
+            out,
+            "{} {} {}",
+            "Patch".yellow(),
+            config.series_patches[final_patch].filename.display(),
+            "FAILED".bright_red().bold()
+        )?;
         out.write_all(&failure_analysis)?;
     }
 

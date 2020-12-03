@@ -1,22 +1,22 @@
 use std::fs::{self, File};
-use std::io::{BufReader, BufRead, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::vec::Vec;
 
 use failure::{Error, ResultExt};
 
-use crate::patch::TextPatch;
 use crate::patch::unified::parser::parse_patch;
 use crate::patch::unified::writer::UnifiedPatchWriter;
-
+use crate::patch::TextPatch;
 
 #[cfg(test)]
 fn compare_output<'a>(path: &Path, patch: TextPatch<'a>) -> Result<(), Error> {
     let mut output = Vec::<u8>::new();
     patch.write_to(&mut output)?;
 
-    let expected_output = fs::read(path.with_extension("patch-expected"))
-        .with_context(|_| "Patch parsed ok, but test could not open \"*.patch-expected\" file".to_string())?;
+    let expected_output = fs::read(path.with_extension("patch-expected")).with_context(|_| {
+        "Patch parsed ok, but test could not open \"*.patch-expected\" file".to_string()
+    })?;
 
     if output != expected_output {
         let stderr = std::io::stderr();
@@ -43,13 +43,17 @@ fn compare_error(path: &Path, error: Error) -> Result<(), Error> {
     let mut error_str = String::new();
     write!(error_str, "{:?}\n{}", error, error)?;
 
-    let file = File::open(path.with_extension("error"))
-        .with_context(|_| "Patch failed to parse, but test could not open \"*.error\" file".to_string())?;
+    let file = File::open(path.with_extension("error")).with_context(|_| {
+        "Patch failed to parse, but test could not open \"*.error\" file".to_string()
+    })?;
     let reader = BufReader::new(file);
     let expected_error = reader.lines().next().unwrap()?;
 
     if !error_str.contains(&expected_error) {
-        panic!("Expected error containing: \"{}\", but got this instead: \"{}\"", expected_error, error_str);
+        panic!(
+            "Expected error containing: \"{}\", but got this instead: \"{}\"",
+            expected_error, error_str
+        );
     }
 
     Ok(())
@@ -62,7 +66,7 @@ fn all_files() -> Result<(), Error> {
         let entry = entry?;
         let path = entry.path();
         match path.extension() {
-            Some(extension) if extension == "patch" => {},
+            Some(extension) if extension == "patch" => {}
             _ => continue,
         }
 
@@ -72,8 +76,12 @@ fn all_files() -> Result<(), Error> {
 
         let strip = 0;
         match parse_patch(&patch_data, strip, true) {
-            Ok(patch) => { compare_output(&path, patch)?; }
-            Err(error) => { compare_error(&path, error)?; }
+            Ok(patch) => {
+                compare_output(&path, patch)?;
+            }
+            Err(error) => {
+                compare_error(&path, error)?;
+            }
         };
     }
 

@@ -2,25 +2,19 @@ use std::io::{self, Write};
 use std::vec::Vec;
 
 use crate::modified_file::ModifiedFile;
-use crate::patch::{
-    FilePatchApplyReport,
-    TextFilePatch,
-    PatchDirection,
-};
+use crate::patch::{FilePatchApplyReport, PatchDirection, TextFilePatch};
 
 use std::fmt::Debug;
 
 mod multiapply;
 pub use self::multiapply::*;
 
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum NoteSeverity {
-    Warning
-    // TODO: Add more when needed
+    Warning, // TODO: Add more when needed
 }
 
-pub trait Note : Debug {
+pub trait Note: Debug {
     /// The hunk this note belongs to, or `None` if it is not tied to a hunk.
     fn hunk(&self) -> Option<usize>;
 
@@ -40,8 +34,9 @@ pub trait Analysis: Sync {
         _file_patch: &TextFilePatch,
         _direction: PatchDirection,
         _report: &FilePatchApplyReport,
-        _fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
-        {}
+        _fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch),
+    ) {
+    }
 
     fn after_modifications(
         &self,
@@ -49,8 +44,9 @@ pub trait Analysis: Sync {
         _file_patch: &TextFilePatch,
         _direction: PatchDirection,
         _report: &FilePatchApplyReport,
-        _fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
-        {}
+        _fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch),
+    ) {
+    }
 
     // TODO: Add more check points if needed.
 }
@@ -81,12 +77,15 @@ impl Analysis for AnalysisSet {
         file_patch: &TextFilePatch,
         direction: PatchDirection,
         report: &FilePatchApplyReport,
-        fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
-    {
+        fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch),
+    ) {
         for analysis in &self.analyses {
             analysis.before_modifications(
-                modified_file, file_patch, direction, report,
-                fn_analysis_note
+                modified_file,
+                file_patch,
+                direction,
+                report,
+                fn_analysis_note,
             )
         }
     }
@@ -97,17 +96,19 @@ impl Analysis for AnalysisSet {
         file_patch: &TextFilePatch,
         direction: PatchDirection,
         report: &FilePatchApplyReport,
-        fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
-    {
+        fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch),
+    ) {
         for analysis in &self.analyses {
             analysis.after_modifications(
-                modified_file, file_patch, direction, report,
-                fn_analysis_note
+                modified_file,
+                file_patch,
+                direction,
+                report,
+                fn_analysis_note,
             );
         }
     }
 }
 
 /// NOOP analysis function. Use this if you don't want any analysis printed out.
-pub fn fn_analysis_note_noop(_note: &dyn Note, _modified_filepatch: &TextFilePatch) {
-}
+pub fn fn_analysis_note_noop(_note: &dyn Note, _modified_filepatch: &TextFilePatch) {}

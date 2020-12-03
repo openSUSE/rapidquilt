@@ -8,20 +8,21 @@ use std::vec::Vec;
 
 use failure::{Error, Fail};
 
-use nom::*;
 use nom::types::CompleteByteSlice;
+use nom::*;
 
-use crate::patch::*;
 use crate::patch::unified::*;
-
-
+use crate::patch::*;
 
 #[derive(Debug, Fail, PartialEq)]
 pub enum ParseError {
     #[fail(display = "Unsupported metadata: \"{}\"", line)]
     UnsupportedMetadata { line: String },
 
-    #[fail(display = "Could not figure out the filename for hunk \"{}\"", hunk_line)]
+    #[fail(
+        display = "Could not figure out the filename for hunk \"{}\"",
+        hunk_line
+    )]
     MissingFilenameForHunk { hunk_line: String },
 
     #[fail(display = "Unexpected end of file")]
@@ -36,8 +37,14 @@ pub enum ParseError {
     #[fail(display = "Invalid mode: \"{}\"", mode_str)]
     BadMode { mode_str: String },
 
-    #[fail(display = "Unknown parse failure: \"{:?}\" on line \"{}\"", inner, line)]
-    Unknown { line: String, inner: nom::ErrorKind<u32> },
+    #[fail(
+        display = "Unknown parse failure: \"{:?}\" on line \"{}\"",
+        inner, line
+    )]
+    Unknown {
+        line: String,
+        inner: nom::ErrorKind<u32>,
+    },
 }
 
 // XXX: This doesn't feel very rusty, but it seems to be the expected way to
@@ -65,89 +72,100 @@ impl<'a> From<nom::Err<CompleteByteSlice<'a>>> for ParseError {
         };
 
         let place_as_string = String::from_utf8_lossy(
-            &take_until_newline(place).map(|a| a.1).unwrap_or(CompleteByteSlice(b"?"))
-        ).to_string();
+            &take_until_newline(place)
+                .map(|a| a.1)
+                .unwrap_or(CompleteByteSlice(b"?")),
+        )
+        .to_string();
 
         let code = match err_kind {
             nom::ErrorKind::Custom(code) => code,
-            _ => { return ParseError::Unknown { line: place_as_string, inner: err_kind }; }
+            _ => {
+                return ParseError::Unknown {
+                    line: place_as_string,
+                    inner: err_kind,
+                };
+            }
         };
 
         match code {
             c if c == ParseErrorCode::UnsupportedMetadata as u32 => {
-                ParseError::UnsupportedMetadata { line: place_as_string }
+                ParseError::UnsupportedMetadata {
+                    line: place_as_string,
+                }
             }
             c if c == ParseErrorCode::MissingFilenameForHunk as u32 => {
-                ParseError::MissingFilenameForHunk { hunk_line: place_as_string }
+                ParseError::MissingFilenameForHunk {
+                    hunk_line: place_as_string,
+                }
             }
-            c if c == ParseErrorCode::UnexpectedEndOfFile as u32 => {
-                ParseError::UnexpectedEndOfFile
-            }
-            c if c == ParseErrorCode::BadLineInHunk as u32 => {
-                ParseError::BadLineInHunk { line: place_as_string }
-            }
-            c if c == ParseErrorCode::NumberTooBig as u32 => {
-                ParseError::NumberTooBig { number_str: place_as_string }
-            }
-            c if c == ParseErrorCode::BadMode as u32 => {
-                ParseError::BadMode { mode_str: place_as_string }
-            }
-            _ => {
-                ParseError::Unknown { line: place_as_string, inner: err_kind }
-            }
+            c if c == ParseErrorCode::UnexpectedEndOfFile as u32 => ParseError::UnexpectedEndOfFile,
+            c if c == ParseErrorCode::BadLineInHunk as u32 => ParseError::BadLineInHunk {
+                line: place_as_string,
+            },
+            c if c == ParseErrorCode::NumberTooBig as u32 => ParseError::NumberTooBig {
+                number_str: place_as_string,
+            },
+            c if c == ParseErrorCode::BadMode as u32 => ParseError::BadMode {
+                mode_str: place_as_string,
+            },
+            _ => ParseError::Unknown {
+                line: place_as_string,
+                inner: err_kind,
+            },
         }
     }
 }
 
 #[cfg(test)]
 macro_rules! assert_parsed {
-    ( $parse_func:ident, $input:expr, $result:expr ) => {
-        {
-            let ret = $parse_func(CompleteByteSlice($input));
-            let ret = ret.map(|tuple| tuple.1); // We only care about the second item. This lets
-                                                // allows us use assert_eq to check for Ok/Err and
-                                                // the first value at once. That gives us good
-                                                // failure messages.
-            assert_eq!(ret.as_ref(), Ok(&$result));
-        }
-    };
+    ( $parse_func:ident, $input:expr, $result:expr ) => {{
+        let ret = $parse_func(CompleteByteSlice($input));
+        let ret = ret.map(|tuple| tuple.1); // We only care about the second item. This lets
+                                            // allows us use assert_eq to check for Ok/Err and
+                                            // the first value at once. That gives us good
+                                            // failure messages.
+        assert_eq!(ret.as_ref(), Ok(&$result));
+    }};
 }
 
 #[cfg(test)]
 macro_rules! assert_parse_error_code {
-    ( $parse_func:ident, $input:expr, $err_code:expr ) => {
-        {
-            let ret = $parse_func(CompleteByteSlice($input));
-            match ret {
-                Err(nom::Err::Error(  nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) |
-                Err(nom::Err::Failure(nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) => {
-                    assert_eq!(error_code, $err_code);
-                }
+    ( $parse_func:ident, $input:expr, $err_code:expr ) => {{
+        let ret = $parse_func(CompleteByteSlice($input));
+        match ret {
+            Err(nom::Err::Error(nom::Context::Code(_, nom::ErrorKind::Custom(error_code))))
+            | Err(nom::Err::Failure(nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) => {
+                assert_eq!(error_code, $err_code);
+            }
 
-                _ => {
-                    panic!("Parsing {:?}, got unexpected return: {:?}", $input, ret);
-                }
+            _ => {
+                panic!("Parsing {:?}, got unexpected return: {:?}", $input, ret);
             }
         }
-    };
+    }};
 }
 
 /// Shortcut to make slice from byte string literal
-macro_rules! s { ( $byte_string:expr ) => { &$byte_string[..] } }
+macro_rules! s {
+    ( $byte_string:expr ) => {
+        &$byte_string[..]
+    };
+}
 
 /// Shortcut to make single-element slice from byte
-macro_rules! c { ( $byte:expr ) => { &[$byte][..] } }
+macro_rules! c {
+    ( $byte:expr ) => {
+        &[$byte][..]
+    };
+}
 
 fn is_space(c: u8) -> bool {
-    c == b' ' ||
-    c == b'\t'
+    c == b' ' || c == b'\t'
 }
 
 fn is_whitespace(c: u8) -> bool {
-    c == b' ' ||
-    c == b'\n' ||
-    c == b'\r' ||
-    c == b'\t'
+    c == b' ' || c == b'\n' || c == b'\r' || c == b'\t'
 }
 
 // The nom::newline is for &[u8], we need CompleteByteSlice
@@ -289,7 +307,11 @@ named!(parse_filename<CompleteByteSlice, Filename>,
 #[test]
 fn test_parse_filename() {
     fn assert_path(input: &[u8], result: &str) {
-        assert_parsed!(parse_filename, input, Filename::Real(Cow::Owned(PathBuf::from(result))));
+        assert_parsed!(
+            parse_filename,
+            input,
+            Filename::Real(Cow::Owned(PathBuf::from(result)))
+        );
     }
 
     assert_path(b"aaa", "aaa");
@@ -315,14 +337,21 @@ fn parse_mode(input: CompleteByteSlice) -> IResult<CompleteByteSlice, u32> {
     let (input, _) = take_while!(input, is_space)?;
     let (input, digits) = take_while1!(input, is_oct_digit)?;
 
-    if digits.len() != 6 { // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
-        return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadMode as u32))));
+    if digits.len() != 6 {
+        // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
+        return Err(nom::Err::Failure(error_position!(
+            input,
+            nom::ErrorKind::Custom(ParseErrorCode::BadMode as u32)
+        )));
     }
 
     let mode_str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
     match u32::from_str_radix(mode_str, 8) {
         Ok(number) => Ok((input, number)),
-        Err(_) => Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadMode as u32)))),
+        Err(_) => Err(nom::Err::Failure(error_position!(
+            input,
+            nom::ErrorKind::Custom(ParseErrorCode::BadMode as u32)
+        ))),
     }
 }
 
@@ -340,7 +369,11 @@ fn test_parse_mode() {
     assert_parse_error_code!(parse_mode, b"100aaa", ParseErrorCode::BadMode as u32);
     assert_parse_error_code!(parse_mode, b"1", ParseErrorCode::BadMode as u32);
     assert_parse_error_code!(parse_mode, b"10000000", ParseErrorCode::BadMode as u32);
-    assert_parse_error_code!(parse_mode, b"1000000000000000000000000000", ParseErrorCode::BadMode as u32);
+    assert_parse_error_code!(
+        parse_mode,
+        b"1000000000000000000000000000",
+        ParseErrorCode::BadMode as u32
+    );
 }
 
 #[derive(Debug, PartialEq)]
@@ -349,7 +382,6 @@ enum MetadataLine<'a> {
 
     MinusFilename(Filename<'a>),
     PlusFilename(Filename<'a>),
-
     // ...?
 }
 
@@ -368,14 +400,32 @@ fn test_parse_metadata_line() {
     use self::MetadataLine::*;
 
     // All of them in basic form
-    assert_parsed!(parse_metadata_line, b"diff --git aaa bbb\n", GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb")))));
+    assert_parsed!(
+        parse_metadata_line,
+        b"diff --git aaa bbb\n",
+        GitDiffSeparator(
+            Filename::Real(Cow::Owned(PathBuf::from("aaa"))),
+            Filename::Real(Cow::Owned(PathBuf::from("bbb")))
+        )
+    );
 
-    assert_parsed!(parse_metadata_line, b"--- aaa\n", MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa")))));
-    assert_parsed!(parse_metadata_line, b"+++ aaa\n", PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa")))));
+    assert_parsed!(
+        parse_metadata_line,
+        b"--- aaa\n",
+        MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))
+    );
+    assert_parsed!(
+        parse_metadata_line,
+        b"+++ aaa\n",
+        PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))
+    );
 
     // Filename with date
-    assert_parsed!(parse_metadata_line, b"--- a/bla/ble.c	2013-09-23 18:41:09.000000000 -0400\n", MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("a/bla/ble.c")))));
-
+    assert_parsed!(
+        parse_metadata_line,
+        b"--- a/bla/ble.c	2013-09-23 18:41:09.000000000 -0400\n",
+        MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("a/bla/ble.c"))))
+    );
 }
 
 #[derive(Debug, PartialEq)]
@@ -422,12 +472,32 @@ fn test_parse_git_metadata_line() {
     use self::GitMetadataLine::*;
 
     // All of them in basic form
-    assert_parsed!(parse_git_metadata_line, b"index 123456789ab..fecdba98765 100644\n", Index);
+    assert_parsed!(
+        parse_git_metadata_line,
+        b"index 123456789ab..fecdba98765 100644\n",
+        Index
+    );
 
-    assert_parsed!(parse_git_metadata_line, b"old mode 100644\n",         OldMode(0o100644));
-    assert_parsed!(parse_git_metadata_line, b"new mode 100644\n",         NewMode(0o100644));
-    assert_parsed!(parse_git_metadata_line, b"deleted file mode 100644\n", DeletedFileMode(0o100644));
-    assert_parsed!(parse_git_metadata_line, b"new file mode 100644\n",    NewFileMode(0o100644));
+    assert_parsed!(
+        parse_git_metadata_line,
+        b"old mode 100644\n",
+        OldMode(0o100644)
+    );
+    assert_parsed!(
+        parse_git_metadata_line,
+        b"new mode 100644\n",
+        NewMode(0o100644)
+    );
+    assert_parsed!(
+        parse_git_metadata_line,
+        b"deleted file mode 100644\n",
+        DeletedFileMode(0o100644)
+    );
+    assert_parsed!(
+        parse_git_metadata_line,
+        b"new file mode 100644\n",
+        NewFileMode(0o100644)
+    );
 
     assert_parsed!(parse_git_metadata_line, b"rename from blabla\n", RenameFrom);
     assert_parsed!(parse_git_metadata_line, b"rename to blabla\n", RenameTo);
@@ -435,7 +505,11 @@ fn test_parse_git_metadata_line() {
     assert_parsed!(parse_git_metadata_line, b"copy from blabla\n", CopyFrom);
     assert_parsed!(parse_git_metadata_line, b"copy to blabla\n", CopyTo);
 
-    assert_parsed!(parse_git_metadata_line, b"GIT binary patch ???\n", GitBinaryPatch);
+    assert_parsed!(
+        parse_git_metadata_line,
+        b"GIT binary patch ???\n",
+        GitBinaryPatch
+    );
 }
 
 #[derive(Debug, PartialEq)]
@@ -458,16 +532,43 @@ named!(parse_start_patch_line<CompleteByteSlice, PatchLine>,
 #[cfg(test)]
 #[test]
 fn test_parse_start_patch_line() {
-    use self::PatchLine::*;
     use self::MetadataLine::*;
+    use self::PatchLine::*;
 
-    assert_parsed!(parse_start_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
-    assert_parsed!(parse_start_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
-    assert_parsed!(parse_start_patch_line, b"+++ bbb\n", Metadata(PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
+    assert_parsed!(
+        parse_start_patch_line,
+        b"diff --git aaa bbb\n",
+        Metadata(GitDiffSeparator(
+            Filename::Real(Cow::Owned(PathBuf::from("aaa"))),
+            Filename::Real(Cow::Owned(PathBuf::from("bbb")))
+        ))
+    );
+    assert_parsed!(
+        parse_start_patch_line,
+        b"--- aaa\n",
+        Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from(
+            "aaa"
+        )))))
+    );
+    assert_parsed!(
+        parse_start_patch_line,
+        b"+++ bbb\n",
+        Metadata(PlusFilename(Filename::Real(Cow::Owned(PathBuf::from(
+            "bbb"
+        )))))
+    );
 
-    assert_parsed!(parse_start_patch_line, b"@@ -1 +1 @@\n", Garbage(b"@@ -1 +1 @@\n"));
+    assert_parsed!(
+        parse_start_patch_line,
+        b"@@ -1 +1 @@\n",
+        Garbage(b"@@ -1 +1 @@\n")
+    );
 
-    assert_parsed!(parse_start_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
+    assert_parsed!(
+        parse_start_patch_line,
+        b"Bla ble bli.\n",
+        Garbage(b"Bla ble bli.\n")
+    );
 }
 
 named!(parse_patch_line<CompleteByteSlice, PatchLine>,
@@ -482,28 +583,85 @@ named!(parse_patch_line<CompleteByteSlice, PatchLine>,
 #[cfg(test)]
 #[test]
 fn test_parse_patch_line() {
-    use self::PatchLine::*;
     use self::MetadataLine::*;
+    use self::PatchLine::*;
 
-    assert_parsed!(parse_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
-    assert_parsed!(parse_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
+    assert_parsed!(
+        parse_patch_line,
+        b"diff --git aaa bbb\n",
+        Metadata(GitDiffSeparator(
+            Filename::Real(Cow::Owned(PathBuf::from("aaa"))),
+            Filename::Real(Cow::Owned(PathBuf::from("bbb")))
+        ))
+    );
+    assert_parsed!(
+        parse_patch_line,
+        b"--- aaa\n",
+        Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from(
+            "aaa"
+        )))))
+    );
 
     assert_parsed!(parse_patch_line, b"@@ -1 +1 @@\n", StartOfHunk);
 
-    assert_parsed!(parse_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
+    assert_parsed!(
+        parse_patch_line,
+        b"Bla ble bli.\n",
+        Garbage(b"Bla ble bli.\n")
+    );
 
-    assert_parsed!(parse_patch_line, b"index 0123456789a..fedcba98765 100644\n", Garbage(b"index 0123456789a..fedcba98765 100644\n"));
+    assert_parsed!(
+        parse_patch_line,
+        b"index 0123456789a..fedcba98765 100644\n",
+        Garbage(b"index 0123456789a..fedcba98765 100644\n")
+    );
 
-    assert_parsed!(parse_patch_line, b"old mode 100644\n", Garbage(b"old mode 100644\n"));
-    assert_parsed!(parse_patch_line, b"new mode 100755\n", Garbage(b"new mode 100755\n"));
-    assert_parsed!(parse_patch_line, b"deleted file mode 100644\n", Garbage(b"deleted file mode 100644\n"));
-    assert_parsed!(parse_patch_line, b"new file mode 100644\n", Garbage(b"new file mode 100644\n"));
+    assert_parsed!(
+        parse_patch_line,
+        b"old mode 100644\n",
+        Garbage(b"old mode 100644\n")
+    );
+    assert_parsed!(
+        parse_patch_line,
+        b"new mode 100755\n",
+        Garbage(b"new mode 100755\n")
+    );
+    assert_parsed!(
+        parse_patch_line,
+        b"deleted file mode 100644\n",
+        Garbage(b"deleted file mode 100644\n")
+    );
+    assert_parsed!(
+        parse_patch_line,
+        b"new file mode 100644\n",
+        Garbage(b"new file mode 100644\n")
+    );
 
-    assert_parsed!(parse_patch_line, b"rename from oldname\n", Garbage(b"rename from oldname\n"));
-    assert_parsed!(parse_patch_line, b"rename to newname\n", Garbage(b"rename to newname\n"));
-    assert_parsed!(parse_patch_line, b"copy from oldname\n", Garbage(b"copy from oldname\n"));
-    assert_parsed!(parse_patch_line, b"copy to newname\n", Garbage(b"copy to newname\n"));
-    assert_parsed!(parse_patch_line, b"GIT binary patch\n", Garbage(b"GIT binary patch\n"));
+    assert_parsed!(
+        parse_patch_line,
+        b"rename from oldname\n",
+        Garbage(b"rename from oldname\n")
+    );
+    assert_parsed!(
+        parse_patch_line,
+        b"rename to newname\n",
+        Garbage(b"rename to newname\n")
+    );
+    assert_parsed!(
+        parse_patch_line,
+        b"copy from oldname\n",
+        Garbage(b"copy from oldname\n")
+    );
+    assert_parsed!(
+        parse_patch_line,
+        b"copy to newname\n",
+        Garbage(b"copy to newname\n")
+    );
+    assert_parsed!(
+        parse_patch_line,
+        b"GIT binary patch\n",
+        Garbage(b"GIT binary patch\n")
+    );
 }
 
 named!(parse_git_patch_line<CompleteByteSlice, PatchLine>,
@@ -519,29 +677,86 @@ named!(parse_git_patch_line<CompleteByteSlice, PatchLine>,
 #[cfg(test)]
 #[test]
 fn test_parse_git_patch_line() {
-    use self::PatchLine::*;
-    use self::MetadataLine::*;
     use self::GitMetadataLine::*;
+    use self::MetadataLine::*;
+    use self::PatchLine::*;
 
-    assert_parsed!(parse_git_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
-    assert_parsed!(parse_git_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
+    assert_parsed!(
+        parse_git_patch_line,
+        b"diff --git aaa bbb\n",
+        Metadata(GitDiffSeparator(
+            Filename::Real(Cow::Owned(PathBuf::from("aaa"))),
+            Filename::Real(Cow::Owned(PathBuf::from("bbb")))
+        ))
+    );
+    assert_parsed!(
+        parse_git_patch_line,
+        b"--- aaa\n",
+        Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from(
+            "aaa"
+        )))))
+    );
 
     assert_parsed!(parse_git_patch_line, b"@@ -1 +1 @@\n", StartOfHunk);
 
-    assert_parsed!(parse_git_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
+    assert_parsed!(
+        parse_git_patch_line,
+        b"Bla ble bli.\n",
+        Garbage(b"Bla ble bli.\n")
+    );
 
-    assert_parsed!(parse_git_patch_line, b"index 0123456789a..fedcba98765 100644\n", GitMetadata(Index));
+    assert_parsed!(
+        parse_git_patch_line,
+        b"index 0123456789a..fedcba98765 100644\n",
+        GitMetadata(Index)
+    );
 
-    assert_parsed!(parse_git_patch_line, b"old mode 100644\n",          GitMetadata(OldMode(0o100644)));
-    assert_parsed!(parse_git_patch_line, b"new mode 100755\n",          GitMetadata(NewMode(0o100755)));
-    assert_parsed!(parse_git_patch_line, b"deleted file mode 100644\n", GitMetadata(DeletedFileMode(0o100644)));
-    assert_parsed!(parse_git_patch_line, b"new file mode 100644\n",     GitMetadata(NewFileMode(0o100644)));
+    assert_parsed!(
+        parse_git_patch_line,
+        b"old mode 100644\n",
+        GitMetadata(OldMode(0o100644))
+    );
+    assert_parsed!(
+        parse_git_patch_line,
+        b"new mode 100755\n",
+        GitMetadata(NewMode(0o100755))
+    );
+    assert_parsed!(
+        parse_git_patch_line,
+        b"deleted file mode 100644\n",
+        GitMetadata(DeletedFileMode(0o100644))
+    );
+    assert_parsed!(
+        parse_git_patch_line,
+        b"new file mode 100644\n",
+        GitMetadata(NewFileMode(0o100644))
+    );
 
-    assert_parsed!(parse_git_patch_line, b"rename from oldname\n", GitMetadata(RenameFrom));
-    assert_parsed!(parse_git_patch_line, b"rename to newname\n", GitMetadata(RenameTo));
-    assert_parsed!(parse_git_patch_line, b"copy from oldname\n", GitMetadata(CopyFrom));
-    assert_parsed!(parse_git_patch_line, b"copy to newname\n", GitMetadata(CopyTo));
-    assert_parsed!(parse_git_patch_line, b"GIT binary patch\n", GitMetadata(GitBinaryPatch));
+    assert_parsed!(
+        parse_git_patch_line,
+        b"rename from oldname\n",
+        GitMetadata(RenameFrom)
+    );
+    assert_parsed!(
+        parse_git_patch_line,
+        b"rename to newname\n",
+        GitMetadata(RenameTo)
+    );
+    assert_parsed!(
+        parse_git_patch_line,
+        b"copy from oldname\n",
+        GitMetadata(CopyFrom)
+    );
+    assert_parsed!(
+        parse_git_patch_line,
+        b"copy to newname\n",
+        GitMetadata(CopyTo)
+    );
+    assert_parsed!(
+        parse_git_patch_line,
+        b"GIT binary patch\n",
+        GitMetadata(GitBinaryPatch)
+    );
 }
 
 fn parse_number_usize(input: CompleteByteSlice) -> IResult<CompleteByteSlice, usize> {
@@ -549,7 +764,10 @@ fn parse_number_usize(input: CompleteByteSlice) -> IResult<CompleteByteSlice, us
     let str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
     match usize::from_str(str) {
         Ok(number) => Ok((input_, number)),
-        Err(_) => Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::NumberTooBig as u32)))),
+        Err(_) => Err(nom::Err::Failure(error_position!(
+            input,
+            nom::ErrorKind::Custom(ParseErrorCode::NumberTooBig as u32)
+        ))),
     }
 }
 
@@ -560,7 +778,11 @@ fn test_parse_number_usize() {
     assert_parsed!(parse_number_usize, b"1", 1);
     assert_parsed!(parse_number_usize, b"123", 123);
 
-    assert_parse_error_code!(parse_number_usize, b"123456789012345678901234567890", ParseErrorCode::NumberTooBig as u32);
+    assert_parse_error_code!(
+        parse_number_usize,
+        b"123456789012345678901234567890",
+        ParseErrorCode::NumberTooBig as u32
+    );
 }
 
 // Parses line and count like "3,4" or just "3"
@@ -709,36 +931,92 @@ named!(parse_hunk_line<CompleteByteSlice, (HunkLineType, &[u8])>,
 #[test]
 fn test_parse_hunk_line() {
     // Adding
-    assert_parsed!(parse_hunk_line, b"+\n",                 (HunkLineType::Add, s!(b"\n")));
-    assert_parsed!(parse_hunk_line, b"+aaa\n",              (HunkLineType::Add, s!(b"aaa\n")));
-    assert_parsed!(parse_hunk_line, b"+    bla ble bli;\n", (HunkLineType::Add, s!(b"    bla ble bli;\n")));
+    assert_parsed!(parse_hunk_line, b"+\n", (HunkLineType::Add, s!(b"\n")));
+    assert_parsed!(
+        parse_hunk_line,
+        b"+aaa\n",
+        (HunkLineType::Add, s!(b"aaa\n"))
+    );
+    assert_parsed!(
+        parse_hunk_line,
+        b"+    bla ble bli;\n",
+        (HunkLineType::Add, s!(b"    bla ble bli;\n"))
+    );
 
     // Removing
-    assert_parsed!(parse_hunk_line, b"-\n",                 (HunkLineType::Remove, s!(b"\n")));
-    assert_parsed!(parse_hunk_line, b"-aaa\n",              (HunkLineType::Remove, s!(b"aaa\n")));
-    assert_parsed!(parse_hunk_line, b"-    bla ble bli;\n", (HunkLineType::Remove, s!(b"    bla ble bli;\n")));
+    assert_parsed!(parse_hunk_line, b"-\n", (HunkLineType::Remove, s!(b"\n")));
+    assert_parsed!(
+        parse_hunk_line,
+        b"-aaa\n",
+        (HunkLineType::Remove, s!(b"aaa\n"))
+    );
+    assert_parsed!(
+        parse_hunk_line,
+        b"-    bla ble bli;\n",
+        (HunkLineType::Remove, s!(b"    bla ble bli;\n"))
+    );
 
     // Context
-    assert_parsed!(parse_hunk_line, b" \n",                 (HunkLineType::Context, s!(b"\n")));
-    assert_parsed!(parse_hunk_line, b" aaa\n",              (HunkLineType::Context, s!(b"aaa\n")));
-    assert_parsed!(parse_hunk_line, b"     bla ble bli;\n", (HunkLineType::Context, s!(b"    bla ble bli;\n")));
+    assert_parsed!(parse_hunk_line, b" \n", (HunkLineType::Context, s!(b"\n")));
+    assert_parsed!(
+        parse_hunk_line,
+        b" aaa\n",
+        (HunkLineType::Context, s!(b"aaa\n"))
+    );
+    assert_parsed!(
+        parse_hunk_line,
+        b"     bla ble bli;\n",
+        (HunkLineType::Context, s!(b"    bla ble bli;\n"))
+    );
 
     // No newline...
-    assert_parsed!(parse_hunk_line, b"+    bla ble bli;\n\\ No newline at end of file\n", (HunkLineType::Add,     s!(b"    bla ble bli;")));
-    assert_parsed!(parse_hunk_line, b"-    bla ble bli;\n\\ No newline at end of file\n", (HunkLineType::Remove,  s!(b"    bla ble bli;")));
-    assert_parsed!(parse_hunk_line, b"     bla ble bli;\n\\ No newline at end of file\n", (HunkLineType::Context, s!(b"    bla ble bli;")));
+    assert_parsed!(
+        parse_hunk_line,
+        b"+    bla ble bli;\n\\ No newline at end of file\n",
+        (HunkLineType::Add, s!(b"    bla ble bli;"))
+    );
+    assert_parsed!(
+        parse_hunk_line,
+        b"-    bla ble bli;\n\\ No newline at end of file\n",
+        (HunkLineType::Remove, s!(b"    bla ble bli;"))
+    );
+    assert_parsed!(
+        parse_hunk_line,
+        b"     bla ble bli;\n\\ No newline at end of file\n",
+        (HunkLineType::Context, s!(b"    bla ble bli;"))
+    );
 
     // XXX: patch specialty: See comment in `hunk_line`.
-    assert_parsed!(parse_hunk_line, b"\t\n",                 (HunkLineType::Context, s!(b"\t\n")));
-    assert_parsed!(parse_hunk_line, b"\taaa\n",              (HunkLineType::Context, s!(b"\taaa\n")));
-    assert_parsed!(parse_hunk_line, b"\t\tbla ble bli;\n",   (HunkLineType::Context, s!(b"\t\tbla ble bli;\n")));
+    assert_parsed!(
+        parse_hunk_line,
+        b"\t\n",
+        (HunkLineType::Context, s!(b"\t\n"))
+    );
+    assert_parsed!(
+        parse_hunk_line,
+        b"\taaa\n",
+        (HunkLineType::Context, s!(b"\taaa\n"))
+    );
+    assert_parsed!(
+        parse_hunk_line,
+        b"\t\tbla ble bli;\n",
+        (HunkLineType::Context, s!(b"\t\tbla ble bli;\n"))
+    );
 
     // XXX: patch specialty: See comment in `hunk_line`.
     assert_parsed!(parse_hunk_line, b"\n", (HunkLineType::Context, s!(b"\n")));
 
     // Bad line
-    assert_parse_error_code!(parse_hunk_line, b"wtf is this\n", ParseErrorCode::BadLineInHunk as u32);
-    assert_parse_error_code!(parse_hunk_line, b"wtf", ParseErrorCode::BadLineInHunk as u32);
+    assert_parse_error_code!(
+        parse_hunk_line,
+        b"wtf is this\n",
+        ParseErrorCode::BadLineInHunk as u32
+    );
+    assert_parse_error_code!(
+        parse_hunk_line,
+        b"wtf",
+        ParseErrorCode::BadLineInHunk as u32
+    );
 }
 
 fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, TextHunk<'a>> {
@@ -747,7 +1025,7 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
     let mut hunk = Hunk::new(
         std::cmp::max(header.remove_line as isize - 1, 0),
         std::cmp::max(header.add_line as isize - 1, 0),
-        header.function
+        header.function,
     );
 
     hunk.add.content.reserve(header.add_count);
@@ -760,7 +1038,12 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
             Ok(ok) => ok,
             Err(err @ nom::Err::Failure(_)) => return Err(err),
             Err(nom::Err::Incomplete(_)) => unreachable!(),
-            Err(nom::Err::Error(_)) => return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32)))),
+            Err(nom::Err::Error(_)) => {
+                return Err(nom::Err::Failure(error_position!(
+                    input,
+                    nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32)
+                )))
+            }
         };
 
         input = input_;
@@ -768,7 +1051,10 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
         match line_type {
             HunkLineType::Add => {
                 if header.add_count == 0 {
-                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                    return Err(nom::Err::Failure(error_position!(
+                        input,
+                        nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32)
+                    )));
                 }
 
                 hunk.add.content.push(line);
@@ -779,7 +1065,10 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
             }
             HunkLineType::Remove => {
                 if header.remove_count == 0 {
-                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                    return Err(nom::Err::Failure(error_position!(
+                        input,
+                        nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32)
+                    )));
                 }
 
                 hunk.remove.content.push(line);
@@ -790,7 +1079,10 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
             }
             HunkLineType::Context => {
                 if header.remove_count == 0 || header.add_count == 0 {
-                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                    return Err(nom::Err::Failure(error_position!(
+                        input,
+                        nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32)
+                    )));
                 }
 
                 hunk.add.content.push(line);
@@ -829,14 +1121,19 @@ fn test_parse_hunk() {
     assert_eq!(h.remove.target_line, 99);
     assert_eq!(h.add.target_line, 109);
 
-    assert_eq!(&h.add.content[..], [b"aaa\n", b"bbb\n", b"ccc\n", b"eee\n", b"fff\n", b"ggg\n", b"hhh\n"]);
-    assert_eq!(&h.remove.content[..], [b"aaa\n", b"bbb\n", b"ccc\n", b"ddd\n", b"ggg\n", b"hhh\n"]);
+    assert_eq!(
+        &h.add.content[..],
+        [b"aaa\n", b"bbb\n", b"ccc\n", b"eee\n", b"fff\n", b"ggg\n", b"hhh\n"]
+    );
+    assert_eq!(
+        &h.remove.content[..],
+        [b"aaa\n", b"bbb\n", b"ccc\n", b"ddd\n", b"ggg\n", b"hhh\n"]
+    );
 
     assert_eq!(h.prefix_context, 3);
     assert_eq!(h.suffix_context, 2);
 
     assert_eq!(h.function, b"place");
-
 
     // Too short hunk
     let hunk_txt = br#"@@ -100,6 +110,7 @@ place
@@ -844,8 +1141,11 @@ fn test_parse_hunk() {
  bbb
  ccc
 "#;
-    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
-
+    assert_parse_error_code!(
+        parse_hunk,
+        s!(hunk_txt),
+        ParseErrorCode::BadLineInHunk as u32
+    );
 
     // Bad line in hunk (nonsense)
     let hunk_txt = br#"@@ -100,6 +110,7 @@ place
@@ -854,8 +1154,11 @@ fn test_parse_hunk() {
  ccc
 xxxxx
 "#;
-    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
-
+    assert_parse_error_code!(
+        parse_hunk,
+        s!(hunk_txt),
+        ParseErrorCode::BadLineInHunk as u32
+    );
 
     // Bad line in hunk (unexpected '+', '-' or ' ')
     let hunk_txt = br#"@@ -100,3 +110,2 @@ place
@@ -864,7 +1167,11 @@ xxxxx
 -ccc
  ddd
 "#;
-    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
+    assert_parse_error_code!(
+        parse_hunk,
+        s!(hunk_txt),
+        ParseErrorCode::BadLineInHunk as u32
+    );
 }
 
 // We use hand-written function instead of just `named!` with `many1!` combinator, because `many1!`
@@ -948,15 +1255,11 @@ impl<'a> FilePatchMetadata<'a> {
             let only_hunk = &hunks[0];
 
             if only_hunk.suffix_context == 0 && only_hunk.prefix_context == 0 {
-                if only_hunk.add.content.is_empty() &&
-                  !only_hunk.remove.content.is_empty()
-                {
+                if only_hunk.add.content.is_empty() && !only_hunk.remove.content.is_empty() {
                     return FilePatchKind::Delete;
                 }
 
-                if !only_hunk.add.content.is_empty() &&
-                  only_hunk.remove.content.is_empty()
-                {
+                if !only_hunk.add.content.is_empty() && only_hunk.remove.content.is_empty() {
                     return FilePatchKind::Create;
                 }
             }
@@ -967,7 +1270,10 @@ impl<'a> FilePatchMetadata<'a> {
     }
 
     /// This function will return `None` if some necessary metadata is missing
-    pub fn build_filepatch(self, hunks: HunksVec<'a, &'a [u8]>) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError<'a>> {
+    pub fn build_filepatch(
+        self,
+        hunks: HunksVec<'a, &'a [u8]>,
+    ) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError<'a>> {
         let builder = FilePatchBuilder::<&[u8]>::default();
 
         // Set the kind
@@ -1012,11 +1318,9 @@ impl<'a> FilePatchMetadata<'a> {
         let builder = builder
             .old_filename(old_filename)
             .new_filename(new_filename)
-
             // Set the permissions
             .old_permissions(self.old_permissions)
             .new_permissions(self.new_permissions)
-
             // Set the hunks
             .hunks(hunks);
 
@@ -1025,7 +1329,9 @@ impl<'a> FilePatchMetadata<'a> {
     }
 
     /// This function will return `None` if some necessary metadata is missing
-    pub fn build_hunkless_filepatch(self) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError<'a>> {
+    pub fn build_hunkless_filepatch(
+        self,
+    ) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError<'a>> {
         self.build_filepatch(HunksVec::new())
     }
 }
@@ -1054,9 +1360,10 @@ enum MetadataState {
     GitDiff,
 }
 
-fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
-    -> IResult<CompleteByteSlice, (Vec<&'a [u8]>, TextFilePatch<'a>)>
-{
+fn parse_filepatch<'a>(
+    mut input: CompleteByteSlice<'a>,
+    mut want_header: bool,
+) -> IResult<CompleteByteSlice, (Vec<&'a [u8]>, TextFilePatch<'a>)> {
     let mut header = Vec::new();
     let mut state = MetadataState::Start;
 
@@ -1070,9 +1377,9 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
             MetadataState::GitDiff => parse_git_patch_line(input)?,
         };
 
-        use self::PatchLine::*;
-        use self::MetadataLine::*;
         use self::GitMetadataLine::*;
+        use self::MetadataLine::*;
+        use self::PatchLine::*;
 
         match patch_line {
             Garbage(garbage) => {
@@ -1083,7 +1390,10 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
                 continue;
             }
 
-            StartOfHunk => { input = input_; break; }
+            StartOfHunk => {
+                input = input_;
+                break;
+            }
 
             EndOfPatch | Metadata(MetadataLine::GitDiffSeparator(..)) => {
                 // No more header lines after the first non-garbage line
@@ -1107,11 +1417,18 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
                         // Return if we are at the end of patch
                         if patch_line == EndOfPatch {
                             // Note: This is Error, not Failure, because it could be just because there are no more filepatches at the end of file. Not a fatal error.
-                            return Err(nom::Err::Error(nom::Context::Code(input, nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32))));
+                            return Err(nom::Err::Error(nom::Context::Code(
+                                input,
+                                nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32),
+                            )));
                         }
 
                         // Reset metadata if it was separator
-                        if let Metadata(MetadataLine::GitDiffSeparator(old_filename, new_filename)) = patch_line {
+                        if let Metadata(MetadataLine::GitDiffSeparator(
+                            old_filename,
+                            new_filename,
+                        )) = patch_line
+                        {
                             metadata = FilePatchMetadata::default();
                             metadata.old_filename = Some(old_filename);
                             metadata.new_filename = Some(new_filename);
@@ -1138,17 +1455,18 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
                 metadata.rename_to = true;
             }
 
-            GitMetadata(OldMode(mode)) |
-            GitMetadata(DeletedFileMode(mode)) => {
+            GitMetadata(OldMode(mode)) | GitMetadata(DeletedFileMode(mode)) => {
                 metadata.old_permissions = permissions_from_mode(mode);
             }
-            GitMetadata(NewMode(mode)) |
-            GitMetadata(NewFileMode(mode)) => {
+            GitMetadata(NewMode(mode)) | GitMetadata(NewFileMode(mode)) => {
                 metadata.new_permissions = permissions_from_mode(mode);
             }
 
             GitMetadata(GitBinaryPatch) => {
-                return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::UnsupportedMetadata as u32))));
+                return Err(nom::Err::Failure(error_position!(
+                    input,
+                    nom::ErrorKind::Custom(ParseErrorCode::UnsupportedMetadata as u32)
+                )));
             }
 
             GitMetadata(_) => {
@@ -1165,12 +1483,14 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
     input = input_;
 
     // We can make our filepatch
-    let filepatch = metadata.build_filepatch(hunks).map_err(
-        |error| match error {
-             FilePatchMetadataBuildError::MissingFilenames(_) =>
-                nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::MissingFilenameForHunk as u32)))
-        }
-    )?;
+    let filepatch = metadata
+        .build_filepatch(hunks)
+        .map_err(|error| match error {
+            FilePatchMetadataBuildError::MissingFilenames(_) => nom::Err::Failure(error_position!(
+                input,
+                nom::ErrorKind::Custom(ParseErrorCode::MissingFilenameForHunk as u32)
+            )),
+        })?;
 
     Ok((input, (header, filepatch)))
 }
@@ -1193,7 +1513,9 @@ Some other line...
 Other content.
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true)
+        .unwrap()
+        .1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1201,13 +1523,18 @@ Other content.
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
     assert_eq!(file_patch.hunks[0].add.content[0], s!(b"mmm\n"));
-
 
     // Creating filepatch
     let filepatch_txt = br#"garbage1
@@ -1221,7 +1548,9 @@ garbage3
 +ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true)
+        .unwrap()
+        .1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1230,12 +1559,17 @@ garbage3
 
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
     assert_eq!(file_patch.old_filename(), None);
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-    assert_eq!(&file_patch.hunks[0].add.content[..], [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
-
+    assert_eq!(
+        &file_patch.hunks[0].add.content[..],
+        [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]
+    );
 
     // Creating filepatch without /dev/null
     let filepatch_txt = br#"garbage1
@@ -1249,7 +1583,9 @@ garbage3
 +ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true)
+        .unwrap()
+        .1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1257,13 +1593,21 @@ garbage3
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-    assert_eq!(&file_patch.hunks[0].add.content[..], [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
-
+    assert_eq!(
+        &file_patch.hunks[0].add.content[..],
+        [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]
+    );
 
     // Deleting filepatch
     let filepatch_txt = br#"garbage1
@@ -1277,7 +1621,9 @@ garbage3
 -ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true)
+        .unwrap()
+        .1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1285,13 +1631,18 @@ garbage3
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
     assert_eq!(file_patch.new_filename(), None);
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-    assert_eq!(&file_patch.hunks[0].remove.content[..], [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
-
+    assert_eq!(
+        &file_patch.hunks[0].remove.content[..],
+        [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]
+    );
 
     // Deleting filepatch without /dev/null
     let filepatch_txt = br#"garbage1
@@ -1305,7 +1656,9 @@ garbage3
 -ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true)
+        .unwrap()
+        .1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1313,13 +1666,21 @@ garbage3
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-    assert_eq!(&file_patch.hunks[0].remove.content[..], [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]);
-
+    assert_eq!(
+        &file_patch.hunks[0].remove.content[..],
+        [s!(b"aaa\n"), s!(b"bbb\n"), s!(b"ccc\n")]
+    );
 
     // Renaming filepatch
     let filepatch_txt = br#"garbage1
@@ -1342,7 +1703,9 @@ Some other line...
 Other content.
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true)
+        .unwrap()
+        .1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1350,12 +1713,17 @@ Other content.
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename2")))
+    );
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 0);
-
 
     // Renaming filepatch at the end of file
     let filepatch_txt = br#"garbage1
@@ -1368,7 +1736,9 @@ rename to filename2
 +++ filename2
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true)
+        .unwrap()
+        .1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1376,12 +1746,17 @@ rename to filename2
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename2")))
+    );
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 0);
-
 
     // Renaming filepatch without +++ ---, with hunk
     let filepatch_txt = br#"garbage1
@@ -1397,7 +1772,9 @@ rename to filename2
  ddd
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true)
+        .unwrap()
+        .1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1405,12 +1782,17 @@ rename to filename2
     assert_eq!(header[2], b"garbage3\n");
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename2")))
+    );
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
-
 
     // Unsupported metadata
     let filepatch_txt = br#"garbage1
@@ -1423,8 +1805,8 @@ GIT binary patch
 
     let ret = parse_filepatch(CompleteByteSlice(filepatch_txt), false);
     match ret {
-        Err(nom::Err::Error(  nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) |
-        Err(nom::Err::Failure(nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) => {
+        Err(nom::Err::Error(nom::Context::Code(_, nom::ErrorKind::Custom(error_code))))
+        | Err(nom::Err::Failure(nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) => {
             assert_eq!(error_code, ParseErrorCode::UnsupportedMetadata as u32);
         }
 
@@ -1454,14 +1836,27 @@ new mode 100755
  ddd
 "#;
 
-    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false)
+        .unwrap()
+        .1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
-    assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.old_permissions(),
+        Some(&Permissions::from_mode(0o100644))
+    );
+    assert_eq!(
+        file_patch.new_permissions(),
+        Some(&Permissions::from_mode(0o100755))
+    );
     assert_eq!(file_patch.hunks.len(), 1);
-
 
     // Mode changing filepatch without hunks
     let filepatch_txt = br#"garbage1
@@ -1480,14 +1875,27 @@ diff --git filename2 filename2
  ddd
 "#;
 
-    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false)
+        .unwrap()
+        .1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
-    assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.old_permissions(),
+        Some(&Permissions::from_mode(0o100644))
+    );
+    assert_eq!(
+        file_patch.new_permissions(),
+        Some(&Permissions::from_mode(0o100755))
+    );
     assert_eq!(file_patch.hunks.len(), 0);
-
 
     // Mode changing filepatch without hunks at the end of file
     let filepatch_txt = br#"garbage1
@@ -1498,12 +1906,26 @@ old mode 100644
 new mode 100755
 "#;
 
-    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false)
+        .unwrap()
+        .1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
-    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patch.old_permissions(), Some(&Permissions::from_mode(0o100644)));
-    assert_eq!(file_patch.new_permissions(), Some(&Permissions::from_mode(0o100755)));
+    assert_eq!(
+        file_patch.old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patch.old_permissions(),
+        Some(&Permissions::from_mode(0o100644))
+    );
+    assert_eq!(
+        file_patch.new_permissions(),
+        Some(&Permissions::from_mode(0o100755))
+    );
     assert_eq!(file_patch.hunks.len(), 0);
 }
 
@@ -1515,7 +1937,8 @@ pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result
 
     loop {
         // Parse one filepatch at time. If it is the first one, ask it to give us its header as well.
-        let (_input, (filepatch_header, mut filepatch)) = match parse_filepatch(input, wants_header) {
+        let (_input, (filepatch_header, mut filepatch)) = match parse_filepatch(input, wants_header)
+        {
             // We got one
             Ok(header_and_filepatch) => header_and_filepatch,
 
@@ -1523,7 +1946,9 @@ pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result
             Err(nom::Err::Error(_)) => break,
 
             // Actual error
-            Err(err @ nom::Err::Failure(_)) => { return Err(ParseError::from(err).into()); }
+            Err(err @ nom::Err::Failure(_)) => {
+                return Err(ParseError::from(err).into());
+            }
 
             // No way this could happen
             Err(nom::Err::Incomplete(_)) => unreachable!(),
@@ -1584,16 +2009,27 @@ garbage7
 
     assert_eq!(file_patches.len(), 2);
 
-    assert_eq!(file_patches[0].old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patches[0].new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(
+        file_patches[0].old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patches[0].new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
     assert_eq!(file_patches[0].hunks.len(), 1);
     assert_eq!(file_patches[0].hunks[0].add.content[0], s!(b"mmm\n"));
 
-    assert_eq!(file_patches[1].old_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
-    assert_eq!(file_patches[1].new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
+    assert_eq!(
+        file_patches[1].old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename2")))
+    );
+    assert_eq!(
+        file_patches[1].new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename2")))
+    );
     assert_eq!(file_patches[1].hunks.len(), 1);
     assert_eq!(file_patches[1].hunks[0].add.content[0], s!(b"aaa\n"));
-
 
     // Renaming filepatches, no +++ ---
     let patch_txt = br#"garbage1
@@ -1629,20 +2065,44 @@ rename to filename7
 
     assert_eq!(file_patches.len(), 4);
 
-    assert_eq!(file_patches[0].old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
-    assert_eq!(file_patches[0].new_filename(), Some(&Cow::Owned(PathBuf::from("filename2"))));
+    assert_eq!(
+        file_patches[0].old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename1")))
+    );
+    assert_eq!(
+        file_patches[0].new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename2")))
+    );
     assert_eq!(file_patches[0].hunks.len(), 0);
 
-    assert_eq!(file_patches[1].old_filename(), Some(&Cow::Owned(PathBuf::from("filename3"))));
-    assert_eq!(file_patches[1].new_filename(), Some(&Cow::Owned(PathBuf::from("filename4"))));
+    assert_eq!(
+        file_patches[1].old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename3")))
+    );
+    assert_eq!(
+        file_patches[1].new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename4")))
+    );
     assert_eq!(file_patches[1].hunks.len(), 0);
 
-    assert_eq!(file_patches[2].old_filename(), Some(&Cow::Owned(PathBuf::from("filename5"))));
-    assert_eq!(file_patches[2].new_filename(), Some(&Cow::Owned(PathBuf::from("filename6"))));
+    assert_eq!(
+        file_patches[2].old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename5")))
+    );
+    assert_eq!(
+        file_patches[2].new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename6")))
+    );
     assert_eq!(file_patches[2].hunks.len(), 1);
 
-    assert_eq!(file_patches[3].old_filename(), Some(&Cow::Owned(PathBuf::from("filename7"))));
-    assert_eq!(file_patches[3].new_filename(), Some(&Cow::Owned(PathBuf::from("filename8"))));
+    assert_eq!(
+        file_patches[3].old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename7")))
+    );
+    assert_eq!(
+        file_patches[3].new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename8")))
+    );
     assert_eq!(file_patches[3].hunks.len(), 0);
 
     let patch_txt = br#"Looks like git diff extended headers:
@@ -1658,15 +2118,27 @@ rename from old name is just garbage, no git
     let patch = parse_patch(patch_txt, 0, true).unwrap();
 
     assert_eq!(patch.header.len(), 2);
-    assert_eq!(patch.header[0], s!(b"Looks like git diff extended headers:\n"));
-    assert_eq!(patch.header[1], s!(b"rename from old name is just garbage, no git\n"));
+    assert_eq!(
+        patch.header[0],
+        s!(b"Looks like git diff extended headers:\n")
+    );
+    assert_eq!(
+        patch.header[1],
+        s!(b"rename from old name is just garbage, no git\n")
+    );
 
     let file_patches = patch.file_patches;
 
     assert_eq!(file_patches.len(), 1);
 
-    assert_eq!(file_patches[0].old_filename(), Some(&Cow::Owned(PathBuf::from("filename"))));
-    assert_eq!(file_patches[0].new_filename(), Some(&Cow::Owned(PathBuf::from("filename"))));
+    assert_eq!(
+        file_patches[0].old_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename")))
+    );
+    assert_eq!(
+        file_patches[0].new_filename(),
+        Some(&Cow::Owned(PathBuf::from("filename")))
+    );
     assert_eq!(file_patches[0].hunks.len(), 1);
     assert_eq!(file_patches[0].hunks[0].add.content[0], s!(b"aaa\n"));
     assert_eq!(file_patches[0].hunks[0].add.content[1], s!(b"bbb\n"));
@@ -1715,7 +2187,7 @@ index 0123456789ab..cdefedcba987 100644
 #[cfg(feature = "bencher")]
 mod tests {
     use super::*;
-    use test::{Bencher, black_box};
+    use test::{black_box, Bencher};
 
     #[bench]
     fn bench_parse_big_patch(b: &mut Bencher) {

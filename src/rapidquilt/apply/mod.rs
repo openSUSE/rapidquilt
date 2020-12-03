@@ -5,15 +5,13 @@ use std::path::{Path, PathBuf};
 
 use failure::Fail;
 
-pub mod sequential;
-pub mod parallel;
 mod common;
 mod diagnostics;
+pub mod parallel;
+pub mod sequential;
 
-pub use self::sequential::apply_patches;
 pub use self::parallel::apply_patches as apply_patches_parallel;
-
-
+pub use self::sequential::apply_patches;
 
 #[derive(Debug, PartialEq)]
 pub enum ApplyConfigDoBackups {

@@ -2,9 +2,8 @@
 
 use std::io::{self, Write};
 
-use crate::patch::*;
 use crate::patch::unified::*;
-
+use crate::patch::*;
 
 pub trait UnifiedPatchHunkHeaderWriter {
     fn write_header_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error>;
@@ -19,7 +18,11 @@ pub trait UnifiedPatchWriter {
 }
 
 pub trait UnifiedPatchRejWriter {
-    fn write_rej_to<W: Write>(&self, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error>;
+    fn write_rej_to<W: Write>(
+        &self,
+        writer: &mut W,
+        report: &FilePatchApplyReport,
+    ) -> Result<(), io::Error>;
 }
 
 impl<'a, Line> UnifiedPatchHunkHeaderWriter for Hunk<'a, Line> {
@@ -39,7 +42,11 @@ impl<'a, Line> UnifiedPatchHunkHeaderWriter for Hunk<'a, Line> {
             self.remove.target_line + 1
         };
 
-        write!(writer, "@@ -{},{} +{},{} @@", remove_line, remove_count, add_line, add_count)?;
+        write!(
+            writer,
+            "@@ -{},{} +{},{} @@",
+            remove_line, remove_count, add_line, add_count
+        )?;
         if !self.function.is_empty() {
             writer.write_all(b" ")?;
             writer.write_all(self.function)?;
@@ -108,17 +115,30 @@ impl<'a> UnifiedPatchHunkWriter for TextHunk<'a> {
     }
 }
 
-
-fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, &'a [u8]>, writer: &mut W) -> Result<(), io::Error> {
+fn write_file_patch_header_to<'a, W: Write>(
+    filepatch: &FilePatch<'a, &'a [u8]>,
+    writer: &mut W,
+) -> Result<(), io::Error> {
     // TODO: Currently we are writing patches with `strip` level 0, which is exactly
     //       what we need for .rej files. But we could add option to configure it?
 
     // Use the right one if there is, or the other one otherwise. At least one of them has to be there.
-    let old_filename = filepatch.old_filename().or_else(|| filepatch.new_filename()).unwrap(); // NOTE(unwrap): At least one of them must be there.
-    let new_filename = filepatch.new_filename().or_else(|| filepatch.old_filename()).unwrap(); // NOTE(unwrap): At least one of them must be there.
+    let old_filename = filepatch
+        .old_filename()
+        .or_else(|| filepatch.new_filename())
+        .unwrap(); // NOTE(unwrap): At least one of them must be there.
+    let new_filename = filepatch
+        .new_filename()
+        .or_else(|| filepatch.old_filename())
+        .unwrap(); // NOTE(unwrap): At least one of them must be there.
 
     // The "diff --git" line always seem to have real filenames, never "/dev/null"
-    writeln!(writer, "diff --git {} {}", old_filename.display(), new_filename.display())?;
+    writeln!(
+        writer,
+        "diff --git {} {}",
+        old_filename.display(),
+        new_filename.display()
+    )?;
 
     // Print rename metadata
     if filepatch.is_rename() {
@@ -188,9 +208,13 @@ impl<'a> UnifiedPatchWriter for FilePatch<'a, &'a [u8]> {
 }
 
 impl<'a> UnifiedPatchRejWriter for FilePatch<'a, &'a [u8]> {
-    fn write_rej_to<W: Write>(&self, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error> {
+    fn write_rej_to<W: Write>(
+        &self,
+        writer: &mut W,
+        report: &FilePatchApplyReport,
+    ) -> Result<(), io::Error> {
         if report.ok() {
-            return Ok(())
+            return Ok(());
         }
 
         write_file_patch_header_to(self, writer)?;

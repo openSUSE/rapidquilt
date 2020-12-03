@@ -1,15 +1,14 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::marker::PhantomData;
-use std::vec::Vec;
-use std::io;
 use std::fs;
+use std::io;
+use std::marker::PhantomData;
+use std::mem::transmute;
 use std::path::Path;
 use std::sync::Mutex;
-use std::mem::transmute;
+use std::vec::Vec;
 
 use super::{Arena, Stats};
-
 
 /// Utility that reads files and keeps them loaded in immovable place in memory
 /// for its lifetime. So the returned byte slices can be used as long as the

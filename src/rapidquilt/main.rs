@@ -17,25 +17,19 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use colored::*;
-use failure::{Error, ResultExt, format_err};
+use failure::{format_err, Error, ResultExt};
 use getopts::{Matches, Options};
 
 use libpatch::analysis::{AnalysisSet, MultiApplyAnalysis};
 
 use crate::apply::{
-    ApplyConfig,
-    ApplyConfigBackupCount,
-    ApplyConfigDoBackups,
-    apply_patches,
-    apply_patches_parallel,
-    SeriesPatch,
-    Verbosity,
+    apply_patches, apply_patches_parallel, ApplyConfig, ApplyConfigBackupCount,
+    ApplyConfigDoBackups, SeriesPatch, Verbosity,
 };
 use crate::arena::{Arena, FileArena};
 
 #[cfg(unix)]
 use crate::arena::MmapArena;
-
 
 // Jemalloc has much better performance in multi threaded use than system allocator (at least on
 // linux). This may change in the future, so this may be reverted, but make measurements first.
@@ -52,23 +46,33 @@ use crate::arena::MmapArena;
 #[global_allocator]
 static ALLOC: jemallocator::Jemalloc = jemallocator::Jemalloc;
 
-
 const DEFAULT_PATCH_STRIP: usize = 1;
 
-
 fn usage(opts: &Options) -> ! {
-    println!("{}", opts.usage("Usage: rapidquilt push [<options>] [num|patch]"));
+    println!(
+        "{}",
+        opts.usage("Usage: rapidquilt push [<options>] [num|patch]")
+    );
     process::exit(1);
 }
 
 fn version() -> ! {
-    println!(concat!(env!("CARGO_PKG_NAME"), " ", env!("CARGO_PKG_VERSION")));
+    println!(concat!(
+        env!("CARGO_PKG_NAME"),
+        " ",
+        env!("CARGO_PKG_VERSION")
+    ));
     process::exit(0);
 }
 
 fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, Error> {
     let mut patch_opts = Options::new();
-    patch_opts.optopt("p", "strip", "Strip this many directories in paths of patched files.", "<n>");
+    patch_opts.optopt(
+        "p",
+        "strip",
+        "Strip this many directories in paths of patched files.",
+        "<n>",
+    );
     patch_opts.optflag("R", "reverse", "Reverse the patch direction.");
 
     let file = File::open(series_path)?;
@@ -88,7 +92,8 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, 
                         let mut parts = line.split_whitespace().peekable();
 
                         if let Some(filename) = parts.next() {
-                            Some((|| -> Result<SeriesPatch, Error> { // Poor-man's try block
+                            Some((|| -> Result<SeriesPatch, Error> {
+                                // Poor-man's try block
                                 let filename = std::path::PathBuf::from(filename);
 
                                 // Fast path when there are no options
@@ -100,10 +105,14 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, 
                                     });
                                 }
 
-                                let matches = patch_opts.parse(parts)
-                                    .with_context(|_| format!("Parsing patch options for \"{}\"", filename.display()))?;
+                                let matches = patch_opts.parse(parts).with_context(|_| {
+                                    format!("Parsing patch options for \"{}\"", filename.display())
+                                })?;
 
-                                let strip = matches.opt_str("strip").and_then(|n| n.parse::<usize>().ok()).unwrap_or(DEFAULT_PATCH_STRIP);
+                                let strip = matches
+                                    .opt_str("strip")
+                                    .and_then(|n| n.parse::<usize>().ok())
+                                    .unwrap_or(DEFAULT_PATCH_STRIP);
                                 let reverse = matches.opt_present("R");
 
                                 Ok(SeriesPatch {
@@ -120,12 +129,18 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, 
                 }
                 Err(err) => Some(Err(err.into())),
             }
-        }).collect()
+        })
+        .collect()
 }
 
 fn save_applied_patches(applied_patches: &[SeriesPatch]) -> Result<(), Error> {
     fs::create_dir_all(".pc")?;
-    let mut file_applied_patches = BufWriter::new(fs::OpenOptions::new().create(true).append(true).open(".pc/applied-patches")?);
+    let mut file_applied_patches = BufWriter::new(
+        fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(".pc/applied-patches")?,
+    );
     for applied_patch in applied_patches {
         writeln!(file_applied_patches, "{}", applied_patch.filename.display())?;
     }
@@ -139,26 +154,34 @@ enum PushGoal {
 }
 
 /// Returns true if all patches were applied, false if only some, and error if there was error.
-fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args: F, verbosity: Verbosity) -> Result<bool, Error>
-{
+fn cmd_push<'a, F: Iterator<Item = &'a String>>(
+    matches: &Matches,
+    mut free_args: F,
+    verbosity: Verbosity,
+) -> Result<bool, Error> {
     // Parse "push" specific arguments
     let do_backups = match matches.opt_str("backup") {
         Some(ref s) if s == "always" => ApplyConfigDoBackups::Always,
         Some(ref s) if s == "onfail" => ApplyConfigDoBackups::OnFail,
-        Some(ref s) if s == "never"  => ApplyConfigDoBackups::Never,
-        None                         => ApplyConfigDoBackups::OnFail,
+        Some(ref s) if s == "never" => ApplyConfigDoBackups::Never,
+        None => ApplyConfigDoBackups::OnFail,
         _ => return Err(format_err!("Bad value given to \"backup\" parameter!")),
     };
 
     let backup_count = match matches.opt_str("backup-count") {
         Some(ref s) if s == "all" => ApplyConfigBackupCount::All,
-        Some(n)                   => ApplyConfigBackupCount::Last(n.parse::<usize>()?),
-        None                      => ApplyConfigBackupCount::Last(100),
+        Some(n) => ApplyConfigBackupCount::Last(n.parse::<usize>()?),
+        None => ApplyConfigBackupCount::Last(100),
     };
 
-    let patches_path = matches.opt_str("p").unwrap_or_else(|| "patches".to_string());
+    let patches_path = matches
+        .opt_str("p")
+        .unwrap_or_else(|| "patches".to_string());
 
-    let fuzz = matches.opt_str("fuzz").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
+    let fuzz = matches
+        .opt_str("fuzz")
+        .and_then(|n| n.parse::<usize>().ok())
+        .unwrap_or(0);
 
     if fuzz > 0 {
         println!(concat!("{}: You are using --fuzz {}. The fuzzy patching algorithm in rapidquilt follows the ",
@@ -186,14 +209,18 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     }
 
     // Process series file
-    let series_patches = read_series_file("series")
-        .with_context(|_| "When reading \"series\" file.")?;
+    let series_patches =
+        read_series_file("series").with_context(|_| "When reading \"series\" file.")?;
 
     // Determine the last patch
     let first_patch = if let Ok(applied_patch_filenames) = read_series_file(".pc/applied-patches") {
         for (p1, p2) in series_patches.iter().zip(applied_patch_filenames.iter()) {
             if p1.filename != p2.filename {
-                return Err(format_err!("There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}", p1.filename.display(), p2.filename.display()));
+                return Err(format_err!(
+                    "There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}",
+                    p1.filename.display(),
+                    p2.filename.display()
+                ));
             }
         }
         applied_patch_filenames.len()
@@ -212,7 +239,10 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         PushGoal::All => series_patches.len(),
         PushGoal::Count(n) => std::cmp::min(first_patch + n, series_patches.len()),
         PushGoal::UpTo(patch_filename) => {
-            if let Some(index) = series_patches.iter().position(|item| item.filename == patch_filename) {
+            if let Some(index) = series_patches
+                .iter()
+                .position(|item| item.filename == patch_filename)
+            {
                 if index < first_patch {
                     return Err(format_err!("Patch already applied: {:?}", patch_filename));
                 }
@@ -293,16 +323,40 @@ fn main_result() -> Result<bool, Error> {
     let mut opts = Options::new();
     opts.optflag("a", "all", "apply all patches in series");
     opts.optopt("d", "directory", "working directory", "DIR");
-    opts.optopt("p", "patch-directory", "directory with patches (default: \"patches\")", "DIR");
-    opts.optopt("b", "backup", "create backup files for `quilt pop` (default: onfail)", "always|onfail|never");
-    opts.optopt("", "backup-count", "amount of backup files for `quilt pop` to create (default: 100)", "all|<n>");
+    opts.optopt(
+        "p",
+        "patch-directory",
+        "directory with patches (default: \"patches\")",
+        "DIR",
+    );
+    opts.optopt(
+        "b",
+        "backup",
+        "create backup files for `quilt pop` (default: onfail)",
+        "always|onfail|never",
+    );
+    opts.optopt(
+        "",
+        "backup-count",
+        "amount of backup files for `quilt pop` to create (default: 100)",
+        "all|<n>",
+    );
     opts.optopt("F", "fuzz", "maximal allowed fuzz (default: 0)", "<n>");
-    opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
+    opts.optopt(
+        "",
+        "color",
+        "use colors in output (default: auto)",
+        "always|auto|never",
+    );
     opts.optflag("", "dry-run", "do not save any changes");
     opts.optmulti("A", "analyze", "run additional analysis while patching. You can use this option multiple times to run multiple analyses at once. Available analyses: multiapply", "ANALYSIS"); // TODO: Don't hardcoded the list of available analyses?
     opts.optflag("", "stats", "print statistics in the end");
     opts.optflag("q", "quiet", "only print errors");
-    opts.optflagmulti("v", "verbose", "print extra information. Repeat for more verbosity. It may affect performance.");
+    opts.optflagmulti(
+        "v",
+        "verbose",
+        "print extra information. Repeat for more verbosity. It may affect performance.",
+    );
 
     #[cfg(unix)]
     opts.optflag("", "mmap", "mmap files instead of reading into buffers. This may reduce memory usage and improve \
@@ -311,7 +365,6 @@ fn main_result() -> Result<bool, Error> {
 
     opts.optflag("h", "help", "print this help menu");
     opts.optflag("", "version", "print version");
-
 
     let matches = opts.parse(&args[1..])?;
     let mut free_args = matches.free.iter();
@@ -349,17 +402,21 @@ fn main_result() -> Result<bool, Error> {
     };
 
     if let Some(directory) = matches.opt_str("directory") {
-        env::set_current_dir(&directory).with_context(|_| format!("Changing current directory to \"{}\"", directory))?;
+        env::set_current_dir(&directory)
+            .with_context(|_| format!("Changing current directory to \"{}\"", directory))?;
     }
 
-    if let Some(manual_threads) = env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
-        rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global()?;
+    if let Some(manual_threads) = env::var("RAPIDQUILT_THREADS")
+        .ok()
+        .and_then(|value_txt| value_txt.parse().ok())
+    {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(manual_threads)
+            .build_global()?;
     }
 
     let result = match free_args.next() {
-        Some(cmd) if cmd == "push" => {
-            cmd_push(&matches, free_args, verbosity)
-        }
+        Some(cmd) if cmd == "push" => cmd_push(&matches, free_args, verbosity),
         _ => {
             usage(&opts);
         }
@@ -376,7 +433,7 @@ fn main() {
             }
 
             process::exit(1);
-        },
+        }
         Ok(false) => {
             process::exit(1);
         }

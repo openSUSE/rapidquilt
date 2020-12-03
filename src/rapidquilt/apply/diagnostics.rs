@@ -7,39 +7,41 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::{self, Write};
 use std::hash::BuildHasher;
+use std::io::{self, Write};
 
 use std::path::Path;
 
-use smallvec::{SmallVec, smallvec};
+use smallvec::{smallvec, SmallVec};
 
-use strsim::levenshtein;
 use colored::*;
-use libpatch::analysis::{AnalysisSet, Note, NoteSeverity, fn_analysis_note_noop};
+use libpatch::analysis::{fn_analysis_note_noop, AnalysisSet, Note, NoteSeverity};
 use libpatch::modified_file::ModifiedFile;
+use strsim::levenshtein;
 
-use libpatch::patch::{TextFilePatch, TextHunk, HunkApplyFailureReason, HunkApplyReport, PatchDirection};
 use libpatch::patch::unified::writer::UnifiedPatchHunkHeaderWriter;
 use libpatch::patch::FilePatchApplyReport;
+use libpatch::patch::{
+    HunkApplyFailureReason, HunkApplyReport, PatchDirection, TextFilePatch, TextHunk,
+};
 
 use crate::apply::common::*;
 use crate::apply::Verbosity;
 
-
 /// Try if the patch would apply with some fuzz. It doesn't do any permanent changes.
 pub fn test_apply_with_fuzzes<'arena, H: BuildHasher>(
     patch_status: &PatchStatus,
-    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
-    -> Option<usize>
-{
+    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
+) -> Option<usize> {
     let file = modified_files.get(&patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
 
     // Make our own copy for experiments
     let mut file = file.clone();
 
     // Rollback the failed application
-    patch_status.file_patch.rollback(&mut file, PatchDirection::Forward, &patch_status.report);
+    patch_status
+        .file_patch
+        .rollback(&mut file, PatchDirection::Forward, &patch_status.report);
 
     let current_fuzz = patch_status.report.fuzz();
     let max_fuzz = patch_status.file_patch.max_useable_fuzz();
@@ -52,7 +54,13 @@ pub fn test_apply_with_fuzzes<'arena, H: BuildHasher>(
         // Make another copy for test application
         let mut file = file.clone();
 
-        let report = patch_status.file_patch.apply(&mut file, PatchDirection::Forward, fuzz, &AnalysisSet::default(), &fn_analysis_note_noop);
+        let report = patch_status.file_patch.apply(
+            &mut file,
+            PatchDirection::Forward,
+            fuzz,
+            &AnalysisSet::default(),
+            &fn_analysis_note_noop,
+        );
 
         if report.ok() {
             return Some(fuzz);
@@ -65,26 +73,43 @@ pub fn test_apply_with_fuzzes<'arena, H: BuildHasher>(
 pub fn test_apply_after_reverting_other<'arena, H: BuildHasher>(
     failed_patch_status: &PatchStatus,
     suspect_patch_status: &PatchStatus,
-    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
-    -> bool
-{
-    let file = modified_files.get(&failed_patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
+    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
+) -> bool {
+    let file = modified_files
+        .get(&failed_patch_status.final_filename)
+        .unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
 
     // Make our own copy for experiments
     let mut file = file.clone();
 
     // Rollback the failed application
-    failed_patch_status.file_patch.rollback(&mut file, PatchDirection::Forward, &failed_patch_status.report);
+    failed_patch_status.file_patch.rollback(
+        &mut file,
+        PatchDirection::Forward,
+        &failed_patch_status.report,
+    );
 
     // Revert the suspect
-    let revert_report = suspect_patch_status.file_patch.apply(&mut file, PatchDirection::Revert, suspect_patch_status.report.fuzz(), &AnalysisSet::default(), &fn_analysis_note_noop);
+    let revert_report = suspect_patch_status.file_patch.apply(
+        &mut file,
+        PatchDirection::Revert,
+        suspect_patch_status.report.fuzz(),
+        &AnalysisSet::default(),
+        &fn_analysis_note_noop,
+    );
     if revert_report.failed() {
         // If we couldn't even revert the suspect, we can't test anything
         return false;
     }
 
     // Try to apply our failed patch again
-    let apply_report = failed_patch_status.file_patch.apply(&mut file, PatchDirection::Forward, failed_patch_status.report.fuzz(), &AnalysisSet::default(), &fn_analysis_note_noop);
+    let apply_report = failed_patch_status.file_patch.apply(
+        &mut file,
+        PatchDirection::Forward,
+        failed_patch_status.report.fuzz(),
+        &AnalysisSet::default(),
+        &fn_analysis_note_noop,
+    );
 
     // Report whether it would apply ok now
     apply_report.ok()
@@ -97,15 +122,19 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
     broken_patch_index: usize,
     applied_patches: &Vec<PatchStatus<'arena, '_>>,
     modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
-    writer: &mut W)
-    -> Result<(), io::Error>
-{
+    writer: &mut W,
+) -> Result<(), io::Error> {
     for patch_status in applied_patches.iter().rev() {
         if patch_status.index != broken_patch_index {
             break;
         }
 
-        write!(writer, "  {} {} ", "File".yellow(), patch_status.target_filename.display())?;
+        write!(
+            writer,
+            "  {} {} ",
+            "File".yellow(),
+            patch_status.target_filename.display()
+        )?;
 
         if patch_status.report.ok() {
             writeln!(writer, "{}", "OK".bright_green().bold())?;
@@ -162,13 +191,17 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
                 patch_status.file_patch.hunks()[i].write_header_to(&mut buf)?;
                 writeln!(writer, "\t{}", String::from_utf8_lossy(&buf).bright_blue())?;
 
-                if let HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines) = hunk_report {
+                if let HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines) =
+                    hunk_report
+                {
                     if verbosity >= Verbosity::Normal {
-                        print_difference_to_closest_match(&patch_status.report,
-                                                          &patch_status.file_patch.hunks()[i],
-                                                          &modified_files[&patch_status.target_filename],
-                                                          writer,
-                                                          "      ")?;
+                        print_difference_to_closest_match(
+                            &patch_status.report,
+                            &patch_status.file_patch.hunks()[i],
+                            &modified_files[&patch_status.target_filename],
+                            writer,
+                            "      ",
+                        )?;
                     }
                 }
             }
@@ -184,7 +217,11 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
                     // TODO: Follow thru renames?
 
                     if other_patch_status.target_filename == patch_status.target_filename {
-                        let is_suspect = test_apply_after_reverting_other(patch_status, other_patch_status, modified_files);
+                        let is_suspect = test_apply_after_reverting_other(
+                            patch_status,
+                            other_patch_status,
+                            modified_files,
+                        );
 
                         other_patches.push((other_patch_status.patch_filename, is_suspect));
                     }
@@ -193,9 +230,18 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
                 // Fuzz hint
                 writeln!(writer)?;
                 if let Some(working_fuzz) = test_apply_with_fuzzes(patch_status, modified_files) {
-                    write!(writer, "    {} Patch would apply on this file with fuzz {}", "hint:".purple(), working_fuzz)?;
+                    write!(
+                        writer,
+                        "    {} Patch would apply on this file with fuzz {}",
+                        "hint:".purple(),
+                        working_fuzz
+                    )?;
                 } else {
-                    write!(writer, "    {} Patch would not apply on this file with any fuzz", "hint:".purple())?;
+                    write!(
+                        writer,
+                        "    {} Patch would not apply on this file with any fuzz",
+                        "hint:".purple()
+                    )?;
                 }
                 writeln!(writer)?;
 
@@ -206,7 +252,11 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
                 if other_patches.is_empty() {
                     writeln!(writer, "No previous patches touched this file.")?;
                 } else {
-                    writeln!(writer, "{} previous patches touched this file:", other_patches.len())?;
+                    writeln!(
+                        writer,
+                        "{} previous patches touched this file:",
+                        other_patches.len()
+                    )?;
 
                     let mut any_suspect = false;
                     for (other_patch, is_suspect) in other_patches {
@@ -220,7 +270,11 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
 
                     if any_suspect {
                         writeln!(writer)?;
-                        writeln!(writer, "      {} = Reverting the patch fixes this failure.", "!".bright_red())?;
+                        writeln!(
+                            writer,
+                            "      {} = Reverting the patch fixes this failure.",
+                            "!".bright_red()
+                        )?;
                     }
                 }
             }
@@ -238,9 +292,8 @@ pub fn print_difference_to_closest_match<W: Write>(
     hunk: &TextHunk,
     modified_file: &ModifiedFile,
     writer: &mut W,
-    prefix: &str)
-    -> Result<(), io::Error>
-{
+    prefix: &str,
+) -> Result<(), io::Error> {
     // Get a HunkView that will be the same as the one used during patching
     let hunk_view = hunk.view(report.direction(), report.fuzz());
 
@@ -255,13 +308,17 @@ pub fn print_difference_to_closest_match<W: Write>(
     // between. But we need to be smarter and work on the character level, so we start by turning
     // the file and the hunk into a vector of strings.
 
-    let file_content_txt = modified_file.content.iter().map(|line| {
-        String::from_utf8_lossy(line)
-    }).collect::<Vec<_>>();
+    let file_content_txt = modified_file
+        .content
+        .iter()
+        .map(|line| String::from_utf8_lossy(line))
+        .collect::<Vec<_>>();
 
-    let hunk_content_txt = hunk_view.remove_content().iter().map(|line| {
-        String::from_utf8_lossy(line)
-    }).collect::<Vec<_>>();
+    let hunk_content_txt = hunk_view
+        .remove_content()
+        .iter()
+        .map(|line| String::from_utf8_lossy(line))
+        .collect::<Vec<_>>();
 
     // Next we will calculate levenshtein distance for every pair of lines from the file and from
     // the hunk. We will save these results into MxN matrix, where M is length of the hunk and N is
@@ -308,7 +365,6 @@ pub fn print_difference_to_closest_match<W: Write>(
     let best_path = pathfinding::directed::dijkstra::dijkstra(
         // Starting point - the artificial point out of the matrix.
         &(std::usize::MAX, std::usize::MAX),
-
         // Function that for given node (x, y) returns iterable with its successors and cost to walk
         // to them.
         |&(x, y)| -> SmallVec<[((usize, usize), Score); 3]> {
@@ -318,7 +374,9 @@ pub fn print_difference_to_closest_match<W: Write>(
             // If this is the artificial starting node, we can make step to every node in the left
             // side. This basically gives us multiple starting points.
             if x == std::usize::MAX {
-                return (0..file_content_txt.len()).map(|y1| ((0, y1), matrix[y1][0])).collect();
+                return (0..file_content_txt.len())
+                    .map(|y1| ((0, y1), matrix[y1][0]))
+                    .collect();
             }
 
             // If we could only step out of the matrix, there is nowhere else to go.
@@ -330,22 +388,19 @@ pub fn print_difference_to_closest_match<W: Write>(
                 // Move down. We proceed one line further in the file while staying on the same line
                 // in the hunk. If this turns out to be the shortest path, it means that an extra
                 // line was added to the file.
-                ((x,     y + 1), file_content_txt[y + 1].len()),
-
+                ((x, y + 1), file_content_txt[y + 1].len()),
                 // Diagonal move. We take one line from the hunk and from the file at cost of
                 // editing the line from one to another. I.e. if they are the same, the edit
                 // distance is 0 and so the cost is 0.
                 ((x + 1, y + 1), matrix[y + 1][x + 1] * 5),
-
                 // Move right. We proceed one line further in the hunk while staying on the same
                 // line in the file. If this turns out to be the shortest path, it means that there
                 // is line in hunk that is no longer present in the file.
-                ((x + 1, y),     hunk_content_txt[x + 1].len() * 5),
+                ((x + 1, y), hunk_content_txt[x + 1].len() * 5),
             ]
         },
-
         // Success condition.
-        |&(x, _)| x == hunk_content_txt.len() - 1
+        |&(x, _)| x == hunk_content_txt.len() - 1,
     );
 
     // Now we got the best path from the left to the right side of the matrix. Now we have to
@@ -358,24 +413,55 @@ pub fn print_difference_to_closest_match<W: Write>(
         InHunk,
     }
 
-    let write_line = |writer: &mut W, line_type: WriteLineType, line_str: &str, line_num: Option<isize>| -> Result<(), io::Error> {
+    let write_line = |writer: &mut W,
+                      line_type: WriteLineType,
+                      line_str: &str,
+                      line_num: Option<isize>|
+     -> Result<(), io::Error> {
         let line_num_str = match line_num {
             Some(line_num) => Cow::Owned(format!("{:5}:", line_num + 1)),
-            None                 => Cow::Borrowed("     :"), // 5 characters for number + 1 for ':'
+            None => Cow::Borrowed("     :"), // 5 characters for number + 1 for ':'
         };
 
         match line_type {
-            WriteLineType::Matching => write!(writer, "{}{}", prefix, format!("{} {}", line_num_str, line_str).bright_black())?,
-            WriteLineType::InFile   => write!(writer, "{}{}", prefix, format!("{} {}", line_num_str, line_str).bright_cyan())?,
-            WriteLineType::InHunk   => write!(writer, "{}{}", prefix, format!("{} {}", line_num_str, line_str).bright_magenta())?,
+            WriteLineType::Matching => write!(
+                writer,
+                "{}{}",
+                prefix,
+                format!("{} {}", line_num_str, line_str).bright_black()
+            )?,
+            WriteLineType::InFile => write!(
+                writer,
+                "{}{}",
+                prefix,
+                format!("{} {}", line_num_str, line_str).bright_cyan()
+            )?,
+            WriteLineType::InHunk => write!(
+                writer,
+                "{}{}",
+                prefix,
+                format!("{} {}", line_num_str, line_str).bright_magenta()
+            )?,
         }
 
         if !line_str.ends_with('\n') {
             writeln!(writer)?;
-            writeln!(writer, "{}      {}{}", prefix, " ".repeat(line_str.len()), "^ no new line".bright_red())?;
+            writeln!(
+                writer,
+                "{}      {}{}",
+                prefix,
+                " ".repeat(line_str.len()),
+                "^ no new line".bright_red()
+            )?;
         }
         if line_str.ends_with("\r\n") {
-            writeln!(writer, "{}      {}{}", prefix, " ".repeat(line_str.len()), "^ windows new line".bright_red())?;
+            writeln!(
+                writer,
+                "{}      {}{}",
+                prefix,
+                " ".repeat(line_str.len()),
+                "^ windows new line".bright_red()
+            )?;
         }
 
         Ok(())
@@ -383,24 +469,52 @@ pub fn print_difference_to_closest_match<W: Write>(
 
     if let Some(best_path) = best_path {
         writeln!(writer)?;
-        writeln!(writer, "{}{} Comparison of the content of the {} and the content expected by the {}:", prefix, "hint:".purple(), "file".bright_cyan(), "hunk".bright_magenta())?;
+        writeln!(
+            writer,
+            "{}{} Comparison of the content of the {} and the content expected by the {}:",
+            prefix,
+            "hint:".purple(),
+            "file".bright_cyan(),
+            "hunk".bright_magenta()
+        )?;
         writeln!(writer)?;
 
         for step in best_path.0.windows(2) {
             let (prev_x, prev_y) = step[0];
-            let (x, y)           = step[1];
+            let (x, y) = step[1];
 
             if prev_x == std::usize::MAX || (prev_x + 1 == x && prev_y + 1 == y) {
                 if matrix[y][x] == 0 {
-                    write_line(writer, WriteLineType::Matching, &file_content_txt[y], Some(y as isize))?;
+                    write_line(
+                        writer,
+                        WriteLineType::Matching,
+                        &file_content_txt[y],
+                        Some(y as isize),
+                    )?;
                 } else {
-                    write_line(writer, WriteLineType::InFile, &file_content_txt[y], Some(y as isize))?;
-                    write_line(writer, WriteLineType::InHunk, &hunk_content_txt[x], Some(y as isize))?;
+                    write_line(
+                        writer,
+                        WriteLineType::InFile,
+                        &file_content_txt[y],
+                        Some(y as isize),
+                    )?;
+                    write_line(
+                        writer,
+                        WriteLineType::InHunk,
+                        &hunk_content_txt[x],
+                        Some(y as isize),
+                    )?;
                 }
             } else if prev_x + 1 == x {
-                write_line(writer, WriteLineType::InHunk, &hunk_content_txt[x], None)?; // No line number if this line is just in hunk
+                write_line(writer, WriteLineType::InHunk, &hunk_content_txt[x], None)?;
+            // No line number if this line is just in hunk
             } else {
-                write_line(writer, WriteLineType::InFile, &file_content_txt[y], Some(y as isize))?;
+                write_line(
+                    writer,
+                    WriteLineType::InFile,
+                    &file_content_txt[y],
+                    Some(y as isize),
+                )?;
             }
         }
 
@@ -411,18 +525,36 @@ pub fn print_difference_to_closest_match<W: Write>(
 }
 
 /// This function prints note from libpatch'es analysis
-pub fn print_analysis_note(patch_filename: &Path, note: &dyn Note, file_patch: &TextFilePatch) -> Result<(), io::Error> {
+pub fn print_analysis_note(
+    patch_filename: &Path,
+    note: &dyn Note,
+    file_patch: &TextFilePatch,
+) -> Result<(), io::Error> {
     let stderr = io::stderr();
     let mut out = stderr.lock();
 
     writeln!(out, "{} {}", "Patch".yellow(), patch_filename.display())?;
-    writeln!(out, "  {} {}", "File".yellow(), file_patch.old_filename().unwrap_or_else(|| file_patch.new_filename().unwrap()).display())?;
+    writeln!(
+        out,
+        "  {} {}",
+        "File".yellow(),
+        file_patch
+            .old_filename()
+            .unwrap_or_else(|| file_patch.new_filename().unwrap())
+            .display()
+    )?;
 
     if let Some(hunk_index) = note.hunk() {
         let mut buf = Vec::<u8>::new();
         file_patch.hunks()[hunk_index].write_header_to(&mut buf)?;
 
-        writeln!(out, "    {} #{}\t{}", "Hunk".yellow(), hunk_index + 1, String::from_utf8_lossy(&buf).bright_blue())?;
+        writeln!(
+            out,
+            "    {} #{}\t{}",
+            "Hunk".yellow(),
+            hunk_index + 1,
+            String::from_utf8_lossy(&buf).bright_blue()
+        )?;
         write!(out, "      ")?;
     } else {
         write!(out, "    ")?;

@@ -1,17 +1,15 @@
 // Licensed under the MIT license. See LICENSE.md
 
-use std::marker::PhantomData;
-use std::vec::Vec;
-use std::io;
 use std::fs::File;
-use std::ptr;
+use std::io;
+use std::marker::PhantomData;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
+use std::ptr;
 use std::sync::Mutex;
+use std::vec::Vec;
 
 use super::{Arena, Stats};
-
-
 
 struct Mapping {
     start: *mut libc::c_void,
@@ -52,12 +50,13 @@ impl<'a> Arena for MmapArena<'a> {
         let fd = file.as_raw_fd();
 
         let start = unsafe {
-            let start = libc::mmap(ptr::null_mut(),
+            let start = libc::mmap(
+                ptr::null_mut(),
                 size,
                 libc::PROT_READ,
                 libc::MAP_PRIVATE,
                 fd,
-                0
+                0,
             );
 
             if start == libc::MAP_FAILED {
@@ -67,16 +66,11 @@ impl<'a> Arena for MmapArena<'a> {
             start
         };
 
-        let mapping = Mapping {
-            start,
-            size,
-        };
+        let mapping = Mapping { start, size };
 
         self.mappings.lock().unwrap().push(mapping); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
 
-        let slice = unsafe {
-            std::slice::from_raw_parts::<'a>(start as *const u8, size)
-        };
+        let slice = unsafe { std::slice::from_raw_parts::<'a>(start as *const u8, size) };
 
         Ok(slice)
     }

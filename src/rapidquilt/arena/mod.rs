@@ -1,5 +1,5 @@
-use std::io;
 use std::fmt;
+use std::io;
 use std::path::Path;
 
 mod file_arena;
@@ -11,7 +11,6 @@ pub use self::file_arena::FileArena;
 
 #[cfg(unix)]
 pub use self::mmap_arena::MmapArena;
-
 
 pub trait Arena: Sync {
     /// Load the file and return byte slice of its complete content. The slice
@@ -29,6 +28,10 @@ pub struct Stats {
 
 impl fmt::Display for Stats {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Arena Statistics (loaded files: {}, total size: {} B)", self.loaded_files, self.total_size)
+        write!(
+            f,
+            "Arena Statistics (loaded files: {}, total size: {} B)",
+            self.loaded_files, self.total_size
+        )
     }
 }

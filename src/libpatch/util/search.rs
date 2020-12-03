@@ -1,22 +1,24 @@
 use std::cmp::min;
-use std::hash::Hash;
 use std::hash::BuildHasherDefault;
+use std::hash::Hash;
 
 use std::collections::HashSet;
-
-
 
 /// Horspool-like algorithm optimized for searching with huge alphabets where
 /// letters are rarely repeated. I.e. useful for searching arrays of byte slices
 /// representing lines in files.
 pub struct Searcher<'needle, T>
-where T: Clone + Eq + Hash + PartialEq {
+where
+    T: Clone + Eq + Hash + PartialEq,
+{
     needle: &'needle [T],
     filter: HashSet<T, BuildHasherDefault<seahash::SeaHasher>>, // Note: This turned out to be faster than any of the filters from probabilistic-collections
 }
 
 impl<'needle, T> Searcher<'needle, T>
-where T: Clone + Eq + Hash + PartialEq {
+where
+    T: Clone + Eq + Hash + PartialEq,
+{
     pub fn new(needle: &'needle [T]) -> Self {
         let mut filter = HashSet::default();
 
@@ -24,13 +26,13 @@ where T: Clone + Eq + Hash + PartialEq {
             filter.insert(item.clone());
         }
 
-        Searcher {
-            needle,
-            filter
-        }
+        Searcher { needle, filter }
     }
 
-    pub fn search_in<'haystack: 'searcher, 'searcher>(&'searcher self, haystack: &'haystack [T]) -> impl Iterator<Item = usize> + 'searcher {
+    pub fn search_in<'haystack: 'searcher, 'searcher>(
+        &'searcher self,
+        haystack: &'haystack [T],
+    ) -> impl Iterator<Item = usize> + 'searcher {
         SearcherIterator {
             searcher: self,
             position: 0,
@@ -40,14 +42,19 @@ where T: Clone + Eq + Hash + PartialEq {
 }
 
 struct SearcherIterator<'needle, 'haystack, 'searcher, T>
-where T: Clone + Eq + Hash + PartialEq {
+where
+    T: Clone + Eq + Hash + PartialEq,
+{
     searcher: &'searcher Searcher<'needle, T>,
     position: usize,
     haystack: &'haystack [T],
 }
 
-impl<'needle, 'haystack, 'searcher, T> Iterator for SearcherIterator<'needle, 'haystack, 'searcher, T>
-where T: Clone + Eq + Hash + PartialEq {
+impl<'needle, 'haystack, 'searcher, T> Iterator
+    for SearcherIterator<'needle, 'haystack, 'searcher, T>
+where
+    T: Clone + Eq + Hash + PartialEq,
+{
     type Item = usize;
 
     fn next(&mut self) -> Option<usize> {
@@ -66,8 +73,15 @@ where T: Clone + Eq + Hash + PartialEq {
             let last_item = &self.haystack[self.position + self.searcher.needle.len() - 1];
             if self.searcher.filter.contains(last_item) {
                 // ... it is one of them, manually explore the current window.
-                for pos in self.position..min(self.position + self.searcher.needle.len(), self.haystack.len() + 1 - self.searcher.needle.len()) {
-                    if &self.haystack[pos..(pos + self.searcher.needle.len())] == self.searcher.needle {
+                for pos in self.position
+                    ..min(
+                        self.position + self.searcher.needle.len(),
+                        self.haystack.len() + 1 - self.searcher.needle.len(),
+                    )
+                {
+                    if &self.haystack[pos..(pos + self.searcher.needle.len())]
+                        == self.searcher.needle
+                    {
                         // We found one! Move position behind it and return it.
                         self.position = pos + 1;
                         return Some(self.position - 1);
@@ -189,7 +203,7 @@ mod tests {
 #[cfg(feature = "bencher")]
 mod benchmarks {
     use super::*;
-    use test::{Bencher, black_box};
+    use test::{black_box, Bencher};
 
     fn prepare_big_big() -> (Vec<u32>, Vec<u32>) {
         let haystack = (0..10000).map(|i| i % 500).collect();
@@ -224,7 +238,9 @@ mod benchmarks {
         let (haystack, needle) = prepare_big_big();
 
         b.iter(|| {
-            for i in Searcher::new(&needle).search_in(&haystack) { black_box(i); }
+            for i in Searcher::new(&needle).search_in(&haystack) {
+                black_box(i);
+            }
         });
     }
 
@@ -246,7 +262,9 @@ mod benchmarks {
         let (haystack, needle) = prepare_big_small();
 
         b.iter(|| {
-            for i in Searcher::new(&needle).search_in(&haystack) { black_box(i); }
+            for i in Searcher::new(&needle).search_in(&haystack) {
+                black_box(i);
+            }
         });
     }
 
@@ -268,7 +286,9 @@ mod benchmarks {
         let (haystack, needle) = prepare_small_big();
 
         b.iter(|| {
-            for i in Searcher::new(&needle).search_in(&haystack) { black_box(i); }
+            for i in Searcher::new(&needle).search_in(&haystack) {
+                black_box(i);
+            }
         });
     }
 
@@ -290,7 +310,9 @@ mod benchmarks {
         let (haystack, needle) = prepare_small_small();
 
         b.iter(|| {
-            for i in Searcher::new(&needle).search_in(&haystack) { black_box(i); }
+            for i in Searcher::new(&needle).search_in(&haystack) {
+                black_box(i);
+            }
         });
     }
 

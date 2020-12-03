@@ -4,11 +4,10 @@ use std::vec::Vec;
 
 use failure::Error;
 
-use crate::analysis::{AnalysisSet, fn_analysis_note_noop};
+use crate::analysis::{fn_analysis_note_noop, AnalysisSet};
 use crate::modified_file::ModifiedFile;
-use crate::patch::PatchDirection;
 use crate::patch::unified::parser::parse_patch;
-
+use crate::patch::PatchDirection;
 
 #[cfg(test)]
 #[test]
@@ -18,7 +17,7 @@ fn all_files() -> Result<(), Error> {
         let entry = entry?;
         let path = entry.path();
         match path.extension() {
-            Some(extension) if extension == "patch" => {},
+            Some(extension) if extension == "patch" => {}
             _ => continue,
         }
 
@@ -43,7 +42,11 @@ fn all_files() -> Result<(), Error> {
 
         // Check that there is exactly one FilePatch
         if patch.file_patches.len() != 1 {
-            panic!("Test patch {} is for {} files, expected exactly one!", path.display(), patch.file_patches.len());
+            panic!(
+                "Test patch {} is for {} files, expected exactly one!",
+                path.display(),
+                patch.file_patches.len()
+            );
         }
         let file_patch = patch.file_patches.pop().unwrap();
         std::mem::drop(patch); // XXX: Not sure why I have to drop manually here, but otherwise I get strange borrow check error.
@@ -51,11 +54,24 @@ fn all_files() -> Result<(), Error> {
         // Load the target file
         // Note: In this case we always expect the old_filename to exist, so we
         //       select it directly.
-        let file = fs::read(path.with_file_name(file_patch.old_filename().expect("old_filename missing!").as_ref()))?;
+        let file = fs::read(
+            path.with_file_name(
+                file_patch
+                    .old_filename()
+                    .expect("old_filename missing!")
+                    .as_ref(),
+            ),
+        )?;
         let mut modified_file = ModifiedFile::new(&file, true);
 
         // Patch it
-        let report = file_patch.apply(&mut modified_file, PatchDirection::Forward, fuzz, &AnalysisSet::default(), &fn_analysis_note_noop);
+        let report = file_patch.apply(
+            &mut modified_file,
+            PatchDirection::Forward,
+            fuzz,
+            &AnalysisSet::default(),
+            &fn_analysis_note_noop,
+        );
 
         // Check if it failed when shouldn't or succeeded when it was expected to fail
         let error_file = path.with_extension("error");
@@ -66,10 +82,13 @@ fn all_files() -> Result<(), Error> {
             }
 
             // We are done with this patch then
-            continue
+            continue;
         }
         if !should_fail && report.failed() {
-            panic!("The patch unexpectedly failed to apply! Report: {:#?}", report);
+            panic!(
+                "The patch unexpectedly failed to apply! Report: {:#?}",
+                report
+            );
         }
 
         // Write the output to a buffer

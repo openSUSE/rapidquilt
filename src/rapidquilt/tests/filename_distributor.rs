@@ -1,6 +1,5 @@
 use crate::apply::parallel::FilenameDistributor;
 
-
 #[test]
 fn test_empty() {
     let f = FilenameDistributor::<String>::new(1);

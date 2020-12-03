@@ -42,32 +42,30 @@
 //!
 //! Collect results and print reports.
 
-
 use std;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
 use std::hash::{BuildHasherDefault, Hash};
+use std::io::{self, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{mpsc, Barrier, Mutex};
 
 use colored::*;
 use failure::{Error, ResultExt};
-use seahash;
 use rayon;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use seahash;
 
-use crate::apply::*;
 use crate::apply::common::*;
 use crate::apply::diagnostics::*;
+use crate::apply::*;
 use crate::arena::Arena;
 
 use libpatch::analysis::{AnalysisSet, Note};
-use libpatch::patch::{PatchDirection, TextFilePatch};
-use libpatch::patch::unified::parser::parse_patch;
 use libpatch::modified_file::ModifiedFile;
-
+use libpatch::patch::unified::parser::parse_patch;
+use libpatch::patch::{PatchDirection, TextFilePatch};
 
 /// This is tool that distributes filenames among threads. Currently it doesn't
 /// do any overly smart planning, it just distributes them one by one as they
@@ -91,7 +89,9 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
     pub fn new(thread_count: usize) -> Self {
         FilenameDistributor {
             thread_count,
-            filename_to_index: HashMap::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default()),
+            filename_to_index: HashMap::with_hasher(
+                BuildHasherDefault::<seahash::SeaHasher>::default(),
+            ),
             connected_components: Vec::new(),
         }
     }
@@ -109,7 +109,10 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
         if let Some(new_filename) = new_filename {
             // It is a rename, so also find or add the new filename.
             let next_index = self.connected_components.len();
-            let new_filename_index = *self.filename_to_index.entry(new_filename).or_insert(next_index);
+            let new_filename_index = *self
+                .filename_to_index
+                .entry(new_filename)
+                .or_insert(next_index);
             if new_filename_index == next_index {
                 self.connected_components.push(new_filename_index);
             }
@@ -129,7 +132,8 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
     pub fn build(mut self) -> HashMap<T, usize, BuildHasherDefault<seahash::SeaHasher>> {
         for i in 0..self.connected_components.len() {
             if self.connected_components[i] != i {
-                self.connected_components[i] = self.connected_components[self.connected_components[i]];
+                self.connected_components[i] =
+                    self.connected_components[self.connected_components[i]];
             }
         }
 
@@ -183,7 +187,7 @@ struct WorkerReport {
 /// `broadcast_message`: Function that sends given `Message` to all threads (including self).
 /// `earliest_broken_patch_index`: Atomic variable for sharing the index of the earlier patch that failed to apply.
 /// `analyses`: Set of analyses to run.
-fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
+fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)>(
     config: &'config ApplyConfig,
     arena: &'arena dyn Arena,
     thread_id: usize,
@@ -193,11 +197,14 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
     receiver: &mpsc::Receiver<Message>,
     broadcast_message: BroadcastFn,
     earliest_broken_patch_index: &AtomicUsize,
-    analyses: &AnalysisSet)
-    -> Result<WorkerReport, Error>
-{
+    analyses: &AnalysisSet,
+) -> Result<WorkerReport, Error> {
     let mut applied_patches = Vec::<PatchStatus>::with_capacity(thread_file_patches.len());
-    let mut modified_files = HashMap::<Cow<'arena, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut modified_files = HashMap::<
+        Cow<'arena, Path>,
+        ModifiedFile,
+        BuildHasherDefault<seahash::SeaHasher>,
+    >::default();
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
     for (index, text_file_patch) in thread_file_patches {
@@ -217,15 +224,17 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
         };
 
         // Try to apply this one `FilePatch`
-        match apply_one_file_patch(config,
-                                   index,
-                                   text_file_patch,
-                                   config.series_patches[index].reverse,
-                                   &mut applied_patches,
-                                   &mut modified_files,
-                                   arena,
-                                   &analyses,
-                                   &fn_analysis_note) {
+        match apply_one_file_patch(
+            config,
+            index,
+            text_file_patch,
+            config.series_patches[index].reverse,
+            &mut applied_patches,
+            &mut modified_files,
+            arena,
+            &analyses,
+            &fn_analysis_note,
+        ) {
             Ok(false) => {
                 // Patch failed to apply...
 
@@ -233,7 +242,11 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
                 // TODO: Use `AtomicUsize::fetch_min` once it is stable. Feature "atomic_min_max".
                 let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
                 while index < current {
-                    current = earliest_broken_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
+                    current = earliest_broken_patch_index.compare_and_swap(
+                        current,
+                        index,
+                        Ordering::AcqRel,
+                    );
                 }
 
                 // Signal everyone
@@ -269,8 +282,14 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
                 break;
             }
 
-            let mut file = modified_files.get_mut(applied_patch.final_filename.as_ref()).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-            applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+            let mut file = modified_files
+                .get_mut(applied_patch.final_filename.as_ref())
+                .unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+            applied_patch.file_patch.rollback(
+                &mut file,
+                PatchDirection::Forward,
+                &applied_patch.report,
+            );
 
             applied_patches.pop();
         }
@@ -283,17 +302,18 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
         }
 
         // Wait until everybody is done or someone finds that earlier patch failed
-        match receiver.recv().unwrap() { // NOTE(unwrap): Receive can only fail if the receiving side is disconnected, which can not happen in our case - it is held by everybody including us.
+        match receiver.recv().unwrap() {
+            // NOTE(unwrap): Receive can only fail if the receiving side is disconnected, which can not happen in our case - it is held by everybody including us.
             Message::NewEarliestBrokenPatchIndex => {
                 // Ok, time to rollback some more...
                 continue;
-            },
+            }
 
             Message::ThreadDoneApplying => {
                 received_done_applying_count += 1;
                 // Time to rollback some more or break out if all threads are done
                 continue;
-            },
+            }
 
             Message::TerminatingEarly => {
                 // Some other thread gave up early because of error, if we
@@ -311,7 +331,13 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
 
     // Analyze failure, in case there was any
     let mut failure_analysis = Vec::<u8>::new();
-    if let Err(err) = analyze_patch_failure(config.verbosity, earliest_broken_patch_index, &applied_patches, &modified_files, &mut failure_analysis) {
+    if let Err(err) = analyze_patch_failure(
+        config.verbosity,
+        earliest_broken_patch_index,
+        &applied_patches,
+        &modified_files,
+        &mut failure_analysis,
+    ) {
         barrier.wait(); // We're forced to wait on the barrier before leaving, if not, the rest of threads will hang
         return Err(Error::from_boxed_compat(Box::new(err)));
     }
@@ -319,7 +345,12 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
     // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        if let Err(err) = rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, config.verbosity) {
+        if let Err(err) = rollback_and_save_rej_files(
+            &mut applied_patches,
+            &mut modified_files,
+            earliest_broken_patch_index,
+            config.verbosity,
+        ) {
             barrier.wait(); // We're forced to wait on the barrier before leaving, if not, the rest of threads will hang
             return Err(err);
         }
@@ -329,8 +360,13 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
         }
 
         // Save all the files we modified
-        let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        if let Err(err) = save_modified_files(&modified_files, &mut directories_for_cleaning, config.verbosity) {
+        let mut directories_for_cleaning =
+            HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
+        if let Err(err) = save_modified_files(
+            &modified_files,
+            &mut directories_for_cleaning,
+            config.verbosity,
+        ) {
             barrier.wait(); // We're forced to wait on the barrier before leaving, if not, the rest of threads will hang
             return Err(err);
         }
@@ -338,9 +374,9 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
         clean_empty_directories(directories_for_cleaning)?;
 
         // Maybe save some backup files
-        if config.do_backups == ApplyConfigDoBackups::Always ||
-        (config.do_backups == ApplyConfigDoBackups::OnFail &&
-            earliest_broken_patch_index != std::usize::MAX)
+        if config.do_backups == ApplyConfigDoBackups::Always
+            || (config.do_backups == ApplyConfigDoBackups::OnFail
+                && earliest_broken_patch_index != std::usize::MAX)
         {
             if config.verbosity >= Verbosity::Normal && thread_id == 0 {
                 println!("Saving quilt backup files ({})...", config.backup_count);
@@ -354,26 +390,41 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
 
             let down_to_index = match config.backup_count {
                 ApplyConfigBackupCount::All => 0,
-                ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+                ApplyConfigBackupCount::Last(n) => {
+                    if final_patch > n {
+                        final_patch - n
+                    } else {
+                        0
+                    }
+                }
             };
 
-            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, down_to_index, config.verbosity)?;
+            rollback_and_save_backup_files(
+                &mut applied_patches,
+                &mut modified_files,
+                down_to_index,
+                config.verbosity,
+            )?;
         }
     }
 
-    Ok(WorkerReport {
-        failure_analysis,
-    })
+    Ok(WorkerReport { failure_analysis })
 }
 
 /// Apply all patches from the `config` in parallel
-pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
-    -> Result<ApplyResult, Error>
-{
+pub fn apply_patches<'config, 'arena>(
+    config: &'config ApplyConfig,
+    arena: &'arena dyn Arena,
+    analyses: &AnalysisSet,
+) -> Result<ApplyResult, Error> {
     let threads = rayon::current_num_threads();
 
     if config.verbosity >= Verbosity::Normal {
-        println!("Applying {} patches using {} threads...", config.series_patches.len(), threads);
+        println!(
+            "Applying {} patches using {} threads...",
+            config.series_patches.len(),
+            threads
+        );
     }
 
     if config.verbosity >= Verbosity::Verbose {
@@ -381,15 +432,20 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     }
 
     // Load all patches multi-threaded using rayon's parallel iterator.
-    let mut text_patches: Vec<_> = config.series_patches.par_iter().map(|series_patch| -> Result<_, Error> {
-        if config.verbosity >= Verbosity::ExtraVerbose {
-            // This will fight for stdout lock. But that's expected in ExtraVerbose mode...
-            println!("Parsing patch: {:?}", series_patch.filename);
-        }
-        let raw_patch_data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
-        let text_patch = parse_patch(raw_patch_data, series_patch.strip, false)?;
-        Ok(text_patch)
-    }).collect();
+    let mut text_patches: Vec<_> = config
+        .series_patches
+        .par_iter()
+        .map(|series_patch| -> Result<_, Error> {
+            if config.verbosity >= Verbosity::ExtraVerbose {
+                // This will fight for stdout lock. But that's expected in ExtraVerbose mode...
+                println!("Parsing patch: {:?}", series_patch.filename);
+            }
+            let raw_patch_data =
+                arena.load_file(&config.patches_path.join(&series_patch.filename))?;
+            let text_patch = parse_patch(raw_patch_data, series_patch.strip, false)?;
+            Ok(text_patch)
+        })
+        .collect();
 
     if config.verbosity >= Verbosity::Verbose {
         println!("Scheduling files to threads...");
@@ -407,7 +463,10 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
                 // purposes we act like if any `FilePatch` that has `old_filename != new_filename`
                 // is renaming, so that both of them will be scheduled to the same thread.
 
-                let (filename, rename_to_filename) = match (text_file_patch.old_filename(), text_file_patch.new_filename()) {
+                let (filename, rename_to_filename) = match (
+                    text_file_patch.old_filename(),
+                    text_file_patch.new_filename(),
+                ) {
                     // Only `old_filename` => use that.
                     (Some(old_filename), None) => (old_filename, None),
 
@@ -415,7 +474,9 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
                     (None, Some(new_filename)) => (new_filename, None),
 
                     // `old_filename` and `new_filename` that are the same => use that.
-                    (Some(old_filename), Some(new_filename)) if old_filename == new_filename => (old_filename, None),
+                    (Some(old_filename), Some(new_filename)) if old_filename == new_filename => {
+                        (old_filename, None)
+                    }
 
                     // `old_filename` and `new_filename` => consider it a rename!
                     (Some(old_filename), Some(new_filename)) => (old_filename, Some(new_filename)),
@@ -424,7 +485,8 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
                     (None, None) => unreachable!(),
                 };
 
-                filename_distributor.add(filename.clone(), rename_to_filename.cloned()); // Note: clone/cloned is used on Cow, so most of the time it will be just copy of reference
+                filename_distributor.add(filename.clone(), rename_to_filename.cloned());
+                // Note: clone/cloned is used on Cow, so most of the time it will be just copy of reference
             }
         }
     }
@@ -433,16 +495,24 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
 
     // Now use the filename->thread_id map to distribute the actual `FilePatch`es into queues (`Vec`s)
     // for each thread.
-    let mut text_file_patches_per_thread: Vec<Vec<(usize, TextFilePatch)>> = vec![Vec::with_capacity(
-        config.series_patches.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
-    ); threads];
+    let mut text_file_patches_per_thread: Vec<Vec<(usize, TextFilePatch)>> = vec![
+        Vec::with_capacity(
+            config.series_patches.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
+        );
+        threads
+    ];
     for (index, text_patch) in text_patches.drain(..).enumerate() {
-        let mut text_patch = text_patch.with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
+        let mut text_patch = text_patch.with_context(|_| ApplyError::PatchLoad {
+            patch_filename: config.series_patches[index].filename.clone(),
+        })?;
 
         for text_file_patch in text_patch.file_patches.drain(..) {
             // Note that we can dispatch by `old_filename` or `new_filename`, we
             // made sure that both will be assigned to the same `thread_id`.
-            let thread_id = filename_to_thread_id[text_file_patch.old_filename().or(text_file_patch.new_filename()).unwrap()];
+            let thread_id = filename_to_thread_id[text_file_patch
+                .old_filename()
+                .or(text_file_patch.new_filename())
+                .unwrap()];
             text_file_patches_per_thread[thread_id].push((index, text_file_patch));
         }
     }
@@ -458,9 +528,11 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     let earliest_broken_patch_index = &AtomicUsize::new(std::usize::MAX);
 
     // Prepare channels to send messages between applying threads.
-    let (senders, receivers): (Vec<_>, Vec<_>) = (0..threads).map(|_| {
-        mpsc::sync_channel::<Message>(threads * 2) // At the moment every thread can send at most 2 messages, so lets use fixed size channel.
-    }).unzip();
+    let (senders, receivers): (Vec<_>, Vec<_>) = (0..threads)
+        .map(|_| {
+            mpsc::sync_channel::<Message>(threads * 2) // At the moment every thread can send at most 2 messages, so lets use fixed size channel.
+        })
+        .unzip();
 
     // Create barrier for synchronization
     let barrier = &Barrier::new(threads);
@@ -472,7 +544,11 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     // Run the applying threads
     rayon::scope(move |scope| {
         // Combine the thread_id, the patches for the thread and the receiving part of the channel
-        for ((thread_id, thread_file_patches), receiver) in text_file_patches_per_thread.drain(..).enumerate().zip(receivers) {
+        for ((thread_id, thread_file_patches), receiver) in text_file_patches_per_thread
+            .drain(..)
+            .enumerate()
+            .zip(receivers)
+        {
             // Build the broadcast_message lambda
             let broadcast_message = {
                 let senders = senders.clone();
@@ -495,7 +571,8 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
                     &receiver,
                     broadcast_message,
                     earliest_broken_patch_index,
-                    analyses);
+                    analyses,
+                );
 
                 thread_results_ref.lock().unwrap().push(result); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
             });
@@ -506,9 +583,8 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     let thread_results = thread_results.into_inner().unwrap(); // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
 
     // Split successfull reports and errors
-    let (thread_reports, mut thread_errors): (_, Vec<Result<WorkerReport, Error>>) = thread_results.into_iter().partition(|r| {
-        r.is_ok()
-    });
+    let (thread_reports, mut thread_errors): (_, Vec<Result<WorkerReport, Error>>) =
+        thread_results.into_iter().partition(|r| r.is_ok());
 
     // If there was error in any of the applying threads, return the first one out
     // TODO: Should we return all of them?
@@ -527,7 +603,13 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
         let stderr = io::stderr();
         let mut out = stderr.lock();
 
-        writeln!(out, "{} {} {}", "Patch".yellow(), config.series_patches[final_patch].filename.display(), "FAILED".bright_red().bold())?;
+        writeln!(
+            out,
+            "{} {} {}",
+            "Patch".yellow(),
+            config.series_patches[final_patch].filename.display(),
+            "FAILED".bright_red().bold()
+        )?;
 
         for result in thread_reports {
             out.write_all(&result.unwrap().failure_analysis)?; // NOTE(unwrap): We already tested for errors above.
@@ -543,4 +625,3 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
         skipped_patches: config.series_patches.len() - final_patch,
     })
 }
-

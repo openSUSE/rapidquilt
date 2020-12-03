@@ -5,7 +5,6 @@ use std::io::{self, BufWriter, Write};
 
 use crate::util::split_lines_with_endings;
 
-
 /// This represents a file that have been modified by some patches.
 /// Additionally it keeps information on whether the file originally existed
 /// on disk and whether it was deleted.
@@ -35,9 +34,7 @@ impl<'arena> ModifiedFile<'arena> {
     pub fn new(bytes: &'arena [u8], existed: bool) -> Self {
         let mut content = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
 
-        content.extend(
-            split_lines_with_endings(bytes)
-        );
+        content.extend(split_lines_with_endings(bytes));
 
         ModifiedFile {
             content,

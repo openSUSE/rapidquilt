@@ -1,6 +1,5 @@
 use memchr::{memchr_iter, Memchr};
 
-
 struct LinesWithEndings<'a> {
     input: &'a [u8],
     previous_offset: usize,
@@ -102,4 +101,3 @@ mod tests {
         assert!(l.next() == None);
     }
 }
-
