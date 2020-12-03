@@ -459,7 +459,7 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
 
     // Prepare channels to send messages between applying threads.
     let (senders, receivers): (Vec<_>, Vec<_>) = (0..threads).map(|_| {
-        mpsc::sync_channel::<Message>(threads * 2) // At the moment every thread can send at most 2 messages, so lets use fixed size channel.
+        mpsc::channel::<Message>()
     }).unzip();
 
     // Create barrier for synchronization
