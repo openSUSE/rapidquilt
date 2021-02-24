@@ -1,5 +1,10 @@
 # Unreleased changes
 
+# Version 0.6.3
+
+* Fix hangs on more than two rejections
+* Update crates.
+
 # Version 0.6.2
 
 * Fix parsing of lines that look like start of a hunk, but are in fact part of
