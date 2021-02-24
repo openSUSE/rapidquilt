@@ -33,7 +33,7 @@ libc = "0.2.50"
 memchr = { version = "2.2.0", features = ["libc"] }
 nom = "4.2.2"
 pathfinding = "1.1.12"
-rayon = "1.0.3"
+rayon = "1.5.0"
 seahash = "3.0.6"
 smallvec = "0.6.9"
 strsim = "0.8.0"
