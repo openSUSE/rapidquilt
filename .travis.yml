@@ -2,7 +2,7 @@ language: rust
 
 rust:
   # Minimal supported
-  - 1.31.0
+  - 1.36.0
   - stable
   - nightly
 
