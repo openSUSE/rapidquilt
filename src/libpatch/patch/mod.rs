@@ -143,7 +143,7 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
         // then the smaller one will be shortened only if needed to match the (originally) bigger one.
         //
         // One way to imagine it is that the shorter context actually contains virtual "out-of-file"
-        // lines that make him as long as the other context. The fuzz is eating away these virtual
+        // lines that make it as long as the other context. The fuzz is eating away these virtual
         // lines same as the real in-file lines. If it eats all the "out-of-file" lines, then the
         // hunk is no longer tied to the start/end of file.
 
