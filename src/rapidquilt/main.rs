@@ -287,9 +287,8 @@ fn build_arena(use_mmap: bool) -> Box<Arena> {
 // not stable yet.
 //
 // TODO: Use the `std::process::Termination` trait once it is stable.
-fn main_result() -> Result<bool, Error> {
-    let args: Vec<_> = env::args().collect();
-
+fn run(args: &[String]) -> Result<bool, Error>
+{
     let mut opts = Options::new();
     opts.optflag("a", "all", "apply all patches in series");
     opts.optopt("d", "directory", "working directory", "DIR");
@@ -313,7 +312,7 @@ fn main_result() -> Result<bool, Error> {
     opts.optflag("", "version", "print version");
 
 
-    let matches = opts.parse(&args[1..])?;
+    let matches = opts.parse(args)?;
     let mut free_args = matches.free.iter();
 
     if matches.opt_present("version") {
@@ -369,7 +368,8 @@ fn main_result() -> Result<bool, Error> {
 }
 
 fn main() {
-    match main_result() {
+    let args: Vec<_> = env::args().collect();
+    match run(&args[1..]) {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {
                 eprintln!("{}{}", "  ".repeat(i), format!("{}", cause).red());
