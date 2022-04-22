@@ -17,7 +17,7 @@ use std::process;
 use colored::*;
 
 fn main() {
-    let args: Vec<_> = env::args().collect();
+    let args: Vec<_> = env::args_os().collect();
     match cmd::run(&args[1..]) {
         Err(err) => {
             for (i, cause) in err.iter_chain().enumerate() {

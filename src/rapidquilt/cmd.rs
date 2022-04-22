@@ -9,6 +9,7 @@ use std::process;
 use colored::*;
 use failure::{Error, ResultExt, format_err};
 use getopts::{Matches, Options};
+use std::ffi::OsStr;
 
 use libpatch::analysis::{AnalysisSet, MultiApplyAnalysis};
 
@@ -277,7 +278,7 @@ fn build_arena(use_mmap: bool) -> Box<Arena> {
 // not stable yet.
 //
 // TODO: Use the `std::process::Termination` trait once it is stable.
-pub fn run(args: &[String]) -> Result<bool, Error>
+pub fn run<A: IntoIterator>(args: A) -> Result<bool, Error> where A::Item: AsRef<OsStr>
 {
     let mut opts = Options::new();
     opts.optflag("a", "all", "apply all patches in series");
