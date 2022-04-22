@@ -1,0 +1,12 @@
+diff --git file.in file.in
+--- file.in
++++ file.in
+@@ -1,7 +1,7 @@
+ aaa
+ bbb
+ ccc
+-ddd not found
++ddd modified again
+ eee
+ fff
+ ggg

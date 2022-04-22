@@ -1,0 +1,15 @@
+---
+ file.in |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/file.in
++++ b/file.in
+@@ -1,7 +1,7 @@
+ aaa
+ bbb
+ ccc
+-ddd not found
++ddd modified again
+ eee
+ fff
+ ggg
