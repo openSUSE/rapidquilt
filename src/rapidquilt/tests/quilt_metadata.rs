@@ -1,8 +1,8 @@
 use crate::cmd;
 
-use std::env;
 use std::fs;
 
+use std::ffi::OsStr;
 use std::path::Path;
 use std::io::ErrorKind;
 use failure::{Error, ResultExt, err_msg};
@@ -52,19 +52,14 @@ fn push_all(path: &Path, expect: bool) -> Result<(), Error> {
     let work_path = work_dir.path();
     copy_tree(&path.join("input"), &work_path)?;
 
-    let save_dir = env::current_dir()?;
     let args = [
-        String::from("push"),
-        String::from("--quiet"),
-        String::from("--all"),
-        String::from("--backup"),
-        String::from("always"),
+        OsStr::new("push"),
+        OsStr::new("--quiet"),
+        OsStr::new("--all"),
+        OsStr::new("--directory"), work_path.as_os_str(),
+        OsStr::new("--backup"), OsStr::new("always"),
     ];
-    env::set_current_dir(&work_path)
-        .context(format!("Changing current directory to \"{:?}\"", work_path))?;
     let result = cmd::run(&args);
-    env::set_current_dir(&save_dir)
-            .context("Changing back to base directory")?;
 
     match result {
         Ok(status) if status == expect => {
