@@ -1,0 +1,63 @@
+---
+ file.in  |   26 --------------------------
+ file.tmp |   26 ++++++++++++++++++++++++++
+ 2 files changed, 26 insertions(+), 26 deletions(-)
+
+--- a/file.in
++++ /dev/null
+@@ -1,26 +0,0 @@
+-aaa
+-bbb
+-ccc
+-ddd modified
+-eee
+-fff
+-ggg
+-hhh
+-iii
+-jjj
+-kkk
+-lll
+-mmm
+-nnn
+-ooo
+-ppp
+-qqq
+-rrr
+-sss
+-ttt
+-uuu
+-vvv
+-www
+-xxx
+-yyy
+-zzz
+--- /dev/null
++++ b/file.tmp
+@@ -0,0 +1,26 @@
++aaa
++bbb
++ccc
++ddd modified
++eee
++fff
++ggg
++hhh modified
++iii
++jjj
++kkk
++lll
++mmm
++nnn
++ooo
++ppp
++qqq
++rrr
++sss
++ttt
++uuu
++vvv
++www
++xxx
++yyy
++zzz
