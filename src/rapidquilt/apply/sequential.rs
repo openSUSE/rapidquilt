@@ -81,7 +81,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             analyze_patch_failure(config.verbosity, index, &applied_patches, &modified_files, &mut failure_analysis)?;
 
             if !config.dry_run {
-                rollback_and_save_rej_files(config, &mut applied_patches, &mut modified_files, index, config.verbosity)?;
+                rollback_and_save_rej_files(config, &mut applied_patches, &mut modified_files, index)?;
             }
 
             break;
@@ -94,7 +94,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
         }
 
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        save_modified_files(config, &modified_files, &mut directories_for_cleaning, config.verbosity)?;
+        save_modified_files(config, &modified_files, &mut directories_for_cleaning)?;
         clean_empty_directories(directories_for_cleaning)?;
 
         if config.do_backups == ApplyConfigDoBackups::Always ||
@@ -110,7 +110,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(config, &mut applied_patches, &mut modified_files, down_to_index, config.verbosity)?;
+            rollback_and_save_backup_files(config, &mut applied_patches, &mut modified_files, down_to_index)?;
         }
     }
 

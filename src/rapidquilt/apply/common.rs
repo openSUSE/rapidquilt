@@ -96,11 +96,10 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
     config: &ApplyConfig,
     filename: &Cow<'arena, Path>,
     file: &ModifiedFile,
-    directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>,
-    verbosity: Verbosity)
+    directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>)
     -> Result<(), io::Error>
 {
-    if verbosity >= Verbosity::ExtraVerbose {
+    if config.verbosity >= Verbosity::ExtraVerbose {
         println!("Saving modified file: {:?}: existed: {:?} deleted: {:?} len: {}", filename.as_ref(), file.existed, file.deleted, file.content.len());
     }
 
@@ -167,12 +166,11 @@ pub fn save_modified_files<'arena, H: BuildHasher>
 (
     config: &ApplyConfig,
     modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
-    directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>,
-    verbosity: Verbosity)
+    directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>)
     -> Result<(), Error>
 {
     for (filename, file) in modified_files {
-        save_modified_file(config, filename, file, directories_for_cleaning, verbosity)
+        save_modified_file(config, filename, file, directories_for_cleaning)
             .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.to_path_buf() })?;
     }
 
@@ -183,15 +181,14 @@ pub fn save_modified_files<'arena, H: BuildHasher>
 pub fn save_backup_file(config: &ApplyConfig,
                         patch_filename: &Path,
                         filename: &Path,
-                        original_file: &ModifiedFile,
-                        verbosity: Verbosity)
+                        original_file: &ModifiedFile)
                         -> Result<(), Error>
 {
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
     path.push(filename); // Note that this may add multiple directories plus filename
 
-    if verbosity >= Verbosity::ExtraVerbose {
+    if config.verbosity >= Verbosity::ExtraVerbose {
         println!("Saving backup file {:?}", path);
     }
 
@@ -471,8 +468,7 @@ pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
     config: &ApplyConfig,
     applied_patches: &mut Vec<PatchStatus<'arena, '_>>,
     modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
-    rejected_patch_index: usize,
-    verbosity: Verbosity)
+    rejected_patch_index: usize)
     -> Result<(), Error>
 {
     while let Some(applied_patch) = applied_patches.last() {
@@ -497,7 +493,7 @@ pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
                     // We still have to keep going, as other patches might be rejected.
                     applied_patches.pop();
 
-                    if verbosity >= Verbosity::Normal {
+                    if config.verbosity >= Verbosity::Normal {
                         println!("Bypassing reject {:?} as directory doesn't exist", rej_filename);
                     }
 
@@ -509,7 +505,7 @@ pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
                 }
             };
 
-            if verbosity >= Verbosity::Normal {
+            if config.verbosity >= Verbosity::Normal {
                 println!("Saving rejects to {:?}", rej_filename);
             }
 
@@ -531,8 +527,7 @@ pub fn rollback_and_save_backup_files<'arena, H: BuildHasher>(
     config: &ApplyConfig,
     applied_patches: &mut Vec<PatchStatus<'arena, '_>>,
     modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
-    down_to_index: usize,
-    verbosity: Verbosity)
+    down_to_index: usize)
     -> Result<(), Error>
 {
     for applied_patch in applied_patches.iter().rev() {
@@ -542,12 +537,12 @@ pub fn rollback_and_save_backup_files<'arena, H: BuildHasher>(
 
         let file = rollback_applied_patch(applied_patch, modified_files);
 
-        save_backup_file(config, &applied_patch.patch_filename, &applied_patch.target_filename, &file, verbosity)?;
+        save_backup_file(config, &applied_patch.patch_filename, &applied_patch.target_filename, &file)?;
 
         if let Some(new_filename) = applied_patch.file_patch.new_filename() {
             // If it was a rename, we also have to backup the new file (it will be empty file).
             let new_file = modified_files.get(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-            save_backup_file(config, applied_patch.patch_filename, new_filename, &new_file, verbosity)?;
+            save_backup_file(config, applied_patch.patch_filename, new_filename, &new_file)?;
         }
     }
 
