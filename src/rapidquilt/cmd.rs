@@ -348,14 +348,12 @@ pub fn run<A: IntoIterator>(args: A) -> Result<bool, Error> where A::Item: AsRef
         rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global()?;
     }
 
-    let result = match free_args.next() {
+    match free_args.next() {
         Some(cmd) if cmd == "push" => {
             cmd_push(&matches, free_args, verbosity)
         }
         _ => {
             usage(&opts);
         }
-    };
-
-    result
+    }
 }
