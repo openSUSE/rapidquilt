@@ -6,6 +6,7 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::io::ErrorKind;
 use failure::{Error, ResultExt, err_msg};
+use std::io::Write;
 
 #[cfg(test)]
 fn copy_tree(from: &Path, to: &Path) -> Result<(), Error> {
@@ -36,7 +37,16 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
                 .context(format!("Reading {:?}", src_path))?;
             let actual = fs::read(&dest_path)
                 .context(format!("Reading {:?}", dest_path))?;
-            assert_eq!(expected, actual);
+            if actual != expected {
+                let stderr = std::io::stderr();
+                let mut stderr = stderr.lock();
+                writeln!(stderr, "*** EXPECTED ***")?;
+                stderr.write(&expected)?;
+                writeln!(stderr, "*** ACTUAL ***")?;
+                stderr.write(&actual)?;
+
+                panic!("Mismatch in {}", src_path.display());
+            }
         } else if src_path.is_dir() {
             compare_tree(&src_path, &dest_path)?;
         }
