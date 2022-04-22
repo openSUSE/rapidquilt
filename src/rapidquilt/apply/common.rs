@@ -93,6 +93,7 @@ pub fn clean_empty_directories<P: AsRef<Path>, I: IntoIterator<Item = P>>(direct
 /// Save the `file` to disk. It also takes care of creating/deleting the file
 /// and containing directories.
 pub fn save_modified_file<'arena, H: BuildHasher>(
+    config: &ApplyConfig,
     filename: &Cow<'arena, Path>,
     file: &ModifiedFile,
     directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>,
@@ -103,11 +104,12 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
         println!("Saving modified file: {:?}: existed: {:?} deleted: {:?} len: {}", filename.as_ref(), file.existed, file.deleted, file.content.len());
     }
 
+    let file_path = config.base_dir.join(&filename);
     if file.existed {
         // If the file file existed, delete it. Whether we want to overwrite it
         // or really delete it - the file may be a hard link and we must replace
         // it with a new one, not edit the shared content.
-        match fs::remove_file(filename) {
+        match fs::remove_file(&file_path) {
             Ok(_) => {
                 // All is good.
             },
@@ -142,11 +144,11 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
         if !file.existed {
             // If the file is new, the directory may be new as well. Let's
             // create it now.
-            if let Some(parent) = filename.parent() {
+            if let Some(parent) = file_path.parent() {
                 fs::create_dir_all(parent)?;
             }
         }
-        let mut output = File::create(filename)?;
+        let mut output = File::create(file_path)?;
 
         // If any patch set non-default permission, set them now
         if let Some(ref permissions) = file.permissions {
@@ -163,13 +165,14 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
 /// the files and containing directories.
 pub fn save_modified_files<'arena, H: BuildHasher>
 (
+    config: &ApplyConfig,
     modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
     directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>,
     verbosity: Verbosity)
     -> Result<(), Error>
 {
     for (filename, file) in modified_files {
-        save_modified_file(filename, file, directories_for_cleaning, verbosity)
+        save_modified_file(config, filename, file, directories_for_cleaning, verbosity)
             .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.to_path_buf() })?;
     }
 
@@ -177,7 +180,8 @@ pub fn save_modified_files<'arena, H: BuildHasher>
 }
 
 /// Write the `original_file` as a quilt backup file.
-pub fn save_backup_file(patch_filename: &Path,
+pub fn save_backup_file(config: &ApplyConfig,
+                        patch_filename: &Path,
                         filename: &Path,
                         original_file: &ModifiedFile,
                         verbosity: Verbosity)
@@ -192,10 +196,12 @@ pub fn save_backup_file(patch_filename: &Path,
     }
 
     (|| -> Result<(), io::Error> { // TODO: Replace me with try-block when stable. (feature "try_blocks")
-        let path_parent = path.parent().unwrap(); // NOTE(unwrap): We know that there is a parent, we just built it ourselves.
+        let real_path = config.base_dir.join(&path);
+        // NOTE(unwrap): We know that there is a parent; we built it ourselves.
+        let path_parent = real_path.parent().unwrap();
 
         fs::create_dir_all(path_parent)?;
-        original_file.write_to(&mut File::create(&path)?)
+        original_file.write_to(&mut File::create(real_path)?)
     })().with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
 
     Ok(())
@@ -237,6 +243,7 @@ pub struct PatchStatus<'arena, 'config> {
 ///
 /// Panics if both `old_filename` and `new_filename` are `None`.
 pub fn choose_filename_to_patch<'arena, 'filename, H: BuildHasher>(
+    config: &ApplyConfig,
     old_filename: Option<&'filename Cow<'arena, Path>>,
     new_filename: Option<&'filename Cow<'arena, Path>>,
     modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
@@ -257,7 +264,7 @@ pub fn choose_filename_to_patch<'arena, 'filename, H: BuildHasher>(
             match modified_files.get(old_filename) {
                 // File is not in the database yet, check what is on disk...
                 None => {
-                    if old_filename.exists() {
+                    if config.base_dir.join(old_filename).exists() {
                         // It exists on disk, lets use it!
                         old_filename
                     } else {
@@ -300,6 +307,7 @@ pub fn get_modified_file<
     'modified_files,
     H: BuildHasher>
 (
+    config: &ApplyConfig,
     filename: &Cow<'arena, Path>,
     modified_files: &'modified_files mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     arena: &'arena dyn Arena)
@@ -310,7 +318,7 @@ pub fn get_modified_file<
         Entry::Occupied(entry) => entry.into_mut(),
 
         Entry::Vacant(entry) => {
-            match arena.load_file(filename.as_ref()) {
+            match arena.load_file(&config.base_dir.join(filename)) {
                 Ok(data) => entry.insert(ModifiedFile::new(&data, true)),
 
                 // If the file doesn't exist, make empty one.
@@ -355,8 +363,8 @@ pub fn apply_one_file_patch<
     -> Result<bool, Error>
 {
     // Get the file to patch
-    let target_filename = choose_filename_to_patch(file_patch.old_filename(), file_patch.new_filename(), modified_files).clone();
-    let file = get_modified_file(&target_filename, modified_files, arena)
+    let target_filename = choose_filename_to_patch(config, file_patch.old_filename(), file_patch.new_filename(), modified_files).clone();
+    let file = get_modified_file(config, &target_filename, modified_files, arena)
         .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
 
     // If the patch renames the file. do it now...
@@ -375,7 +383,7 @@ pub fn apply_one_file_patch<
         // to do later - unless something else changes it, we will need to delete it from disk.
         let mut tmp_file = file.move_out();
 
-        let new_file = get_modified_file(new_filename, modified_files, arena)
+        let new_file = get_modified_file(config, new_filename, modified_files, arena)
             .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.to_path_buf() })?;
 
         if !new_file.move_in(&mut tmp_file) {
@@ -389,7 +397,7 @@ pub fn apply_one_file_patch<
                      new_filename.display());
 
             // Put the content back to the old file.
-            let file = get_modified_file(&target_filename, modified_files, arena)
+            let file = get_modified_file(config, &target_filename, modified_files, arena)
                 .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
             file.move_in(&mut tmp_file);
 
@@ -460,6 +468,7 @@ pub fn rollback_applied_patch<'arena, 'modified_files, H: BuildHasher>(
 /// Rolls back all `FilePatch`es belonging to the `rejected_patch_index` and save
 /// ".rej" files for each `FilePatch` that failed applying
 pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
+    config: &ApplyConfig,
     applied_patches: &mut Vec<PatchStatus<'arena, '_>>,
     modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     rejected_patch_index: usize,
@@ -477,7 +486,7 @@ pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
         if applied_patch.report.failed() {
             let rej_filename = make_rej_filename(&applied_patch.target_filename);
 
-            let file = match File::create(&rej_filename) {
+            let file = match File::create(config.base_dir.join(&rej_filename)) {
                 Ok(file) => {
                     file
                 }
@@ -519,6 +528,7 @@ pub fn rollback_and_save_rej_files<'arena, H: BuildHasher>(
 /// Rolls back all `FilePatch`es up to the one belonging to patch with
 /// `down_to_index` index and generates quilt backup files for all of them.
 pub fn rollback_and_save_backup_files<'arena, H: BuildHasher>(
+    config: &ApplyConfig,
     applied_patches: &mut Vec<PatchStatus<'arena, '_>>,
     modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     down_to_index: usize,
@@ -532,12 +542,12 @@ pub fn rollback_and_save_backup_files<'arena, H: BuildHasher>(
 
         let file = rollback_applied_patch(applied_patch, modified_files);
 
-        save_backup_file(&applied_patch.patch_filename, &applied_patch.target_filename, &file, verbosity)?;
+        save_backup_file(config, &applied_patch.patch_filename, &applied_patch.target_filename, &file, verbosity)?;
 
         if let Some(new_filename) = applied_patch.file_patch.new_filename() {
             // If it was a rename, we also have to backup the new file (it will be empty file).
             let new_file = modified_files.get(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-            save_backup_file(applied_patch.patch_filename, new_filename, &new_file, verbosity)?;
+            save_backup_file(config, applied_patch.patch_filename, new_filename, &new_file, verbosity)?;
         }
     }
 

@@ -114,9 +114,10 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, 
         }).collect()
 }
 
-fn save_applied_patches(applied_patches: &[SeriesPatch]) -> Result<(), Error> {
-    fs::create_dir_all(".pc")?;
-    let mut file_applied_patches = BufWriter::new(fs::OpenOptions::new().create(true).append(true).open(".pc/applied-patches")?);
+fn save_applied_patches(config: &ApplyConfig, applied_patches: &[SeriesPatch]) -> Result<(), Error> {
+    let quilt_pc = config.base_dir.join(".pc");
+    fs::create_dir_all(&quilt_pc)?;
+    let mut file_applied_patches = BufWriter::new(fs::OpenOptions::new().create(true).append(true).open(quilt_pc.join("applied-patches"))?);
     for applied_patch in applied_patches {
         writeln!(file_applied_patches, "{}", applied_patch.filename.display())?;
     }
@@ -133,6 +134,9 @@ enum PushGoal {
 fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args: F, verbosity: Verbosity) -> Result<bool, Error>
 {
     // Parse "push" specific arguments
+    let base_dir = matches.opt_str("directory").unwrap_or_default();
+    let base_dir = Path::new(&base_dir);
+
     let do_backups = match matches.opt_str("backup") {
         Some(ref s) if s == "always" => ApplyConfigDoBackups::Always,
         Some(ref s) if s == "onfail" => ApplyConfigDoBackups::OnFail,
@@ -147,7 +151,8 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         None                      => ApplyConfigBackupCount::Last(100),
     };
 
-    let patches_path = matches.opt_str("p").unwrap_or_else(|| "patches".to_string());
+    let patches_path = base_dir.join(
+        if let Some(ref s) = matches.opt_str("p") { s } else { "patches" });
 
     let fuzz = matches.opt_str("fuzz").and_then(|n| n.parse::<usize>().ok()).unwrap_or(0);
 
@@ -177,11 +182,11 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     }
 
     // Process series file
-    let series_patches = read_series_file("series")
+    let series_patches = read_series_file(base_dir.join("series"))
         .with_context(|_| "When reading \"series\" file.")?;
 
     // Determine the last patch
-    let first_patch = if let Ok(applied_patch_filenames) = read_series_file(".pc/applied-patches") {
+    let first_patch = if let Ok(applied_patch_filenames) = read_series_file(base_dir.join(".pc/applied-patches")) {
         for (p1, p2) in series_patches.iter().zip(applied_patch_filenames.iter()) {
             if p1.filename != p2.filename {
                 return Err(format_err!("There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}", p1.filename.display(), p2.filename.display()));
@@ -217,6 +222,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     let series_patches = &series_patches[first_patch..last_patch];
 
     let config = ApplyConfig {
+        base_dir,
         series_patches,
         patches_path: patches_path.as_ref(),
         fuzz,
@@ -244,7 +250,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     };
 
     if !config.dry_run {
-        save_applied_patches(&config.series_patches[0..apply_result.applied_patches])
+        save_applied_patches(&config, &config.series_patches[0..apply_result.applied_patches])
             .with_context(|_| "When saving applied patches.")?;
     }
 
@@ -337,10 +343,6 @@ pub fn run<A: IntoIterator>(args: A) -> Result<bool, Error> where A::Item: AsRef
     } else {
         Verbosity::Normal
     };
-
-    if let Some(directory) = matches.opt_str("directory") {
-        env::set_current_dir(&directory).with_context(|_| format!("Changing current directory to \"{}\"", directory))?;
-    }
 
     if let Some(manual_threads) = env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
         rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global()?;

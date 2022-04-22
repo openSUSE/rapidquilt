@@ -55,6 +55,7 @@ pub struct SeriesPatch {
 
 #[derive(Debug)]
 pub struct ApplyConfig<'a> {
+    pub base_dir: &'a Path,
     pub series_patches: &'a [SeriesPatch],
     pub patches_path: &'a Path,
     pub fuzz: usize,

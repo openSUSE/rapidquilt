@@ -319,7 +319,7 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
     // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        if let Err(err) = rollback_and_save_rej_files(&mut applied_patches, &mut modified_files, earliest_broken_patch_index, config.verbosity) {
+        if let Err(err) = rollback_and_save_rej_files(config, &mut applied_patches, &mut modified_files, earliest_broken_patch_index, config.verbosity) {
             barrier.wait(); // We're forced to wait on the barrier before leaving, if not, the rest of threads will hang
             return Err(err);
         }
@@ -330,7 +330,7 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
 
         // Save all the files we modified
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        if let Err(err) = save_modified_files(&modified_files, &mut directories_for_cleaning, config.verbosity) {
+        if let Err(err) = save_modified_files(config, &modified_files, &mut directories_for_cleaning, config.verbosity) {
             barrier.wait(); // We're forced to wait on the barrier before leaving, if not, the rest of threads will hang
             return Err(err);
         }
@@ -357,7 +357,7 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(&mut applied_patches, &mut modified_files, down_to_index, config.verbosity)?;
+            rollback_and_save_backup_files(config, &mut applied_patches, &mut modified_files, down_to_index, config.verbosity)?;
         }
     }
 
