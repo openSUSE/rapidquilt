@@ -539,8 +539,9 @@ pub fn rollback_and_save_backup_files<'arena, H: BuildHasher>(
 
         save_backup_file(config, &applied_patch.patch_filename, &applied_patch.target_filename, &file)?;
 
-        if let Some(new_filename) = applied_patch.file_patch.new_filename() {
+        if applied_patch.file_patch.is_rename() {
             // If it was a rename, we also have to backup the new file (it will be empty file).
+            let new_filename = applied_patch.file_patch.new_filename().unwrap();
             let new_file = modified_files.get(new_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
             save_backup_file(config, applied_patch.patch_filename, new_filename, &new_file)?;
         }

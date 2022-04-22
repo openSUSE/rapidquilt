@@ -1,0 +1,11 @@
+diff --git failed failed
+--- failed
++++ failed
+@@ -1,6 +1,7 @@
+ This
+ file
+ will
++NOT
+ patch.
+ It's
+ expected.

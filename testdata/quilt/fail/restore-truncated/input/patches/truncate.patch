@@ -1,0 +1,18 @@
+---
+ failed          |    6 ++++++
+ to-be-truncated |    1 -
+ 2 files changed, 6 insertions(+), 1 deletion(-)
+
+--- a/to-be-truncated
++++ b/any/dummy/file/name
+@@ -1 +0,0 @@
+-Some content here.
+--- /dev/null
++++ b/failed
+@@ -0,0 +1,6 @@
++This
++file
++will
++fail
++to
++patch.

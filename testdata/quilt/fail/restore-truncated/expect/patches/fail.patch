@@ -1,0 +1,14 @@
+---
+ file.in |    1 +
+ 1 file changed, 1 insertion(+)
+
+--- a/failed
++++ b/failed
+@@ -1,6 +1,7 @@
+ This
+ file
+ will
++NOT
+ patch.
+ It's
+ expected.
