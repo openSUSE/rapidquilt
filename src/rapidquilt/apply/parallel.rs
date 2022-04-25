@@ -229,12 +229,7 @@ fn apply_worker_task<'arena, 'config, BroadcastFn: Fn(Message)> (
             Ok(false) => {
                 // Patch failed to apply...
 
-                // Atomically set `earliest_broken_patch_index = min(earliest_broken_patch_index, index)`.
-                // TODO: Use `AtomicUsize::fetch_min` once it is stable. Feature "atomic_min_max".
-                let mut current = earliest_broken_patch_index.load(Ordering::Acquire);
-                while index < current {
-                    current = earliest_broken_patch_index.compare_and_swap(current, index, Ordering::AcqRel);
-                }
+                earliest_broken_patch_index.fetch_min(index, Ordering::AcqRel);
 
                 // Signal everyone
                 broadcast_message(Message::NewEarliestBrokenPatchIndex);
