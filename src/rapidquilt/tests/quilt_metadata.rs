@@ -55,16 +55,18 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-fn push_all(path: &Path, expect: bool) -> Result<(), Error> {
+fn push_all(path: &Path, num_threads: usize, expect: bool) -> Result<(), Error> {
     eprintln!("Push all patches in {}", path.display());
 
     let work_dir = tempfile::tempdir()?;
     let work_path = work_dir.path();
     copy_tree(&path.join("input"), &work_path)?;
 
+    let num_threads = num_threads.to_string();
     let args = [
         OsStr::new("push"),
         OsStr::new("--quiet"),
+        OsStr::new("--threads"), OsStr::new(&num_threads),
         OsStr::new("--all"),
         OsStr::new("--directory"), work_path.as_os_str(),
         OsStr::new("--backup"), OsStr::new("always"),
@@ -84,12 +86,12 @@ fn push_all(path: &Path, expect: bool) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-fn check_series(path: &str, expect: bool) -> Result<(), Error> {
+fn check_series(path: &str, num_threads: usize, expect: bool) -> Result<(), Error> {
     let dir = fs::read_dir(path);
     match dir {
         Ok(dir) => {
             for entry in dir {
-                push_all(&entry?.path(), expect)?;
+                push_all(&entry?.path(), num_threads, expect)?;
             }
             Ok(())
         },
@@ -100,12 +102,27 @@ fn check_series(path: &str, expect: bool) -> Result<(), Error> {
 
 #[cfg(test)]
 #[test]
-fn ok_series() -> Result<(), Error> {
-    check_series("testdata/quilt/ok", true)
+fn ok_series_sequential() -> Result<(), Error> {
+    check_series("testdata/quilt/ok", 1, true)
 }
 
 #[cfg(test)]
 #[test]
-fn fail_series() -> Result<(), Error> {
-    check_series("testdata/quilt/fail", false)
+fn fail_series_sequential() -> Result<(), Error> {
+    check_series("testdata/quilt/fail", 1, false)
+}
+
+#[cfg(test)]
+const NUM_THREADS: usize = 2;
+
+#[cfg(test)]
+#[test]
+fn ok_series_parallel() -> Result<(), Error> {
+    check_series("testdata/quilt/ok", NUM_THREADS, true)
+}
+
+#[cfg(test)]
+#[test]
+fn fail_series_parallel() -> Result<(), Error> {
+    check_series("testdata/quilt/fail", NUM_THREADS, false)
 }
