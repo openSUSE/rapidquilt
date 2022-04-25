@@ -1,5 +1,8 @@
 # Unreleased changes
 
+* New command-line option: `--threads`
+* Implement tests for `rapidquilt push`
+* Do not panic if a file is truncated and the new name is bogus
 * If running single-threaded, exit with an error if the last patch does not
   apply.
 
