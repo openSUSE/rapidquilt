@@ -243,7 +243,8 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         }
     }
 
-    let num_threads = env::var("RAPIDQUILT_THREADS").ok()
+    let num_threads = matches.opt_str("threads")
+        .or_else(|| env::var("RAPIDQUILT_THREADS").ok())
         .and_then(|value_txt| Some(value_txt.parse::<usize>()))
         .transpose().context("Parsing number of threads")?
         .unwrap_or(rayon::current_num_threads());
@@ -304,6 +305,7 @@ pub fn run<A: IntoIterator>(args: A) -> Result<bool, Error> where A::Item: AsRef
     opts.optopt("", "color", "use colors in output (default: auto)", "always|auto|never");
     opts.optflag("", "dry-run", "do not save any changes");
     opts.optmulti("A", "analyze", "run additional analysis while patching. You can use this option multiple times to run multiple analyses at once. Available analyses: multiapply", "ANALYSIS"); // TODO: Don't hardcoded the list of available analyses?
+    opts.optopt("", "threads", "number of parallel threads", "NUM");
     opts.optflag("", "stats", "print statistics in the end");
     opts.optflag("q", "quiet", "only print errors");
     opts.optflagmulti("v", "verbose", "print extra information. Repeat for more verbosity. It may affect performance.");
