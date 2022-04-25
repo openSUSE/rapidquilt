@@ -1,5 +1,8 @@
 # Unreleased changes
 
+* If running single-threaded, exit with an error if the last patch does not
+  apply.
+
 # Version 0.6.3
 
 * Fix hangs on more than two rejections

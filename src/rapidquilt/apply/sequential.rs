@@ -44,8 +44,6 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             println!("Patch: {:?}", series_patch.filename);
         }
 
-        final_patch = index;
-
         let patch = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable. (feature "try_blocks")
             let data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
             let patch = parse_patch(&data, series_patch.strip, false)?;
@@ -86,6 +84,8 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
             break;
         }
+
+        final_patch = index + 1;
     }
 
     if !config.dry_run {
@@ -99,7 +99,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
         if config.do_backups == ApplyConfigDoBackups::Always ||
           (config.do_backups == ApplyConfigDoBackups::OnFail &&
-            final_patch != config.series_patches.len() - 1)
+            final_patch != config.series_patches.len())
         {
             if config.verbosity >= Verbosity::Normal {
                 println!("Saving quilt backup files ({})...", config.backup_count);
@@ -114,7 +114,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
         }
     }
 
-    if final_patch != config.series_patches.len() - 1 {
+    if final_patch != config.series_patches.len() {
         let stderr = io::stderr();
         let mut out = stderr.lock();
 
@@ -127,7 +127,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
     }
 
     Ok(ApplyResult {
-        applied_patches: final_patch + 1,
-        skipped_patches: config.series_patches.len() - (final_patch + 1),
+        applied_patches: final_patch,
+        skipped_patches: config.series_patches.len() - final_patch,
     })
 }
