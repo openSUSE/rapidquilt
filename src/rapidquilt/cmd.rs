@@ -243,10 +243,17 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         }
     }
 
-    let apply_result = if rayon::current_num_threads() <= 1 {
+    let num_threads = env::var("RAPIDQUILT_THREADS").ok()
+        .and_then(|value_txt| value_txt.parse().ok())
+        .unwrap_or(rayon::current_num_threads());
+
+    let apply_result = if num_threads <= 1 {
         apply_patches(&config, &*arena, &analyses)?
     } else {
-        apply_patches_parallel(&config, &*arena, &analyses)?
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(num_threads)
+            .build()?;
+        pool.install(|| apply_patches_parallel(&config, &*arena, &analyses))?
     };
 
     if !config.dry_run {
@@ -343,10 +350,6 @@ pub fn run<A: IntoIterator>(args: A) -> Result<bool, Error> where A::Item: AsRef
     } else {
         Verbosity::Normal
     };
-
-    if let Some(manual_threads) = env::var("RAPIDQUILT_THREADS").ok().and_then(|value_txt| value_txt.parse().ok()) {
-        rayon::ThreadPoolBuilder::new().num_threads(manual_threads).build_global()?;
-    }
 
     match free_args.next() {
         Some(cmd) if cmd == "push" => {
