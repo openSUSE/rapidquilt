@@ -1,5 +1,7 @@
 # Unreleased changes
 
+# Version 0.6.4
+
 * New command-line option: `--threads`
 * Implement tests for `rapidquilt push`
 * Do not panic if a file is truncated and the new name is bogus
