@@ -56,8 +56,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             if !apply_one_file_patch(config,
                                      index,
                                      text_file_patch,
-                                     &mut state.applied_patches,
-                                     &mut state.modified_files,
+                                     &mut state,
                                      arena,
                                      &analyses,
                                      &fn_analysis_note)?
@@ -71,7 +70,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             analyze_patch_failure(config.verbosity, index, &state.applied_patches, &state.modified_files, &mut failure_analysis)?;
 
             if !config.dry_run {
-                rollback_and_save_rej_files(config, &mut state.applied_patches, &mut state.modified_files, index)?;
+                rollback_and_save_rej_files(config, &mut state, index)?;
             }
 
             break;
@@ -102,7 +101,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(config, &mut state.applied_patches, &mut state.modified_files, down_to_index)?;
+            rollback_and_save_backup_files(config, &mut state, down_to_index)?;
         }
     }
 

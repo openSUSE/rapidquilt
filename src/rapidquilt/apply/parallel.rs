@@ -181,8 +181,7 @@ fn apply_worker<'arena, 'config>(
         match apply_one_file_patch(config,
                                    index,
                                    text_file_patch,
-                                   &mut state.applied_patches,
-                                   &mut state.modified_files,
+                                   &mut state,
                                    arena,
                                    &analyses,
                                    &fn_analysis_note) {
@@ -252,7 +251,7 @@ fn save_files_worker<'arena, 'config> (
     // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        if let Err(err) = rollback_and_save_rej_files(config, &mut state.applied_patches, &mut state.modified_files, final_patch) {
+        if let Err(err) = rollback_and_save_rej_files(config, &mut state, final_patch) {
             return Err(err);
         }
 
@@ -281,7 +280,7 @@ fn save_files_worker<'arena, 'config> (
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(config, &mut state.applied_patches, &mut state.modified_files, down_to_index)?;
+            rollback_and_save_backup_files(config, &mut state, down_to_index)?;
         }
     }
 
