@@ -62,7 +62,6 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             if !apply_one_file_patch(config,
                                      index,
                                      text_file_patch,
-                                     series_patch.reverse,
                                      &mut applied_patches,
                                      &mut modified_files,
                                      arena,

@@ -351,7 +351,6 @@ pub fn apply_one_file_patch<
     config: &'config ApplyConfig,
     index: usize,
     file_patch: TextFilePatch<'arena>,
-    reverse: bool,
     applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
     modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     arena: &'arena dyn Arena,
@@ -359,6 +358,8 @@ pub fn apply_one_file_patch<
     fn_analysis_note: &'fn_analysis_note dyn Fn(&dyn Note, &TextFilePatch))
     -> Result<bool, Error>
 {
+    let patch = &config.series_patches[index];
+
     // Get the file to patch
     let target_filename = choose_filename_to_patch(config, file_patch.old_filename(), file_patch.new_filename(), modified_files).clone();
     let file = get_modified_file(config, &target_filename, modified_files, arena)
@@ -371,7 +372,7 @@ pub fn apply_one_file_patch<
         if *new_filename == target_filename {
             // TODO: Proper reporting!
             println!("Patch {} would rename file {} to {}, but it already has the name.",
-                     config.series_patches[index].filename.display(),
+                     patch.filename.display(),
                      target_filename.display(),
                      new_filename.display());
         }
@@ -389,7 +390,7 @@ pub fn apply_one_file_patch<
 
             // TODO: Proper reporting!
             println!("Patch {} is renaming file {} to {}, which overwrites existing file!",
-                     config.series_patches[index].filename.display(),
+                     patch.filename.display(),
                      target_filename.display(),
                      new_filename.display());
 
@@ -404,7 +405,7 @@ pub fn apply_one_file_patch<
         }
 
 //         println!("Patch {} is renaming file {} to {}!",
-//                 config.series_patches[index].filename.display(),
+//                 patch.filename.display(),
 //                 file_patch.filename().display(),
 //                 new_filename.display());
 
@@ -413,7 +414,7 @@ pub fn apply_one_file_patch<
         (file, target_filename.clone())
     };
 
-    let direction = if reverse {
+    let direction = if patch.reverse {
         PatchDirection::Revert
     } else {
         PatchDirection::Forward
@@ -430,7 +431,7 @@ pub fn apply_one_file_patch<
         target_filename,
         final_filename,
         report,
-        patch_filename: &config.series_patches[index].filename,
+        patch_filename: &patch.filename,
     });
 
     Ok(report_ok)

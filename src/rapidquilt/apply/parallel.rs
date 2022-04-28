@@ -191,7 +191,6 @@ fn apply_worker<'arena, 'config>(
         match apply_one_file_patch(config,
                                    index,
                                    text_file_patch,
-                                   config.series_patches[index].reverse,
                                    &mut applied_patches,
                                    &mut modified_files,
                                    arena,
