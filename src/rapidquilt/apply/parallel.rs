@@ -158,8 +158,7 @@ fn apply_worker<'arena, 'config>(
     analyses: &AnalysisSet)
     -> Result<AppliedState<'arena, 'config>, Error>
 {
-    let mut applied_patches = Vec::with_capacity(thread_file_patches.len());
-    let mut modified_files = HashMap::default();
+    let mut state = AppliedState::new(thread_file_patches.len());
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
     for (index, text_file_patch) in thread_file_patches {
@@ -182,8 +181,8 @@ fn apply_worker<'arena, 'config>(
         match apply_one_file_patch(config,
                                    index,
                                    text_file_patch,
-                                   &mut applied_patches,
-                                   &mut modified_files,
+                                   &mut state.applied_patches,
+                                   &mut state.modified_files,
                                    arena,
                                    &analyses,
                                    &fn_analysis_note) {
@@ -206,10 +205,7 @@ fn apply_worker<'arena, 'config>(
         }
     }
 
-    Ok(AppliedState {
-        applied_patches,
-        modified_files,
-    })
+    Ok(state)
 }
 
 /// Contains rendered report from the worker

@@ -339,6 +339,16 @@ pub struct AppliedState<'arena, 'config> {
     pub modified_files: HashMap::<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
 }
 
+impl<'arena, 'config> AppliedState<'arena, 'config> {
+    /// Constructs a new `AppliedState` with the specified capacity.
+    pub fn new(capacity: usize) -> AppliedState<'arena, 'config> {
+        AppliedState {
+            applied_patches: Vec::with_capacity(capacity),
+            modified_files: HashMap::default(),
+        }
+    }
+}
+
 /// Applies single `FilePatch` to the appropriate file.
 ///
 /// `config`: The configuration of the task.
