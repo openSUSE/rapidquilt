@@ -50,7 +50,6 @@
 use std;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
-use std::io::{self, Write};
 use std::hash::{BuildHasherDefault, Hash};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -468,13 +467,11 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
 
     // Print out failure analysis if we didn't apply everything
     if final_patch != config.series_patches.len() {
-        let stderr = io::stderr();
-        let mut out = stderr.lock();
-
-        writeln!(out, "{} {} {}", "Patch".yellow(), config.series_patches[final_patch].filename.display(), "FAILED".bright_red().bold())?;
+        eprintln!("{} {} {}", "Patch".yellow(), config.series_patches[final_patch].filename.display(), "FAILED".bright_red().bold());
 
         for result in thread_reports {
-            out.write_all(&result.unwrap().failure_analysis)?; // NOTE(unwrap): We already tested for errors above.
+            // NOTE(unwrap): We already tested for errors above.
+            eprint!("{}", String::from_utf8(result.unwrap().failure_analysis)?);
         }
     }
 
