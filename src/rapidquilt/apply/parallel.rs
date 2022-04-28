@@ -69,8 +69,6 @@ use crate::arena::Arena;
 use libpatch::analysis::{AnalysisSet, Note};
 use libpatch::patch::{PatchDirection, TextFilePatch};
 use libpatch::patch::unified::parser::parse_patch;
-use libpatch::modified_file::ModifiedFile;
-
 
 /// This is tool that distributes filenames among threads. Currently it doesn't
 /// do any overly smart planning, it just distributes them one by one as they
@@ -142,13 +140,6 @@ impl<T: Hash + Eq> FilenameDistributor<T> {
 
         self.filename_to_index
     }
-}
-
-/// Contains the state after applying patches
-#[derive(Default)]
-struct AppliedState<'arena, 'config> {
-    applied_patches: Vec::<PatchStatus<'arena, 'config>>,
-    modified_files: HashMap::<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
 }
 
 /// This function is executed by every thread during the "Step 3" phase - when

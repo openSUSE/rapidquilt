@@ -6,11 +6,13 @@
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, hash_map::Entry};
 use std::fs::{self, File};
+use std::hash::BuildHasherDefault;
 use std::io::{self, BufWriter};
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 
 use failure::{Error, ResultExt};
+use seahash;
 
 use libpatch::analysis::{AnalysisSet, Note};
 use libpatch::modified_file::ModifiedFile;
@@ -328,6 +330,13 @@ pub fn get_modified_file<
     };
 
     Ok(item)
+}
+
+/// Contains the states of applied patches
+#[derive(Debug)]
+pub struct AppliedState<'arena, 'config> {
+    pub applied_patches: Vec::<PatchStatus<'arena, 'config>>,
+    pub modified_files: HashMap::<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
 }
 
 /// Applies single `FilePatch` to the appropriate file.
