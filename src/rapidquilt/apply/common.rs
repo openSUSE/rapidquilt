@@ -344,8 +344,6 @@ pub fn apply_one_file_patch<
     'arena,
     'config: 'applied_patches,
     'applied_patches,
-    'analyses,
-    'fn_analysis_note,
     H: BuildHasher>
 (
     config: &'config ApplyConfig,
@@ -354,8 +352,8 @@ pub fn apply_one_file_patch<
     applied_patches: &'applied_patches mut Vec<PatchStatus<'arena, 'config>>,
     modified_files: &mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
     arena: &'arena dyn Arena,
-    analyses: &'analyses AnalysisSet,
-    fn_analysis_note: &'fn_analysis_note dyn Fn(&dyn Note, &TextFilePatch))
+    analyses: &AnalysisSet,
+    fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
     -> Result<bool, Error>
 {
     let patch = &config.series_patches[index];
