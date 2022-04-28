@@ -4,10 +4,8 @@
 //!
 //! Patches are read, parsed and applied one by one.
 
-use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::hash::BuildHasherDefault;
-use std::path::Path;
 
 use colored::*;
 use failure::{Error, ResultExt};
@@ -21,14 +19,10 @@ use crate::arena::Arena;
 use libpatch::analysis::{AnalysisSet, Note};
 use libpatch::patch::TextFilePatch;
 use libpatch::patch::unified::parser::parse_patch;
-use libpatch::modified_file::ModifiedFile;
-
 
 pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
     -> Result<ApplyResult, Error> {
-    let mut applied_patches = Vec::<PatchStatus>::new();
-
-    let mut modified_files = HashMap::<Cow<'arena, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut state = AppliedState::new(config.series_patches.len());
 
     let mut final_patch = 0;
 
@@ -62,8 +56,8 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             if !apply_one_file_patch(config,
                                      index,
                                      text_file_patch,
-                                     &mut applied_patches,
-                                     &mut modified_files,
+                                     &mut state.applied_patches,
+                                     &mut state.modified_files,
                                      arena,
                                      &analyses,
                                      &fn_analysis_note)?
@@ -74,10 +68,10 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
         if any_report_failed {
             // Analyze failure, in case there was any
-            analyze_patch_failure(config.verbosity, index, &applied_patches, &modified_files, &mut failure_analysis)?;
+            analyze_patch_failure(config.verbosity, index, &state.applied_patches, &state.modified_files, &mut failure_analysis)?;
 
             if !config.dry_run {
-                rollback_and_save_rej_files(config, &mut applied_patches, &mut modified_files, index)?;
+                rollback_and_save_rej_files(config, &mut state.applied_patches, &mut state.modified_files, index)?;
             }
 
             break;
@@ -92,7 +86,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
         }
 
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        save_modified_files(config, &modified_files, &mut directories_for_cleaning)?;
+        save_modified_files(config, &state.modified_files, &mut directories_for_cleaning)?;
         clean_empty_directories(directories_for_cleaning)?;
 
         if config.do_backups == ApplyConfigDoBackups::Always ||
@@ -108,7 +102,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(config, &mut applied_patches, &mut modified_files, down_to_index)?;
+            rollback_and_save_backup_files(config, &mut state.applied_patches, &mut state.modified_files, down_to_index)?;
         }
     }
 
