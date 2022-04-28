@@ -158,7 +158,7 @@ fn apply_worker<'arena, 'config>(
     analyses: &AnalysisSet)
     -> Result<AppliedState<'arena, 'config>, Error>
 {
-    let mut state = AppliedState::new(thread_file_patches.len());
+    let mut state = AppliedState::new(config, thread_file_patches.len());
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
     for (index, text_file_patch) in thread_file_patches {
@@ -178,8 +178,7 @@ fn apply_worker<'arena, 'config>(
         };
 
         // Try to apply this one `FilePatch`
-        match apply_one_file_patch(config,
-                                   index,
+        match apply_one_file_patch(index,
                                    text_file_patch,
                                    &mut state,
                                    arena,
@@ -251,7 +250,7 @@ fn save_files_worker<'arena, 'config> (
     // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        if let Err(err) = rollback_and_save_rej_files(config, &mut state, final_patch) {
+        if let Err(err) = rollback_and_save_rej_files(&mut state, final_patch) {
             return Err(err);
         }
 
@@ -280,7 +279,7 @@ fn save_files_worker<'arena, 'config> (
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(config, &mut state, down_to_index)?;
+            rollback_and_save_backup_files(&mut state, down_to_index)?;
         }
     }
 

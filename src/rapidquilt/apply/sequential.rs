@@ -22,7 +22,7 @@ use libpatch::patch::unified::parser::parse_patch;
 
 pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
     -> Result<ApplyResult, Error> {
-    let mut state = AppliedState::new(config.series_patches.len());
+    let mut state = AppliedState::new(config, config.series_patches.len());
 
     let mut final_patch = 0;
 
@@ -53,8 +53,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
                 let _ = print_analysis_note(&series_patch.filename, note, file_patch);
             };
 
-            if !apply_one_file_patch(config,
-                                     index,
+            if !apply_one_file_patch(index,
                                      text_file_patch,
                                      &mut state,
                                      arena,
@@ -70,7 +69,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             analyze_patch_failure(config.verbosity, index, &state.applied_patches, &state.modified_files, &mut failure_analysis)?;
 
             if !config.dry_run {
-                rollback_and_save_rej_files(config, &mut state, index)?;
+                rollback_and_save_rej_files(&mut state, index)?;
             }
 
             break;
@@ -101,7 +100,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(config, &mut state, down_to_index)?;
+            rollback_and_save_backup_files(&mut state, down_to_index)?;
         }
     }
 

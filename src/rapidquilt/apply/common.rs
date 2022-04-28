@@ -335,14 +335,16 @@ pub fn get_modified_file<
 /// Contains the states of applied patches
 #[derive(Debug)]
 pub struct AppliedState<'arena, 'config> {
+    pub config: &'config ApplyConfig<'config>,
     pub applied_patches: Vec::<PatchStatus<'arena, 'config>>,
     pub modified_files: HashMap::<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
 }
 
 impl<'arena, 'config> AppliedState<'arena, 'config> {
     /// Constructs a new `AppliedState` with the specified capacity.
-    pub fn new(capacity: usize) -> AppliedState<'arena, 'config> {
+    pub fn new(config: &'config ApplyConfig, capacity: usize) -> AppliedState<'arena, 'config> {
         AppliedState {
+            config,
             applied_patches: Vec::with_capacity(capacity),
             modified_files: HashMap::default(),
         }
@@ -359,19 +361,16 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
 /// `arena`: For loading files.
 ///
 /// Returns whether the patch applied successfully, or Err in case some other error happened.
-pub fn apply_one_file_patch<
-    'arena,
-    'config>
-(
-    config: &'config ApplyConfig,
+pub fn apply_one_file_patch<'arena>(
     index: usize,
     file_patch: TextFilePatch<'arena>,
-    state: &mut AppliedState<'arena, 'config>,
+    state: &mut AppliedState<'arena, '_>,
     arena: &'arena dyn Arena,
     analyses: &AnalysisSet,
     fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
     -> Result<bool, Error>
 {
+    let config = state.config;
     let patch = &config.series_patches[index];
 
     // Get the file to patch
@@ -480,11 +479,11 @@ pub fn rollback_applied_patch<'arena, 'modified_files, H: BuildHasher>(
 /// Rolls back all `FilePatch`es belonging to the `rejected_patch_index` and save
 /// ".rej" files for each `FilePatch` that failed applying
 pub fn rollback_and_save_rej_files(
-    config: &ApplyConfig,
     state: &mut AppliedState,
     rejected_patch_index: usize)
     -> Result<(), Error>
 {
+    let config = state.config;
     while let Some(applied_patch) = state.applied_patches.last() {
         assert!(applied_patch.index <= rejected_patch_index);
         if applied_patch.index < rejected_patch_index {
@@ -538,11 +537,11 @@ pub fn rollback_and_save_rej_files(
 /// Rolls back all `FilePatch`es up to the one belonging to patch with
 /// `down_to_index` index and generates quilt backup files for all of them.
 pub fn rollback_and_save_backup_files(
-    config: &ApplyConfig,
     state: &mut AppliedState,
     down_to_index: usize)
     -> Result<(), Error>
 {
+    let config = state.config;
     for applied_patch in state.applied_patches.iter().rev() {
         if applied_patch.index < down_to_index {
             break;
