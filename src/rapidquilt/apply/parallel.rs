@@ -167,8 +167,8 @@ fn apply_worker<'arena, 'config>(
     analyses: &AnalysisSet)
     -> Result<AppliedState<'arena, 'config>, Error>
 {
-    let mut applied_patches = Vec::<PatchStatus>::with_capacity(thread_file_patches.len());
-    let mut modified_files = HashMap::<Cow<'arena, Path>, ModifiedFile, BuildHasherDefault<seahash::SeaHasher>>::default();
+    let mut applied_patches = Vec::with_capacity(thread_file_patches.len());
+    let mut modified_files = HashMap::default();
 
     // First we go forward and apply patches until we apply all of them or get past the `earliest_broken_patch_index`
     for (index, text_file_patch) in thread_file_patches {
