@@ -178,12 +178,11 @@ fn apply_worker<'arena, 'config>(
         };
 
         // Try to apply this one `FilePatch`
-        match apply_one_file_patch(index,
-                                   text_file_patch,
-                                   &mut state,
-                                   arena,
-                                   &analyses,
-                                   &fn_analysis_note) {
+        match state.apply_one_file_patch(index,
+                                         text_file_patch,
+                                         arena,
+                                         &analyses,
+                                         &fn_analysis_note) {
             Ok(false) => {
                 // Patch failed to apply...
 
@@ -250,7 +249,7 @@ fn save_files_worker<'arena, 'config> (
     // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        if let Err(err) = rollback_and_save_rej_files(&mut state, final_patch) {
+        if let Err(err) = state.rollback_and_save_rej_files(final_patch) {
             return Err(err);
         }
 
@@ -279,7 +278,7 @@ fn save_files_worker<'arena, 'config> (
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(&mut state, down_to_index)?;
+            state.rollback_and_save_backup_files(down_to_index)?;
         }
     }
 

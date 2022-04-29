@@ -53,12 +53,11 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
                 let _ = print_analysis_note(&series_patch.filename, note, file_patch);
             };
 
-            if !apply_one_file_patch(index,
-                                     text_file_patch,
-                                     &mut state,
-                                     arena,
-                                     &analyses,
-                                     &fn_analysis_note)?
+            if !state.apply_one_file_patch(index,
+                                           text_file_patch,
+                                           arena,
+                                           &analyses,
+                                           &fn_analysis_note)?
             {
                 any_report_failed = true;
             }
@@ -69,7 +68,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             analyze_patch_failure(config.verbosity, index, &state.applied_patches, &state.modified_files, &mut failure_analysis)?;
 
             if !config.dry_run {
-                rollback_and_save_rej_files(&mut state, index)?;
+                state.rollback_and_save_rej_files(index)?;
             }
 
             break;
@@ -100,7 +99,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
                 ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
             };
 
-            rollback_and_save_backup_files(&mut state, down_to_index)?;
+            state.rollback_and_save_backup_files(down_to_index)?;
         }
     }
 

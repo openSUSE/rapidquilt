@@ -332,124 +332,6 @@ pub fn get_modified_file<
     Ok(item)
 }
 
-/// Contains the states of applied patches
-#[derive(Debug)]
-pub struct AppliedState<'arena, 'config> {
-    pub config: &'config ApplyConfig<'config>,
-    pub applied_patches: Vec::<PatchStatus<'arena, 'config>>,
-    pub modified_files: HashMap::<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
-}
-
-impl<'arena, 'config> AppliedState<'arena, 'config> {
-    /// Constructs a new `AppliedState` with the specified capacity.
-    pub fn new(config: &'config ApplyConfig, capacity: usize) -> AppliedState<'arena, 'config> {
-        AppliedState {
-            config,
-            applied_patches: Vec::with_capacity(capacity),
-            modified_files: HashMap::default(),
-        }
-    }
-}
-
-/// Applies single `FilePatch` to the appropriate file.
-///
-/// `config`: The configuration of the task.
-/// `index`: Index of the **patch** in the configuration.
-/// `file_patch`: The `FilePatch` that should be applied.
-/// `applied_patches`: Vector of `PatchStatus`es with reports of previously applied patches. Report for this one will be appended in.
-/// `modified_files`: HashMap of modified files so far. The currently patched file will be taken from or added to here.
-/// `arena`: For loading files.
-///
-/// Returns whether the patch applied successfully, or Err in case some other error happened.
-pub fn apply_one_file_patch<'arena>(
-    index: usize,
-    file_patch: TextFilePatch<'arena>,
-    state: &mut AppliedState<'arena, '_>,
-    arena: &'arena dyn Arena,
-    analyses: &AnalysisSet,
-    fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
-    -> Result<bool, Error>
-{
-    let config = state.config;
-    let patch = &config.series_patches[index];
-
-    // Get the file to patch
-    let target_filename = choose_filename_to_patch(config, file_patch.old_filename(), file_patch.new_filename(), &state.modified_files).clone();
-    let file = get_modified_file(config, &target_filename, &mut state.modified_files, arena)
-        .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
-
-    // If the patch renames the file. do it now...
-    let (mut file, final_filename) = if file_patch.is_rename() {
-        let new_filename = file_patch.new_filename().unwrap(); // NOTE(unwrap): It must be there for renaming patches.
-
-        if *new_filename == target_filename {
-            // TODO: Proper reporting!
-            println!("Patch {} would rename file {} to {}, but it already has the name.",
-                     patch.filename.display(),
-                     target_filename.display(),
-                     new_filename.display());
-        }
-
-        // Move out its content, but keep it among modified_files - we need a record on what
-        // to do later - unless something else changes it, we will need to delete it from disk.
-        let mut tmp_file = file.move_out();
-
-        let new_file = get_modified_file(config, new_filename, &mut state.modified_files, arena)
-            .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.to_path_buf() })?;
-
-        if !new_file.move_in(&mut tmp_file) {
-            // Regular patch will just happily overwrite existing file if there is any...
-            // We can not do that, because we would have no way to rollback.
-
-            // TODO: Proper reporting!
-            println!("Patch {} is renaming file {} to {}, which overwrites existing file!",
-                     patch.filename.display(),
-                     target_filename.display(),
-                     new_filename.display());
-
-            // Put the content back to the old file.
-            let file = get_modified_file(config, &target_filename, &mut state.modified_files, arena)
-                .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
-            file.move_in(&mut tmp_file);
-
-            // Note that we don't place anything into applied_patches - the patch
-            // was not applied at all.
-            return Ok(false);
-        }
-
-//         println!("Patch {} is renaming file {} to {}!",
-//                 patch.filename.display(),
-//                 file_patch.filename().display(),
-//                 new_filename.display());
-
-        (new_file, new_filename.clone())
-    } else {
-        (file, target_filename.clone())
-    };
-
-    let direction = if patch.reverse {
-        PatchDirection::Revert
-    } else {
-        PatchDirection::Forward
-    };
-
-    // Apply the `FilePatch` on it.
-    let report = file_patch.apply(&mut file, direction, config.fuzz, analyses, fn_analysis_note);
-
-    let report_ok = report.ok();
-
-    state.applied_patches.push(PatchStatus {
-        index,
-        file_patch,
-        target_filename,
-        final_filename,
-        report,
-        patch_filename: &patch.filename,
-    });
-
-    Ok(report_ok)
-}
-
 /// Rolls back single applied `FilePatch`
 pub fn rollback_applied_patch<'arena, 'modified_files, H: BuildHasher>(
     applied_patch: &PatchStatus<'arena, '_>,
@@ -476,89 +358,208 @@ pub fn rollback_applied_patch<'arena, 'modified_files, H: BuildHasher>(
     }
 }
 
-/// Rolls back all `FilePatch`es belonging to the `rejected_patch_index` and save
-/// ".rej" files for each `FilePatch` that failed applying
-pub fn rollback_and_save_rej_files(
-    state: &mut AppliedState,
-    rejected_patch_index: usize)
-    -> Result<(), Error>
-{
-    let config = state.config;
-    while let Some(applied_patch) = state.applied_patches.last() {
-        assert!(applied_patch.index <= rejected_patch_index);
-        if applied_patch.index < rejected_patch_index {
-            break;
-        }
-
-        rollback_applied_patch(applied_patch, &mut state.modified_files);
-
-        if applied_patch.report.failed() {
-            let rej_filename = make_rej_filename(&applied_patch.target_filename);
-
-            let file = match File::create(config.base_dir.join(&rej_filename)) {
-                Ok(file) => {
-                    file
-                }
-
-                Err(ref err) if err.kind() == io::ErrorKind::NotFound => {
-                    // This proably means the target directory doesn't exist.
-                    // In that case quilt doesn't create the reject file, so we do the same.
-                    // We still have to keep going, as other patches might be rejected.
-                    state.applied_patches.pop();
-
-                    if config.verbosity >= Verbosity::Normal {
-                        println!("Bypassing reject {:?} as directory doesn't exist", rej_filename);
-                    }
-
-                    continue
-                }
-
-                Err(err) => {
-                    return Err(Error::from_boxed_compat(Box::new(err)));
-                }
-            };
-
-            if config.verbosity >= Verbosity::Normal {
-                println!("Saving rejects to {:?}", rej_filename);
-            }
-
-            let mut writer = BufWriter::new(file);
-
-            applied_patch.file_patch.write_rej_to(&mut writer, &applied_patch.report).
-                with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
-        }
-
-        state.applied_patches.pop();
-    }
-
-    Ok(())
+/// Contains the states of applied patches
+#[derive(Debug)]
+pub struct AppliedState<'arena, 'config> {
+    pub config: &'config ApplyConfig<'config>,
+    pub applied_patches: Vec::<PatchStatus<'arena, 'config>>,
+    pub modified_files: HashMap::<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
 }
 
-/// Rolls back all `FilePatch`es up to the one belonging to patch with
-/// `down_to_index` index and generates quilt backup files for all of them.
-pub fn rollback_and_save_backup_files(
-    state: &mut AppliedState,
-    down_to_index: usize)
-    -> Result<(), Error>
-{
-    let config = state.config;
-    for applied_patch in state.applied_patches.iter().rev() {
-        if applied_patch.index < down_to_index {
-            break;
-        }
-
-        let file = rollback_applied_patch(applied_patch, &mut state.modified_files);
-
-        save_backup_file(config, &applied_patch.patch_filename, &applied_patch.target_filename, &file)?;
-
-        if applied_patch.file_patch.is_rename() {
-            // If it was a rename, we also have to backup the new file (it will be empty file).
-            let new_filename = applied_patch.file_patch.new_filename().unwrap();
-            // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-            let new_file = state.modified_files.get(new_filename).unwrap();
-            save_backup_file(config, applied_patch.patch_filename, new_filename, &new_file)?;
+impl<'arena, 'config> AppliedState<'arena, 'config> {
+    /// Constructs a new `AppliedState` with the specified capacity.
+    pub fn new(config: &'config ApplyConfig, capacity: usize) -> AppliedState<'arena, 'config> {
+        AppliedState {
+            config,
+            applied_patches: Vec::with_capacity(capacity),
+            modified_files: HashMap::default(),
         }
     }
 
-    Ok(())
+    /// Applies single `FilePatch` to the appropriate file.
+    ///
+    /// `config`: The configuration of the task.
+    /// `index`: Index of the **patch** in the configuration.
+    /// `file_patch`: The `FilePatch` that should be applied.
+    /// `applied_patches`: Vector of `PatchStatus`es with reports of previously applied patches. Report for this one will be appended in.
+    /// `modified_files`: HashMap of modified files so far. The currently patched file will be taken from or added to here.
+    /// `arena`: For loading files.
+    ///
+    /// Returns whether the patch applied successfully, or Err in case some other error happened.
+    pub fn apply_one_file_patch(
+        &mut self,
+        index: usize,
+        file_patch: TextFilePatch<'arena>,
+        arena: &'arena dyn Arena,
+        analyses: &AnalysisSet,
+        fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
+        -> Result<bool, Error>
+    {
+        let config = self.config;
+        let patch = &config.series_patches[index];
+
+        // Get the file to patch
+        let target_filename = choose_filename_to_patch(config, file_patch.old_filename(), file_patch.new_filename(), &self.modified_files).clone();
+        let file = get_modified_file(config, &target_filename, &mut self.modified_files, arena)
+            .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
+
+        // If the patch renames the file. do it now...
+        let (mut file, final_filename) = if file_patch.is_rename() {
+            let new_filename = file_patch.new_filename().unwrap(); // NOTE(unwrap): It must be there for renaming patches.
+
+            if *new_filename == target_filename {
+                // TODO: Proper reporting!
+                println!("Patch {} would rename file {} to {}, but it already has the name.",
+                         patch.filename.display(),
+                         target_filename.display(),
+                         new_filename.display());
+            }
+
+            // Move out its content, but keep it among modified_files - we need a record on what
+            // to do later - unless something else changes it, we will need to delete it from disk.
+            let mut tmp_file = file.move_out();
+
+            let new_file = get_modified_file(config, new_filename, &mut self.modified_files, arena)
+                .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.to_path_buf() })?;
+
+            if !new_file.move_in(&mut tmp_file) {
+                // Regular patch will just happily overwrite existing file if there is any...
+                // We can not do that, because we would have no way to rollback.
+
+                // TODO: Proper reporting!
+                println!("Patch {} is renaming file {} to {}, which overwrites existing file!",
+                         patch.filename.display(),
+                         target_filename.display(),
+                         new_filename.display());
+
+                // Put the content back to the old file.
+                let file = get_modified_file(config, &target_filename, &mut self.modified_files, arena)
+                    .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
+                file.move_in(&mut tmp_file);
+
+                // Note that we don't place anything into applied_patches - the patch
+                // was not applied at all.
+                return Ok(false);
+            }
+
+//                 println!("Patch {} is renaming file {} to {}!",
+//                         patch.filename.display(),
+//                         file_patch.filename().display(),
+//                         new_filename.display());
+
+            (new_file, new_filename.clone())
+        } else {
+            (file, target_filename.clone())
+        };
+
+        let direction = if patch.reverse {
+            PatchDirection::Revert
+        } else {
+            PatchDirection::Forward
+        };
+
+        // Apply the `FilePatch` on it.
+        let report = file_patch.apply(&mut file, direction, config.fuzz, analyses, fn_analysis_note);
+
+        let report_ok = report.ok();
+
+        self.applied_patches.push(PatchStatus {
+            index,
+            file_patch,
+            target_filename,
+            final_filename,
+            report,
+            patch_filename: &patch.filename,
+        });
+
+        Ok(report_ok)
+    }
+
+    /// Rolls back all `FilePatch`es belonging to the `rejected_patch_index` and save
+    /// ".rej" files for each `FilePatch` that failed applying
+    pub fn rollback_and_save_rej_files(
+        &mut self,
+        rejected_patch_index: usize)
+        -> Result<(), Error>
+    {
+        let config = self.config;
+        while let Some(applied_patch) = self.applied_patches.last() {
+            assert!(applied_patch.index <= rejected_patch_index);
+            if applied_patch.index < rejected_patch_index {
+                break;
+            }
+
+            rollback_applied_patch(applied_patch, &mut self.modified_files);
+
+            if applied_patch.report.failed() {
+                let rej_filename = make_rej_filename(&applied_patch.target_filename);
+
+                let file = match File::create(config.base_dir.join(&rej_filename)) {
+                    Ok(file) => {
+                        file
+                    }
+
+                    Err(ref err) if err.kind() == io::ErrorKind::NotFound => {
+                        // This proably means the target directory doesn't exist.
+                        // In that case quilt doesn't create the reject file, so we do the same.
+                        // We still have to keep going, as other patches might be rejected.
+                        self.applied_patches.pop();
+
+                        if config.verbosity >= Verbosity::Normal {
+                            println!("Bypassing reject {:?} as directory doesn't exist", rej_filename);
+                        }
+
+                        continue
+                    }
+
+                    Err(err) => {
+                        return Err(Error::from_boxed_compat(Box::new(err)));
+                    }
+                };
+
+                if config.verbosity >= Verbosity::Normal {
+                    println!("Saving rejects to {:?}", rej_filename);
+                }
+
+                let mut writer = BufWriter::new(file);
+
+                applied_patch.file_patch.write_rej_to(&mut writer, &applied_patch.report).
+                    with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
+            }
+
+            self.applied_patches.pop();
+        }
+
+        Ok(())
+    }
+
+    /// Rolls back all `FilePatch`es up to the one belonging to patch with
+    /// `down_to_index` index and generates quilt backup files for all of them.
+    pub fn rollback_and_save_backup_files(
+        &mut self,
+        down_to_index: usize)
+        -> Result<(), Error>
+    {
+        let config = self.config;
+        for applied_patch in self.applied_patches.iter().rev() {
+            if applied_patch.index < down_to_index {
+                break;
+            }
+
+            let file = rollback_applied_patch(applied_patch, &mut self.modified_files);
+
+            save_backup_file(config, &applied_patch.patch_filename, &applied_patch.target_filename, &file)?;
+
+            if applied_patch.file_patch.is_rename() {
+                // If it was a rename, we also have to backup the new file (it will be empty file).
+                let new_filename = applied_patch.file_patch.new_filename().unwrap();
+                // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
+                let new_file = self.modified_files.get(new_filename).unwrap();
+                save_backup_file(config, applied_patch.patch_filename, new_filename, &new_file)?;
+            }
+        }
+
+        Ok(())
+    }
+
 }
