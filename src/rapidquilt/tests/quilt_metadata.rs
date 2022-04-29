@@ -55,6 +55,25 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
 }
 
 #[cfg(test)]
+fn check_extra_files(src: &Path, dst: &Path) -> Result<(), Error> {
+    let mut errors = Vec::<String>::new();
+    for entry in fs::read_dir(dst).context(format!("Reading {:?}", dst))? {
+        let entry = entry?;
+        let dst_path = entry.path();
+        let src_path = src.join(entry.file_name());
+        if !src_path.exists() {
+            errors.push(format!("Unexpected file {:?}", dst_path));
+        } else if dst_path.is_dir() {
+            check_extra_files(&src_path, &dst_path)?;
+        }
+    }
+    match errors.len() {
+        0 => Ok(()),
+        _ => Err(err_msg(errors.join("\n"))),
+    }
+}
+
+#[cfg(test)]
 fn push_all(path: &Path, num_threads: usize, expect: bool) -> Result<(), Error> {
     eprintln!("Push all patches in {}", path.display());
 
@@ -75,7 +94,8 @@ fn push_all(path: &Path, num_threads: usize, expect: bool) -> Result<(), Error> 
 
     match result {
         Ok(status) if status == expect => {
-            compare_tree(&path.join("expect"), &work_path)
+            compare_tree(&path.join("expect"), &work_path)?;
+            check_extra_files(&path.join("expect"), &work_path)
         },
         Ok(_) => Err(err_msg(match expect {
             true => "Push failed unexpectedly",
