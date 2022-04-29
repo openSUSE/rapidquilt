@@ -739,7 +739,14 @@ impl<'a> TextFilePatch<'a> {
 
         // Just delete everything and we are done
         modified_file.content.clear();
-        modified_file.deleted = true;
+        let target_filename = match direction {
+            PatchDirection::Forward => &self.new_filename,
+            PatchDirection::Revert => &self.old_filename,
+        };
+        match target_filename {
+            None => modified_file.deleted = true,
+            Some(_) => (),
+        };
 
         FilePatchApplyReport::single_hunk_success(0, 0, -(expected_content.len() as isize), direction, fuzz)
     }

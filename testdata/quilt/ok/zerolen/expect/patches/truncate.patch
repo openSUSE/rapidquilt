@@ -1,0 +1,22 @@
+--- a/empty
++++ b/empty
+@@ -1,4 +0,0 @@
+-This file
+-was empty.
+-But it now contains
+-A FEW LINES.
+--- a/to-be-deleted
++++ /dev/null
+@@ -1,4 +0,0 @@
+-This file
+-was ALSO empty.
+-But it now contains
+-a few lines.
+--- /dev/null
++++ b/truncated
+@@ -1,5 +0,0 @@
+-And finally,
+-yet another file
+-was empty.
+-But it ALSO contains
+-a few lines now.
