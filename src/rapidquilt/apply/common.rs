@@ -9,6 +9,7 @@ use std::fs::{self, File};
 use std::hash::BuildHasherDefault;
 use std::io::{self, BufWriter};
 use std::hash::BuildHasher;
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
 use failure::{Error, ResultExt};
@@ -162,16 +163,32 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
     Ok(())
 }
 
+#[derive(Debug,Default)]
+pub struct ModifiedFiles<'a> {
+    inner: HashMap<Cow<'a, Path>, ModifiedFile<'a>, BuildHasherDefault<seahash::SeaHasher>>,
+}
+
+impl<'a> Deref for ModifiedFiles<'a> {
+    type Target = HashMap<Cow<'a, Path>, ModifiedFile<'a>, BuildHasherDefault<seahash::SeaHasher>>;
+    #[inline]
+    fn deref(&self) -> &Self::Target { &self.inner }
+}
+
+impl<'a> DerefMut for ModifiedFiles<'a> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target { &mut self.inner }
+}
+
 /// Save all `modified_files` to disk. It also takes care of creating/deleting
 /// the files and containing directories.
 pub fn save_modified_files<'arena, H: BuildHasher>
 (
     config: &ApplyConfig,
-    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
+    modified_files: &ModifiedFiles<'arena>,
     directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>)
     -> Result<(), Error>
 {
-    for (filename, file) in modified_files {
+    for (filename, file) in modified_files.iter() {
         save_modified_file(config, filename, file, directories_for_cleaning)
             .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.to_path_buf() })?;
     }
@@ -241,11 +258,11 @@ pub struct PatchStatus<'arena, 'config> {
 /// # panics
 ///
 /// Panics if both `old_filename` and `new_filename` are `None`.
-pub fn choose_filename_to_patch<'arena, 'filename, H: BuildHasher>(
+pub fn choose_filename_to_patch<'arena, 'filename>(
     config: &ApplyConfig,
     old_filename: Option<&'filename Cow<'arena, Path>>,
     new_filename: Option<&'filename Cow<'arena, Path>>,
-    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
+    modified_files: &ModifiedFiles)
     -> &'filename Cow<'arena, Path>
 {
     match (old_filename, new_filename) {
@@ -303,12 +320,11 @@ pub fn choose_filename_to_patch<'arena, 'filename, H: BuildHasher>(
 /// or loads it from disk if it exists, or creates new one.
 pub fn get_modified_file<
     'arena: 'modified_files,
-    'modified_files,
-    H: BuildHasher>
+    'modified_files>
 (
     config: &ApplyConfig,
     filename: &Cow<'arena, Path>,
-    modified_files: &'modified_files mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>,
+    modified_files: &'modified_files mut ModifiedFiles<'arena>,
     arena: &'arena dyn Arena)
     -> Result<&'modified_files mut ModifiedFile<'arena>, io::Error>
 {
@@ -333,9 +349,9 @@ pub fn get_modified_file<
 }
 
 /// Rolls back single applied `FilePatch`
-pub fn rollback_applied_patch<'arena, 'modified_files, H: BuildHasher>(
+pub fn rollback_applied_patch<'arena, 'modified_files>(
     applied_patch: &PatchStatus<'arena, '_>,
-    modified_files: &'modified_files mut HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, H>)
+    modified_files: &'modified_files mut ModifiedFiles<'arena>)
     -> &'modified_files ModifiedFile<'arena>
 {
     let mut file = modified_files.get_mut(&applied_patch.final_filename).unwrap(); // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
@@ -363,7 +379,7 @@ pub fn rollback_applied_patch<'arena, 'modified_files, H: BuildHasher>(
 pub struct AppliedState<'arena, 'config> {
     pub config: &'config ApplyConfig<'config>,
     pub applied_patches: Vec::<PatchStatus<'arena, 'config>>,
-    pub modified_files: HashMap::<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
+    pub modified_files: ModifiedFiles<'arena>,
 }
 
 impl<'arena, 'config> AppliedState<'arena, 'config> {
@@ -372,7 +388,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
         AppliedState {
             config,
             applied_patches: Vec::with_capacity(capacity),
-            modified_files: HashMap::default(),
+            modified_files: ModifiedFiles::default(),
         }
     }
 
