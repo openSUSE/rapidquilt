@@ -934,16 +934,7 @@ enum FilePatchMetadataBuildError<'a> {
 
 impl<'a> FilePatchMetadata<'a> {
     pub fn recognize_kind(&self, hunks: &[TextHunk]) -> FilePatchKind {
-        // First check the filenames
-        if self.old_filename.as_ref() == Some(&Filename::DevNull) {
-            return FilePatchKind::Create;
-        }
-        if self.new_filename.as_ref() == Some(&Filename::DevNull) {
-            return FilePatchKind::Delete;
-        }
-
-        // XXX: There are patches that do not use /dev/null but are creating or deleting files,
-        //      recognize them here.
+        // Check if the patch source or target is a zero-length file.
         if hunks.len() == 1 {
             let only_hunk = &hunks[0];
 
@@ -1208,6 +1199,35 @@ Other content.
     assert_eq!(file_patch.hunks.len(), 1);
     assert_eq!(file_patch.hunks[0].add.content[0], s!(b"mmm\n"));
 
+    // Regular filepatch with a funny new name
+    let filepatch_txt = br#"garbage1
+garbage2
+garbage3
+--- filename1
++++ /dev/null
+@@ -200,3 +210,3 @@ place2
+ mmm
+-nnn
++ooo
+ ppp
+Some other line...
+Other content.
+"#;
+
+    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+
+    assert_eq!(header.len(), 3);
+    assert_eq!(header[0], b"garbage1\n");
+    assert_eq!(header[1], b"garbage2\n");
+    assert_eq!(header[2], b"garbage3\n");
+
+    assert_eq!(file_patch.kind(), FilePatchKind::Modify);
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), None);
+    assert_eq!(file_patch.old_permissions(), None);
+    assert_eq!(file_patch.new_permissions(), None);
+    assert_eq!(file_patch.hunks.len(), 1);
+    assert_eq!(file_patch.hunks[0].add.content[0], s!(b"mmm\n"));
 
     // Creating filepatch
     let filepatch_txt = br#"garbage1
