@@ -259,7 +259,7 @@ fn save_files_worker<'arena, 'config> (
 
         // Save all the files we modified
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        if let Err(err) = save_modified_files(config, &state.modified_files, &mut directories_for_cleaning) {
+        if let Err(err) = state.modified_files.save(config, &mut directories_for_cleaning) {
             return Err(err);
         }
         clean_empty_directories(directories_for_cleaning)?;
