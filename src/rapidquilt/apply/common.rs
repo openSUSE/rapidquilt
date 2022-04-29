@@ -163,33 +163,41 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
     Ok(())
 }
 
-#[derive(Debug,Default)]
-pub struct ModifiedFiles<'a> {
-    inner: HashMap<Cow<'a, Path>, ModifiedFile<'a>, BuildHasherDefault<seahash::SeaHasher>>,
+#[derive(Debug)]
+pub struct ModifiedFiles<'arena, 'config> {
+    config: &'config ApplyConfig<'config>,
+    inner: HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
 }
 
-impl<'a> Deref for ModifiedFiles<'a> {
-    type Target = HashMap<Cow<'a, Path>, ModifiedFile<'a>, BuildHasherDefault<seahash::SeaHasher>>;
+impl<'arena, 'config> Deref for ModifiedFiles<'arena, 'config> {
+    type Target = HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>;
     #[inline]
     fn deref(&self) -> &Self::Target { &self.inner }
 }
 
-impl<'a> DerefMut for ModifiedFiles<'a> {
+impl<'arena, 'config> DerefMut for ModifiedFiles<'arena, 'config> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target { &mut self.inner }
 }
 
-impl<'a> ModifiedFiles<'a> {
+impl<'arena, 'config> ModifiedFiles<'arena, 'config> {
+    /// Constructs a new `AppliedState` with the specified capacity.
+    pub fn new(config: &'config ApplyConfig) -> Self {
+        Self {
+            config,
+            inner: HashMap::default(),
+        }
+    }
+
     /// Save all `modified_files` to disk. It also takes care of
     /// creating/deleting the files and containing directories.
     pub fn save<H: BuildHasher>(
         &self,
-        config: &ApplyConfig,
-        directories_for_cleaning: &mut HashSet<Cow<'a, Path>, H>)
+        directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>)
         -> Result<(), Error>
     {
         for (filename, file) in self.iter() {
-            save_modified_file(config, filename, file, directories_for_cleaning)
+            save_modified_file(self.config, filename, file, directories_for_cleaning)
                 .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.to_path_buf() })?;
         }
 
@@ -200,11 +208,11 @@ impl<'a> ModifiedFiles<'a> {
     /// or loads it from disk if it exists, or creates new one.
     pub fn get_or_load(
         &mut self,
-        config: &ApplyConfig,
-        filename: &Cow<'a, Path>,
-        arena: &'a dyn Arena)
-        -> Result<&mut ModifiedFile<'a>, io::Error>
+        filename: &Cow<'arena, Path>,
+        arena: &'arena dyn Arena)
+        -> Result<&mut ModifiedFile<'arena>, io::Error>
     {
+        let config = self.config;
         // Load the file or create it empty
         let item = match self.entry(filename.clone()) {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -228,8 +236,8 @@ impl<'a> ModifiedFiles<'a> {
     /// Rolls back single applied `FilePatch`
     pub fn rollback(
         &mut self,
-        applied_patch: &PatchStatus<'a, '_>)
-        -> &ModifiedFile<'a>
+        applied_patch: &PatchStatus<'arena, '_>)
+        -> &ModifiedFile<'arena>
     {
         // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
         let mut file = self.get_mut(&applied_patch.final_filename).unwrap();
@@ -381,7 +389,7 @@ pub fn choose_filename_to_patch<'arena, 'filename>(
 pub struct AppliedState<'arena, 'config> {
     pub config: &'config ApplyConfig<'config>,
     pub applied_patches: Vec::<PatchStatus<'arena, 'config>>,
-    pub modified_files: ModifiedFiles<'arena>,
+    pub modified_files: ModifiedFiles<'arena, 'config>,
 }
 
 impl<'arena, 'config> AppliedState<'arena, 'config> {
@@ -390,7 +398,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
         AppliedState {
             config,
             applied_patches: Vec::with_capacity(capacity),
-            modified_files: ModifiedFiles::default(),
+            modified_files: ModifiedFiles::new(config),
         }
     }
 
@@ -418,7 +426,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
 
         // Get the file to patch
         let target_filename = choose_filename_to_patch(config, file_patch.old_filename(), file_patch.new_filename(), &self.modified_files).clone();
-        let file = self.modified_files.get_or_load(config, &target_filename, arena)
+        let file = self.modified_files.get_or_load(&target_filename, arena)
             .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
 
         // If the patch renames the file. do it now...
@@ -437,7 +445,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
             // to do later - unless something else changes it, we will need to delete it from disk.
             let mut tmp_file = file.move_out();
 
-            let new_file = self.modified_files.get_or_load(config, new_filename, arena)
+            let new_file = self.modified_files.get_or_load(new_filename, arena)
                 .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.to_path_buf() })?;
 
             if !new_file.move_in(&mut tmp_file) {
@@ -451,7 +459,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
                          new_filename.display());
 
                 // Put the content back to the old file.
-                let file = self.modified_files.get_or_load(config, &target_filename, arena)
+                let file = self.modified_files.get_or_load(&target_filename, arena)
                     .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
                 file.move_in(&mut tmp_file);
 
