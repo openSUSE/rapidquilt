@@ -6,7 +6,6 @@ use std::ffi::OsStr;
 use std::path::Path;
 use std::io::ErrorKind;
 use failure::{Error, ResultExt, err_msg};
-use std::io::Write;
 
 #[cfg(test)]
 fn copy_tree(from: &Path, to: &Path) -> Result<(), Error> {
@@ -38,14 +37,14 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
             let actual = fs::read(&dest_path)
                 .context(format!("Reading {:?}", dest_path))?;
             if actual != expected {
-                let stderr = std::io::stderr();
-                let mut stderr = stderr.lock();
-                writeln!(stderr, "*** EXPECTED ***")?;
-                stderr.write(&expected)?;
-                writeln!(stderr, "*** ACTUAL ***")?;
-                stderr.write(&actual)?;
+                eprintln!("Mismatch in {:?}", entry.file_name());
+                eprintln!("<<< EXPECTED\n{}",
+                          String::from_utf8_lossy(&expected));
+                eprintln!("=== ACTUAL\n{}",
+                          String::from_utf8_lossy(&actual));
+                eprintln!(">>>");
 
-                panic!("Mismatch in {}", src_path.display());
+                panic!("Directory mismatch at {}", src.display());
             }
         } else if src_path.is_dir() {
             compare_tree(&src_path, &dest_path)?;
@@ -111,7 +110,13 @@ fn check_series(path: &str, num_threads: usize, expect: bool) -> Result<(), Erro
     match dir {
         Ok(dir) => {
             for entry in dir {
-                push_all(&entry?.path(), num_threads, expect)?;
+                let entry = entry?;
+                if let Err(err) = push_all(&entry.path(), num_threads, expect) {
+                    for fail in err.iter_chain() {
+                        eprintln!("{}", fail);
+                    }
+                    panic!("Push all failed for {:?}", entry.file_name());
+                }
             }
             Ok(())
         },
