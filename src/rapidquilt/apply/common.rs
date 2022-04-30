@@ -35,7 +35,11 @@ pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
 }
 
 /// Delete all directories and their parents if they are empty.
-pub fn clean_empty_directories<P: AsRef<Path>, I: IntoIterator<Item = P>>(directories_for_cleaning: I) -> Result<(), io::Error> {
+pub fn clean_empty_directories<P, I>(base_dir: P, directories_for_cleaning: I) -> Result<(), io::Error>
+where P: AsRef<Path>,
+      I: IntoIterator,
+      I::Item: AsRef<Path>
+{
     // Warning: This function can be called by multiple threads at the same time for the same
     //          directories (or nested directories), so things may disappear under its hands, it
     //          must be able to deal with it.
@@ -47,8 +51,9 @@ pub fn clean_empty_directories<P: AsRef<Path>, I: IntoIterator<Item = P>>(direct
         // the working directory)
         let mut directory = directory.as_ref();
         loop {
+            let dir_path = base_dir.as_ref().join(&directory);
             // Check if there is at least one file in the directory
-            match fs::read_dir(directory).map(|mut d| d.next()) {
+            match fs::read_dir(&dir_path).map(|mut d| d.next()) {
                 Err(ref error) if error.kind() == io::ErrorKind::NotFound => {
                     // Directory itself does not exist, we are done.
                     // This may happen if we already deleted it when cleaning after another file.
@@ -73,7 +78,7 @@ pub fn clean_empty_directories<P: AsRef<Path>, I: IntoIterator<Item = P>>(direct
                 }
             }
 
-            match fs::remove_dir(directory) {
+            match fs::remove_dir(dir_path) {
                 Err(error) => {
                     if error.kind() != io::ErrorKind::NotFound {
                         return Err(error);

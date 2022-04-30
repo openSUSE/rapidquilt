@@ -84,7 +84,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
         state.modified_files.save(&mut directories_for_cleaning)?;
-        clean_empty_directories(directories_for_cleaning)?;
+        clean_empty_directories(config.base_dir, directories_for_cleaning)?;
 
         if config.do_backups == ApplyConfigDoBackups::Always ||
           (config.do_backups == ApplyConfigDoBackups::OnFail &&

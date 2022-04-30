@@ -262,7 +262,7 @@ fn save_files_worker<'arena, 'config> (
         if let Err(err) = state.modified_files.save(&mut directories_for_cleaning) {
             return Err(err);
         }
-        clean_empty_directories(directories_for_cleaning)?;
+        clean_empty_directories(config.base_dir, directories_for_cleaning)?;
 
         // Maybe save some backup files
         if config.do_backups == ApplyConfigDoBackups::Always ||

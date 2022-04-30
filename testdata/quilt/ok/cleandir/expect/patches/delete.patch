@@ -1,0 +1,8 @@
+---
+ subdir/to-delete |    1 -
+ 1 file changed, 1 deletion(-)
+
+--- a/subdir/to-delete
++++ /dev/null
+@@ -1 +0,0 @@
+-This file will be deleted.
