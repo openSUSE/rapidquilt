@@ -355,10 +355,20 @@ enum MetadataLine<'a> {
 
 named!(parse_metadata_line<CompleteByteSlice, MetadataLine>,
     alt!(
-        do_parse!(tag!(s!(b"diff --git ")) >> old_filename: parse_filename >> new_filename: parse_filename >> take_until_newline_incl >> (MetadataLine::GitDiffSeparator(old_filename, new_filename))) |
+        do_parse!(tag!(s!(b"diff --git ")) >>
+                  old_filename: parse_filename >>
+                  new_filename: parse_filename >>
+                  take_until_newline_incl >>
+                  (MetadataLine::GitDiffSeparator(old_filename, new_filename))) |
 
-        do_parse!(tag!(s!(b"--- ")) >> filename: parse_filename >> take_until_newline_incl >> (MetadataLine::MinusFilename(filename))) |
-        do_parse!(tag!(s!(b"+++ ")) >> filename: parse_filename >> take_until_newline_incl >> (MetadataLine::PlusFilename(filename)))
+        do_parse!(tag!(s!(b"--- ")) >>
+                  filename: parse_filename >>
+                  take_until_newline_incl >>
+                  (MetadataLine::MinusFilename(filename))) |
+        do_parse!(tag!(s!(b"+++ ")) >>
+                  filename: parse_filename >>
+                  take_until_newline_incl >>
+                  (MetadataLine::PlusFilename(filename)))
     )
 );
 
@@ -398,21 +408,45 @@ enum GitMetadataLine {
 
 named!(parse_git_metadata_line<CompleteByteSlice, GitMetadataLine>,
     alt!(
-        do_parse!(tag!(s!(b"index ")) >> take_until_newline_incl >> (GitMetadataLine::Index)) |
+        do_parse!(tag!(s!(b"index ")) >>
+                  take_until_newline_incl >>
+                  (GitMetadataLine::Index)) |
 
         // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
-        do_parse!(tag!(s!(b"rename from ")) >> take_until_newline_incl >> (GitMetadataLine::RenameFrom)) |
-        do_parse!(tag!(s!(b"rename to "))   >> take_until_newline_incl >> (GitMetadataLine::RenameTo)) |
+        do_parse!(tag!(s!(b"rename from ")) >>
+                  take_until_newline_incl >>
+                  (GitMetadataLine::RenameFrom)) |
+        do_parse!(tag!(s!(b"rename to ")) >>
+                  take_until_newline_incl >>
+                  (GitMetadataLine::RenameTo)) |
 
-        do_parse!(tag!(s!(b"copy from ")) >> take_until_newline_incl >> (GitMetadataLine::CopyFrom)) |
-        do_parse!(tag!(s!(b"copy to "))   >> take_until_newline_incl >> (GitMetadataLine::CopyTo)) |
+        do_parse!(tag!(s!(b"copy from ")) >>
+                  take_until_newline_incl >>
+                  (GitMetadataLine::CopyFrom)) |
+        do_parse!(tag!(s!(b"copy to ")) >>
+                  take_until_newline_incl >>
+                  (GitMetadataLine::CopyTo)) |
 
-        do_parse!(tag!(s!(b"GIT binary patch")) >> take_until_newline_incl >> (GitMetadataLine::GitBinaryPatch)) |
+        do_parse!(tag!(s!(b"GIT binary patch")) >>
+                  take_until_newline_incl >>
+                  (GitMetadataLine::GitBinaryPatch)) |
 
-        do_parse!(tag!(s!(b"old mode "))         >> mode: parse_mode >> newline >> (GitMetadataLine::OldMode(mode))) |
-        do_parse!(tag!(s!(b"new mode "))         >> mode: parse_mode >> newline >> (GitMetadataLine::NewMode(mode))) |
-        do_parse!(tag!(s!(b"deleted file mode ")) >> mode: parse_mode >> newline >> (GitMetadataLine::DeletedFileMode(mode))) |
-        do_parse!(tag!(s!(b"new file mode "))    >> mode: parse_mode >> newline >> (GitMetadataLine::NewFileMode(mode)))
+        do_parse!(tag!(s!(b"old mode ")) >>
+                  mode: parse_mode >>
+                  newline >>
+                  (GitMetadataLine::OldMode(mode))) |
+        do_parse!(tag!(s!(b"new mode ")) >>
+                  mode: parse_mode >>
+                  newline >>
+                  (GitMetadataLine::NewMode(mode))) |
+        do_parse!(tag!(s!(b"deleted file mode ")) >>
+                  mode: parse_mode >>
+                  newline >>
+                  (GitMetadataLine::DeletedFileMode(mode))) |
+        do_parse!(tag!(s!(b"new file mode ")) >>
+                  mode: parse_mode >>
+                  newline >>
+                  (GitMetadataLine::NewFileMode(mode)))
     )
 );
 
@@ -678,12 +712,20 @@ named!(parse_hunk_line<CompleteByteSlice, (HunkLineType, &[u8])>,
             return_error!(
                 add_return_error!(ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32),
                     alt!(
-                        do_parse!(tag!(c!(b'+')) >> line: take_until_newline_incl >> ((HunkLineType::Add, &line[..]))) |
-                        do_parse!(tag!(c!(b'-')) >> line: take_until_newline_incl >> ((HunkLineType::Remove, &line[..]))) |
-                        do_parse!(tag!(c!(b' ')) >> line: take_until_newline_incl >> ((HunkLineType::Context, &line[..]))) |
+                        do_parse!(tag!(c!(b'+')) >>
+                                  line: take_until_newline_incl >>
+                                  ((HunkLineType::Add, &line[..]))) |
+                        do_parse!(tag!(c!(b'-')) >>
+                                  line: take_until_newline_incl >>
+                                  ((HunkLineType::Remove, &line[..]))) |
+                        do_parse!(tag!(c!(b' ')) >>
+                                  line: take_until_newline_incl >>
+                                  ((HunkLineType::Context, &line[..]))) |
 
                         // XXX: patch allows context lines starting with TAB character. That TAB is then part of the line.
-                        do_parse!(peek!(tag!(c!(b'\t'))) >> line: take_until_newline_incl >> ((HunkLineType::Context, &line[..]))) |
+                        do_parse!(peek!(tag!(c!(b'\t'))) >>
+                                  line: take_until_newline_incl >>
+                                  ((HunkLineType::Context, &line[..]))) |
 
                         // XXX: patch allows completely empty line as an empty context line.
                         value!((HunkLineType::Context, c!(b'\n')), newline)
