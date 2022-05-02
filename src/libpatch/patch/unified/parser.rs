@@ -358,16 +358,19 @@ named!(parse_metadata_line<CompleteByteSlice, MetadataLine>,
         do_parse!(tag!(s!(b"diff --git ")) >>
                   old_filename: parse_filename >>
                   new_filename: parse_filename >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (MetadataLine::GitDiffSeparator(old_filename, new_filename))) |
 
         do_parse!(tag!(s!(b"--- ")) >>
                   filename: parse_filename >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (MetadataLine::MinusFilename(filename))) |
         do_parse!(tag!(s!(b"+++ ")) >>
                   filename: parse_filename >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (MetadataLine::PlusFilename(filename)))
     )
 );
@@ -409,26 +412,32 @@ enum GitMetadataLine {
 named!(parse_git_metadata_line<CompleteByteSlice, GitMetadataLine>,
     alt!(
         do_parse!(tag!(s!(b"index ")) >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (GitMetadataLine::Index)) |
 
         // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
         do_parse!(tag!(s!(b"rename from ")) >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (GitMetadataLine::RenameFrom)) |
         do_parse!(tag!(s!(b"rename to ")) >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (GitMetadataLine::RenameTo)) |
 
         do_parse!(tag!(s!(b"copy from ")) >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (GitMetadataLine::CopyFrom)) |
         do_parse!(tag!(s!(b"copy to ")) >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (GitMetadataLine::CopyTo)) |
 
         do_parse!(tag!(s!(b"GIT binary patch")) >>
-                  take_until_newline_incl >>
+                  take_until_newline >>
+                  newline >>
                   (GitMetadataLine::GitBinaryPatch)) |
 
         do_parse!(tag!(s!(b"old mode ")) >>
