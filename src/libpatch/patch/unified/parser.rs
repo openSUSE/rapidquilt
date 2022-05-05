@@ -134,6 +134,24 @@ macro_rules! assert_parse_error_code {
     };
 }
 
+#[cfg(test)]
+macro_rules! assert_parse_error {
+    ( $parse_func:ident, $input:expr, $error:expr ) => {
+        {
+            let ret = $parse_func(CompleteByteSlice($input));
+            match ret {
+                Err(error) => {
+                    assert_eq!(ParseError::from(error), $error);
+                }
+
+                _ => {
+                    panic!("Parsing {:?}, got unexpected return: {:?}", $input, ret);
+                }
+            }
+        }
+    };
+}
+
 /// Shortcut to make slice from byte string literal
 macro_rules! s { ( $byte_string:expr ) => { &$byte_string[..] } }
 
