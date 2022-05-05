@@ -1534,9 +1534,11 @@ GIT binary patch
 
     let ret = parse_filepatch(CompleteByteSlice(filepatch_txt), false);
     match ret {
-        Err(nom::Err::Error(  nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) |
-        Err(nom::Err::Failure(nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) => {
-            assert_eq!(error_code, ParseErrorCode::UnsupportedMetadata as u32);
+        Err(error) => {
+            assert_eq!(ParseError::from(error),
+                       ParseError::UnsupportedMetadata {
+                           line: "GIT binary patch".to_string()
+                       });
         }
 
         _ => {
