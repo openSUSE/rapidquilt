@@ -358,6 +358,15 @@ fn parse_mode(input: CompleteByteSlice) -> IResult<CompleteByteSlice, u32> {
 #[cfg(test)]
 #[test]
 fn test_parse_mode() {
+    macro_rules! assert_bad_mode(
+        ($mode:expr) => {
+            let mode = $mode;
+            assert_parse_error!(
+                parse_mode, mode.as_bytes(),
+                ParseError::BadMode { mode_str: mode.to_string() });
+        };
+    );
+
     assert_parsed!(parse_mode, b"123456", 0o123456);
     assert_parsed!(parse_mode, b"012345", 0o12345);
     assert_parsed!(parse_mode, b"   123456", 0o123456);
@@ -366,10 +375,10 @@ fn test_parse_mode() {
     assert_parsed!(parse_mode, b"100755", 0o100755);
     assert_parsed!(parse_mode, b"100644", 0o100644);
 
-    assert_parse_error_code!(parse_mode, b"100aaa", ParseErrorCode::BadMode as u32);
-    assert_parse_error_code!(parse_mode, b"1", ParseErrorCode::BadMode as u32);
-    assert_parse_error_code!(parse_mode, b"10000000", ParseErrorCode::BadMode as u32);
-    assert_parse_error_code!(parse_mode, b"1000000000000000000000000000", ParseErrorCode::BadMode as u32);
+    assert_bad_mode!("100aaa");
+    assert_bad_mode!("1");
+    assert_bad_mode!("10000000");
+    assert_bad_mode!("1000000000000000000000000000");
 }
 
 #[derive(Debug, PartialEq)]
