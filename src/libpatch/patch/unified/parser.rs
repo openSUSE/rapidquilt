@@ -65,7 +65,7 @@ impl<'a> From<nom::Err<CompleteByteSlice<'a>>> for ParseError {
         };
 
         let place_as_string = String::from_utf8_lossy(
-            &take_until_newline(place).map(|a| a.1).unwrap_or(CompleteByteSlice(b"?"))
+            &maybe_take_until_newline(place).map(|a| a.1).unwrap_or(CompleteByteSlice(b"?"))
         ).to_string();
 
         let code = match err_kind {
@@ -159,6 +159,10 @@ named!(take_until_newline<CompleteByteSlice, CompleteByteSlice>, take_until!(c!(
 named!(take_until_newline_incl<CompleteByteSlice, CompleteByteSlice>,
     // TODO: Better way?
     recognize!(pair!(call!(take_until_newline), take!(1)))
+);
+
+named!(maybe_take_until_newline<CompleteByteSlice, CompleteByteSlice>,
+       take_while!(|c| c != b'\n')
 );
 
 // Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
