@@ -31,7 +31,7 @@ jemallocator = "0.1.9"
 atty = "0.2.11"
 libc = "0.2.50"
 memchr = { version = "2.2.0", features = ["libc"] }
-nom = "4.2.2"
+nom = "7"
 pathfinding = "1.1.12"
 rayon = "1.0.3"
 seahash = "3.0.6"

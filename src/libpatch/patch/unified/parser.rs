@@ -8,8 +8,15 @@ use std::vec::Vec;
 
 use failure::{Error, Fail};
 
-use nom::*;
-use nom::types::CompleteByteSlice;
+use nom::{
+    branch::alt,
+    bytes::complete::{tag, take, take_till1, take_until, take_while, take_while1},
+    character::{is_digit, is_oct_digit},
+    combinator::{eof, opt, peek, map, recognize, success},
+    error::ErrorKind,
+    sequence::{delimited, pair, preceded, tuple},
+    IResult,
+};
 
 use crate::patch::*;
 use crate::patch::unified::*;
@@ -36,66 +43,23 @@ pub enum ParseError {
     #[fail(display = "Invalid mode: \"{}\"", mode_str)]
     BadMode { mode_str: String },
 
+    #[fail(display = "Invalid escape sequence: \"{}\"", sequence)]
+    BadSequence { sequence: String },
+
     #[fail(display = "Unknown parse failure: \"{:?}\" on line \"{}\"", inner, line)]
-    Unknown { line: String, inner: nom::ErrorKind<u32> },
+    Unknown { line: String, inner: ErrorKind },
 }
 
-// XXX: This doesn't feel very rusty, but it seems to be the expected way to
-// do things in nom?
-#[repr(u32)]
-#[derive(Debug)]
-enum ParseErrorCode {
-    UnsupportedMetadata,
-    MissingFilenameForHunk,
-    UnexpectedEndOfFile,
-    BadLineInHunk,
-    NumberTooBig,
-    BadMode,
-}
-
-impl<'a> From<nom::Err<CompleteByteSlice<'a>>> for ParseError {
-    fn from(err: nom::Err<CompleteByteSlice<'a>>) -> ParseError {
-        let context = match err {
-            nom::Err::Incomplete(_) => unreachable!(), // We always work with complete data.
-            nom::Err::Error(context) | nom::Err::Failure(context) => context,
-        };
-
-        let (place, err_kind) = match context {
-            nom::Context::Code(place, err_kind) => (place, err_kind),
-        };
-
-        let place_as_string = String::from_utf8_lossy(
-            &maybe_take_until_newline(place).map(|a| a.1).unwrap_or(CompleteByteSlice(b"?"))
-        ).to_string();
-
-        let code = match err_kind {
-            nom::ErrorKind::Custom(code) => code,
-            _ => { return ParseError::Unknown { line: place_as_string, inner: err_kind }; }
-        };
-
-        match code {
-            c if c == ParseErrorCode::UnsupportedMetadata as u32 => {
-                ParseError::UnsupportedMetadata { line: place_as_string }
-            }
-            c if c == ParseErrorCode::MissingFilenameForHunk as u32 => {
-                ParseError::MissingFilenameForHunk { hunk_line: place_as_string }
-            }
-            c if c == ParseErrorCode::UnexpectedEndOfFile as u32 => {
-                ParseError::UnexpectedEndOfFile
-            }
-            c if c == ParseErrorCode::BadLineInHunk as u32 => {
-                ParseError::BadLineInHunk { line: place_as_string }
-            }
-            c if c == ParseErrorCode::NumberTooBig as u32 => {
-                ParseError::NumberTooBig { number_str: place_as_string }
-            }
-            c if c == ParseErrorCode::BadMode as u32 => {
-                ParseError::BadMode { mode_str: place_as_string }
-            }
-            _ => {
-                ParseError::Unknown { line: place_as_string, inner: err_kind }
-            }
+impl nom::error::ParseError<&[u8]> for ParseError {
+    fn from_error_kind(input: &[u8], kind: ErrorKind) -> Self {
+        Self::Unknown {
+            line: String::from_utf8_lossy(&input[..]).to_string(),
+            inner: kind,
         }
+    }
+
+    fn append(_: &[u8], _: ErrorKind, other: Self) -> Self {
+        other
     }
 }
 
@@ -106,11 +70,11 @@ macro_rules! assert_parsed {
     };
     ( $parse_func:ident, $input:expr, $result:expr, $remain:expr ) => {
         {
-            let ret = $parse_func(CompleteByteSlice($input));
+            let ret = $parse_func($input);
             let remain = ret.as_ref().map(|tuple| tuple.0);
             let result = ret.as_ref().map(|tuple| &tuple.1);
             assert_eq!(result, Ok(&$result), "parse result mismatch");
-            assert_eq!(remain, Ok(CompleteByteSlice($remain)), "parse remainder mismatch");
+            assert_eq!(remain, Ok(&$remain[..]), "parse remainder mismatch");
         }
     };
 }
@@ -119,10 +83,11 @@ macro_rules! assert_parsed {
 macro_rules! assert_parse_error {
     ( $parse_func:ident, $input:expr, $error:expr ) => {
         {
-            let ret = $parse_func(CompleteByteSlice($input));
+            let ret = $parse_func($input);
             match ret {
-                Err(error) => {
-                    assert_eq!(ParseError::from(error), $error);
+                Err(nom::Err::Error(error)) |
+                Err(nom::Err::Failure(error)) => {
+                    assert_eq!(error, $error);
                 }
 
                 _ => {
@@ -151,60 +116,168 @@ fn is_whitespace(c: u8) -> bool {
     c == b'\t'
 }
 
-// The nom::newline is for &[u8], we need CompleteByteSlice
-named!(newline<CompleteByteSlice, CompleteByteSlice>, tag!(c!(b'\n')));
+// nom::character::complete::newline is for characters, we need &[u8]
+fn newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
+    tag(c!(b'\n'))(input)
+}
 
-named!(take_until_newline<CompleteByteSlice, CompleteByteSlice>, take_until!(c!(b'\n')));
-named!(take_until_newline_incl<CompleteByteSlice, CompleteByteSlice>,
-    // TODO: Better way?
-    recognize!(pair!(call!(take_until_newline), take!(1)))
-);
+fn take_until_newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
+    take_until(c!(b'\n'))(input)
+}
 
-named!(maybe_take_until_newline<CompleteByteSlice, CompleteByteSlice>,
-       take_while!(|c| c != b'\n')
-);
+fn take_until_newline_incl(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
+    recognize(pair(take_until_newline, take(1usize)))(input)
+}
+
+fn maybe_take_until_newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
+    take_while(|c| c!= b'\n')(input)
+}
+
+fn error_line(input: &[u8]) -> String {
+    match maybe_take_until_newline(input) {
+        Ok((_, line)) => String::from_utf8_lossy(line).to_string(),
+        _ => "?".to_string(),
+    }
+}
 
 // Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
 // of the path as-is in the input data.
-named!(parse_filename_direct<CompleteByteSlice, CompleteByteSlice>,
-    take_till1!(is_whitespace)
-);
+fn parse_filename_direct(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
+    take_till1(is_whitespace)(input)
+}
+
+/// Parses an octal triplet. Returns the parsed number as an option
+/// and the number of bytes that could be successfully parsed
+/// from `input`.
+///
+/// Requires exactly three octal digits that represent a number between
+/// 0 and 0o377. On failure, `None` is returned together with the number
+/// of bytes required to demonstrate the error.
+fn parse_oct3(input: &[u8]) -> (Option<u8>, usize) {
+    let len = input.len();
+    if len < 1 {
+        (None, 0)
+    } else if !(b'0'..=b'3').contains(&input[0]) || len < 2 {
+        (None, 1)
+    } else if !(b'0'..=b'7').contains(&input[1]) || len < 3 {
+        (None, 2)
+    } else if !(b'0'..=b'7').contains(&input[2]) {
+        (None, 3)
+    } else {
+        (Some(((input[0] - b'0') << 6) |
+              ((input[1] - b'0') << 3) |
+              ((input[2] - b'0'))),
+         3)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_oct3() {
+    // Valid numbers
+    assert_eq!(parse_oct3(b"123"), (Some(0o123), 3));
+    assert_eq!(parse_oct3(b"3456"), (Some(0o345), 3));
+
+    // Various invalid sequences
+    assert_eq!(parse_oct3(b""), (None, 0));
+    assert_eq!(parse_oct3(b"4"), (None, 1));
+    assert_eq!(parse_oct3(b"x"), (None, 1));
+    assert_eq!(parse_oct3(b"1"), (None, 1));
+    assert_eq!(parse_oct3(b"18"), (None, 2));
+    assert_eq!(parse_oct3(b"1x"), (None, 2));
+    assert_eq!(parse_oct3(b"12"), (None, 2));
+    assert_eq!(parse_oct3(b"128"), (None, 3));
+    assert_eq!(parse_oct3(b"12x"), (None, 3));
+}
+
+/// Parses a C-style string. The implementation very closely mimics the
+/// GNU patch function of the same name.
+fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
+    let mut index = 0;
+    let mut res = Vec::new();
+    while let Some(&c) = input.get(index) {
+        match c {
+            b'\\' => {
+                index += 1;
+                let c = match input.get(index) {
+                    Some(b'a') => b'\x07',
+                    Some(b'b') => b'\x08',
+                    Some(b'f') => b'\x0c',
+                    Some(b'n') => b'\n',
+                    Some(b'r') => b'\r',
+                    Some(b't') => b'\t',
+                    Some(b'v') => b'\x0b',
+                    Some(b'\\') => b'\\',
+                    Some(b'\"') => b'\"',
+                    _ => {
+                        match parse_oct3(&input[index..]) {
+                            (Some(val), len) => {
+                                index += len - 1;
+                                val
+                            }
+                            (None, len) => {
+                                return Err(ParseError::BadSequence { sequence: String::from_utf8_lossy(&input[index-1..index+len]).to_string() });
+                            }
+                        }
+                    }
+                };
+                res.push(c);
+            }
+            b'\"' | b'\n' => return Ok((&input[index..], res)),
+            other => res.push(other),
+        }
+        index += 1;
+    }
+    Ok((&input[index..], res))
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_c_string() {
+    // Valid escapes
+    assert_parsed!(parse_c_string, b"BEL: \\a", b"BEL: \x07".to_vec());
+    assert_parsed!(parse_c_string, b"BS: \\b", b"BS: \x08".to_vec());
+    assert_parsed!(parse_c_string, b"HT: \\t", b"HT: \x09".to_vec());
+    assert_parsed!(parse_c_string, b"LF: \\n", b"LF: \x0a".to_vec());
+    assert_parsed!(parse_c_string, b"VT: \\v", b"VT: \x0b".to_vec());
+    assert_parsed!(parse_c_string, b"FF: \\f", b"FF: \x0c".to_vec());
+    assert_parsed!(parse_c_string, b"CR: \\r", b"CR: \x0d".to_vec());
+    assert_parsed!(parse_c_string, b"\\\\ (backslash)", b"\\ (backslash)".to_vec());
+    assert_parsed!(parse_c_string, b"\\\" (quote)", b"\" (quote)".to_vec());
+
+    assert_parsed!(parse_c_string, b"\\141\\142\\143", b"abc".to_vec());
+    assert_parsed!(parse_c_string, b"\\201", b"\x81".to_vec());
+
+    // The terminating quote should not be consumed
+    assert_parsed!(parse_c_string, b"terminated\"", b"terminated".to_vec(), b"\"");
+
+    // Invalid escapes
+    assert_eq!(parse_c_string(b"Unknown \\! escape"),
+               Err(ParseError::BadSequence { sequence: String::from("\\!") }));
+    assert_eq!(parse_c_string(b"Unterminated \\"),
+               Err(ParseError::BadSequence { sequence: String::from("\\") }));
+    assert_eq!(parse_c_string(b"One-digit octal: \\1."),
+               Err(ParseError::BadSequence { sequence: String::from("\\1.") }));
+    assert_eq!(parse_c_string(b"One-digit octal at end: \\1"),
+               Err(ParseError::BadSequence { sequence: String::from("\\1") }));
+    assert_eq!(parse_c_string(b"Two-digit octal: \\12."),
+               Err(ParseError::BadSequence { sequence: String::from("\\12.") }));
+    assert_eq!(parse_c_string(b"Two-digit octal at end: \\12"),
+               Err(ParseError::BadSequence { sequence: String::from("\\12") }));
+    assert_eq!(parse_c_string(b"Too big octal: \\666."),
+               Err(ParseError::BadSequence { sequence: String::from("\\6") }));
+}
 
 // Parses a quoted filename that may contain escaped characters. Returns owned buffer with the
 // unescaped filename.
 // Similar to `parse_c_string` function in patch.
-named!(parse_filename_quoted<CompleteByteSlice, Vec<u8>>,
-    do_parse!(
-        tag!(c!(b'\"')) >>
-
-        vec: escaped_transform!(
-            take_while1!(|c| c != b'\"' && c != b'\n' && c != b'\\'),
-            b'\\',
-            alt!(
-                tag!(c!(b'a'))  => { |_| vec![0x7_u8] }
-              | tag!(c!(b'b'))  => { |_| vec![0x8_u8] }
-              | tag!(c!(b'f'))  => { |_| vec![0xc_u8] }
-              | tag!(c!(b'n'))  => { |_| vec![b'\n'] }
-              | tag!(c!(b'r'))  => { |_| vec![b'\r'] }
-              | tag!(c!(b't'))  => { |_| vec![b'\t'] }
-              | tag!(c!(b'v'))  => { |_| vec![0xb_u8] }
-              | tag!(c!(b'\\')) => { |_| vec![b'\\'] }
-              | tag!(c!(b'\"')) => { |_| vec![b'\"'] }
-              | do_parse!(
-                  digit_0: one_of!(s!(b"0123")) >>
-                  digit_1: one_of!(s!(b"01234567")) >>
-                  digit_2: one_of!(s!(b"01234567")) >>
-
-                  (((digit_0 as u8 - b'0') << 6) + ((digit_1 as u8 - b'0') << 3) + (digit_2 as u8 - b'0'))
-                ) => { |c| vec![c] }
-            )
-        ) >>
-
-        tag!(c!(b'\"')) >>
-
-        (vec)
-    )
-);
+fn parse_filename_quoted(input: &[u8]) -> IResult<&[u8], Vec<u8>, ParseError> {
+    delimited(
+        tag(b"\""),
+        |input| parse_c_string(input).map_err(|error| nom::Err::Error(error)),
+        tag(b"\"")
+    )(input)
+}
 
 #[derive(Debug, PartialEq)]
 enum Filename<'a> {
@@ -220,13 +293,13 @@ enum Filename<'a> {
 // Either written directly without any whitespace or inside quotation marks.
 //
 // Similar to `parse_name` function in patch.
-named!(parse_filename<CompleteByteSlice, Filename>,
-    do_parse!(
-        take_while!(is_space) >>
-        filename: alt!(
+fn parse_filename(input: &[u8]) -> IResult<&[u8], Filename, ParseError> {
+    preceded(
+        take_while(is_space),
+        alt((
             // First attempt to parse it as quoted filename. This will reject it quickly if it does
             // not start with '"' character
-            map!(parse_filename_quoted, |filename_vec| {
+            map(parse_filename_quoted, |filename_vec| {
                 if &filename_vec[..] == NULL_FILENAME {
                     Filename::DevNull
                 } else {
@@ -254,9 +327,9 @@ named!(parse_filename<CompleteByteSlice, Filename>,
 
                     Filename::Real(Cow::Owned(pathbuf))
                 }
-            }) |
+            }),
             // Then attempt to parse it as direct filename (without quotes, spaces or escapes)
-            map!(parse_filename_direct, |filename| {
+            map(parse_filename_direct, |filename| {
                 if &filename[..] == NULL_FILENAME {
                     Filename::DevNull
                 } else {
@@ -268,7 +341,7 @@ named!(parse_filename<CompleteByteSlice, Filename>,
 
                             use std::ffi::OsStr;
                             use std::os::unix::ffi::OsStrExt;
-                            Cow::Borrowed(Path::new(OsStr::from_bytes(filename.0)))
+                            Cow::Borrowed(Path::new(OsStr::from_bytes(filename)))
                         }
 
                         #[cfg(not(unix))]
@@ -284,11 +357,10 @@ named!(parse_filename<CompleteByteSlice, Filename>,
 
                     Filename::Real(path)
                 }
-            })
-        ) >>
-        (filename)
-    )
-);
+            }),
+        ))
+    )(input)
+}
 
 #[cfg(test)]
 #[test]
@@ -321,18 +393,18 @@ fn test_parse_filename() {
 }
 
 /// Similar to `fetchmode` function in patch.
-fn parse_mode(input: CompleteByteSlice) -> IResult<CompleteByteSlice, u32> {
-    let (input, _) = take_while!(input, is_space)?;
-    let (input_, digits) = take_while1!(input, is_oct_digit)?;
+fn parse_mode(input: &[u8]) -> IResult<&[u8], u32, ParseError> {
+    let (input, _) = take_while(is_space)(input)?;
+    let (input_, digits) = take_while1(is_oct_digit)(input)?;
 
     if digits.len() != 6 { // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
-        return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadMode as u32))));
+        return Err(nom::Err::Failure(ParseError::BadMode { mode_str: error_line(input) }));
     }
 
     let mode_str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
     match u32::from_str_radix(mode_str, 8) {
         Ok(number) => Ok((input_, number)),
-        Err(_) => Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadMode as u32)))),
+        Err(_) => Err(nom::Err::Failure(ParseError::BadMode { mode_str: error_line(input) })),
     }
 }
 
@@ -372,27 +444,23 @@ enum MetadataLine<'a> {
     // ...?
 }
 
-named!(parse_metadata_line<CompleteByteSlice, MetadataLine>,
-    alt!(
-        do_parse!(tag!(s!(b"diff --git ")) >>
-                  old_filename: parse_filename >>
-                  new_filename: parse_filename >>
-                  take_until_newline >>
-                  newline >>
-                  (MetadataLine::GitDiffSeparator(old_filename, new_filename))) |
+fn parse_metadata_line(input: &[u8]) -> IResult<&[u8], MetadataLine, ParseError> {
+    alt((
+        map(delimited(tag(s!(b"diff --git ")),
+                      pair(parse_filename, parse_filename),
+                      pair(take_until_newline, newline)),
+            |(old_filename, new_filename)| MetadataLine::GitDiffSeparator(old_filename, new_filename)),
 
-        do_parse!(tag!(s!(b"--- ")) >>
-                  filename: parse_filename >>
-                  take_until_newline >>
-                  newline >>
-                  (MetadataLine::MinusFilename(filename))) |
-        do_parse!(tag!(s!(b"+++ ")) >>
-                  filename: parse_filename >>
-                  take_until_newline >>
-                  newline >>
-                  (MetadataLine::PlusFilename(filename)))
-    )
-);
+        map(delimited(tag(s!(b"--- ")),
+                      parse_filename,
+                      pair(take_until_newline, newline)),
+            |filename| MetadataLine::MinusFilename(filename)),
+        map(delimited(tag(s!(b"+++ ")),
+                      parse_filename,
+                      pair(take_until_newline, newline)),
+            |filename| MetadataLine::PlusFilename(filename))
+    ))(input)
+}
 
 #[cfg(test)]
 #[test]
@@ -428,55 +496,55 @@ enum GitMetadataLine {
     GitBinaryPatch,
 }
 
-named!(parse_git_metadata_line<CompleteByteSlice, GitMetadataLine>,
-    alt!(
-        do_parse!(tag!(s!(b"index ")) >>
-                  take_until_newline >>
-                  newline >>
-                  (GitMetadataLine::Index)) |
+fn parse_git_metadata_line(input: &[u8]) -> IResult<&[u8], GitMetadataLine, ParseError> {
+    alt((
+        map(delimited(tag(s!(b"index ")),
+                      take_until_newline,
+                      newline),
+            |_| GitMetadataLine::Index),
 
         // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
-        do_parse!(tag!(s!(b"rename from ")) >>
-                  take_until_newline >>
-                  newline >>
-                  (GitMetadataLine::RenameFrom)) |
-        do_parse!(tag!(s!(b"rename to ")) >>
-                  take_until_newline >>
-                  newline >>
-                  (GitMetadataLine::RenameTo)) |
+        map(delimited(tag(s!(b"rename from ")),
+                      take_until_newline,
+                      newline),
+            |_| GitMetadataLine::RenameFrom),
+        map(delimited(tag(s!(b"rename to ")),
+                      take_until_newline,
+                      newline),
+            |_| GitMetadataLine::RenameTo),
 
-        do_parse!(tag!(s!(b"copy from ")) >>
-                  take_until_newline >>
-                  newline >>
-                  (GitMetadataLine::CopyFrom)) |
-        do_parse!(tag!(s!(b"copy to ")) >>
-                  take_until_newline >>
-                  newline >>
-                  (GitMetadataLine::CopyTo)) |
+        map(delimited(tag(s!(b"copy from ")),
+                      take_until_newline,
+                      newline),
+            |_| GitMetadataLine::CopyFrom),
+        map(delimited(tag(s!(b"copy to ")),
+                      take_until_newline,
+                      newline),
+            |_| GitMetadataLine::CopyTo),
 
-        do_parse!(tag!(s!(b"GIT binary patch")) >>
-                  take_until_newline >>
-                  newline >>
-                  (GitMetadataLine::GitBinaryPatch)) |
+        map(delimited(tag(s!(b"GIT binary patch")),
+                      take_until_newline,
+                      newline),
+            |_| GitMetadataLine::GitBinaryPatch),
 
-        do_parse!(tag!(s!(b"old mode ")) >>
-                  mode: parse_mode >>
-                  newline >>
-                  (GitMetadataLine::OldMode(mode))) |
-        do_parse!(tag!(s!(b"new mode ")) >>
-                  mode: parse_mode >>
-                  newline >>
-                  (GitMetadataLine::NewMode(mode))) |
-        do_parse!(tag!(s!(b"deleted file mode ")) >>
-                  mode: parse_mode >>
-                  newline >>
-                  (GitMetadataLine::DeletedFileMode(mode))) |
-        do_parse!(tag!(s!(b"new file mode ")) >>
-                  mode: parse_mode >>
-                  newline >>
-                  (GitMetadataLine::NewFileMode(mode)))
-    )
-);
+        map(delimited(tag(s!(b"old mode ")),
+                      parse_mode,
+                      newline),
+            |mode| GitMetadataLine::OldMode(mode)),
+        map(delimited(tag(s!(b"new mode ")),
+                      parse_mode,
+                      newline),
+            |mode| GitMetadataLine::NewMode(mode)),
+        map(delimited(tag(s!(b"deleted file mode ")),
+                      parse_mode,
+                      newline),
+            |mode| GitMetadataLine::DeletedFileMode(mode)),
+        map(delimited(tag(s!(b"new file mode ")),
+                      parse_mode,
+                      newline),
+            |mode| GitMetadataLine::NewFileMode(mode)),
+    ))(input)
+}
 
 #[cfg(test)]
 #[test]
@@ -509,13 +577,13 @@ enum PatchLine<'a> {
     EndOfPatch,
 }
 
-named!(parse_start_patch_line<CompleteByteSlice, PatchLine>,
-    alt!(
-        map!(parse_metadata_line, PatchLine::Metadata) |
-        map!(take_until_newline_incl, |line| PatchLine::Garbage(line.0)) |
-        value!(PatchLine::EndOfPatch, eof!())
-    )
-);
+fn parse_start_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
+    alt((
+        map(parse_metadata_line, |line| PatchLine::Metadata(line)),
+        map(take_until_newline_incl, |line| PatchLine::Garbage(line)),
+        map(eof, |_| PatchLine::EndOfPatch),
+    ))(input)
+}
 
 #[cfg(test)]
 #[test]
@@ -532,14 +600,14 @@ fn test_parse_start_patch_line() {
     assert_parsed!(parse_start_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
 }
 
-named!(parse_patch_line<CompleteByteSlice, PatchLine>,
-    alt!(
-        map!(parse_metadata_line, PatchLine::Metadata) |
-        value!(PatchLine::StartOfHunk, peek!(parse_hunk_header)) |
-        map!(take_until_newline_incl, |line| PatchLine::Garbage(line.0)) |
-        value!(PatchLine::EndOfPatch, eof!())
-    )
-);
+fn parse_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
+    alt((
+        map(parse_metadata_line, |line| PatchLine::Metadata(line)),
+        map(peek(parse_hunk_header), |_| PatchLine::StartOfHunk),
+        map(take_until_newline_incl, |line| PatchLine::Garbage(line)),
+        map(eof, |_| PatchLine::EndOfPatch),
+    ))(input)
+}
 
 #[cfg(test)]
 #[test]
@@ -569,15 +637,15 @@ fn test_parse_patch_line() {
     assert_parsed!(parse_patch_line, b"GIT binary patch\n", Garbage(b"GIT binary patch\n"));
 }
 
-named!(parse_git_patch_line<CompleteByteSlice, PatchLine>,
-    alt!(
-        map!(parse_metadata_line, PatchLine::Metadata) |
-        map!(parse_git_metadata_line, PatchLine::GitMetadata) |
-        value!(PatchLine::StartOfHunk, peek!(parse_hunk_header)) |
-        map!(take_until_newline_incl, |line| PatchLine::Garbage(line.0)) |
-        value!(PatchLine::EndOfPatch, eof!())
-    )
-);
+fn parse_git_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
+    alt((
+        map(parse_metadata_line, |line| PatchLine::Metadata(line)),
+        map(parse_git_metadata_line, |line| PatchLine::GitMetadata(line)),
+        map(peek(parse_hunk_header), |_| PatchLine::StartOfHunk),
+        map(take_until_newline_incl, |line| PatchLine::Garbage(line)),
+        map(eof, |_| PatchLine::EndOfPatch),
+    ))(input)
+}
 
 #[cfg(test)]
 #[test]
@@ -608,12 +676,12 @@ fn test_parse_git_patch_line() {
     assert_parsed!(parse_git_patch_line, b"GIT binary patch\n", GitMetadata(GitBinaryPatch));
 }
 
-fn parse_number_usize(input: CompleteByteSlice) -> IResult<CompleteByteSlice, usize> {
-    let (input_, digits) = take_while1!(input, is_digit)?;
+fn parse_number_usize(input: &[u8]) -> IResult<&[u8], usize, ParseError> {
+    let (input_, digits) = take_while1(is_digit)(input)?;
     let str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
     match usize::from_str(str) {
         Ok(number) => Ok((input_, number)),
-        Err(_) => Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::NumberTooBig as u32)))),
+        Err(_) => Err(nom::Err::Failure(ParseError::NumberTooBig { number_str: String::from_utf8_lossy(digits).to_string() })),
     }
 }
 
@@ -632,20 +700,18 @@ fn test_parse_number_usize() {
 }
 
 // Parses line and count like "3,4" or just "3"
-named!(parse_hunk_line_and_count<CompleteByteSlice, (usize, usize)>,
-    do_parse!(
-        line: parse_number_usize >>
-        count: alt!(
-            do_parse!(
-                tag!(c!(b',')) >>
-                n: parse_number_usize >>
-                (n)
-            ) |
-            value!(1) // If there is no ",123" part, then the line count is 1.
-        ) >>
-        ((line, count))
-    )
-);
+fn parse_hunk_line_and_count(input: &[u8]) -> IResult<&[u8], (usize, usize), ParseError> {
+    pair(
+        parse_number_usize,
+        alt((
+            preceded(
+                tag(c!(b',')),
+                parse_number_usize
+            ),
+            success(1) // If there is no ",123" part, then the line count is 1.
+        ))
+    )(input)
+}
 
 #[cfg(test)]
 #[test]
@@ -666,32 +732,41 @@ struct HunkHeader<'a> {
 }
 
 // Parses the line like "@@ -3,4 +5,6 @@ function\n"
-named!(parse_hunk_header<CompleteByteSlice, HunkHeader>,
-    do_parse!(
-        tag!(s!(b"@@ -")) >>
-        remove_line_and_count: parse_hunk_line_and_count >>
+fn parse_hunk_header(input: &[u8]) -> IResult<&[u8], HunkHeader, ParseError> {
+    map(
+        tuple((
+            preceded(
+                tag(s!(b"@@ -")),
+                parse_hunk_line_and_count,
+            ),
 
-        tag!(s!(b" +")) >>
-        add_line_and_count: parse_hunk_line_and_count >>
+            preceded(
+                tag(s!(b" +")),
+                parse_hunk_line_and_count,
+            ),
 
-        tag!(s!(b" @")) >>
-        opt!(tag!(c!(b'@'))) >> // The second "@" is optional. At least that's what patch accepts.
-
-        opt!(tag!(c!(b' '))) >>
-        function: take_until_newline >>
-
-        newline >>
-
-        (HunkHeader {
+            delimited(
+                tuple((
+                    tag(s!(b" @")),
+                    // The second "@" is optional. At least that's what patch accepts.
+                    opt(tag(c!(b'@'))),
+                    opt(tag(c!(b' '))),
+                )),
+                take_until_newline,
+                newline,
+            )
+        )),
+        |(remove_line_and_count, add_line_and_count, function)|
+        HunkHeader {
             add_line: add_line_and_count.0,
             add_count: add_line_and_count.1,
             remove_line: remove_line_and_count.0,
             remove_count: remove_line_and_count.1,
 
             function: &function
-        })
-    )
-);
+        }
+    )(input)
+}
 
 #[cfg(test)]
 #[test]
@@ -740,46 +815,44 @@ enum HunkLineType {
     Context,
 }
 
-named!(parse_hunk_line<CompleteByteSlice, (HunkLineType, &[u8])>,
-    map!(
-        pair!(
-            return_error!(
-                add_return_error!(ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32),
-                    alt!(
-                        do_parse!(tag!(c!(b'+')) >>
-                                  line: take_until_newline_incl >>
-                                  ((HunkLineType::Add, &line[..]))) |
-                        do_parse!(tag!(c!(b'-')) >>
-                                  line: take_until_newline_incl >>
-                                  ((HunkLineType::Remove, &line[..]))) |
-                        do_parse!(tag!(c!(b' ')) >>
-                                  line: take_until_newline_incl >>
-                                  ((HunkLineType::Context, &line[..]))) |
+fn parse_hunk_line(input: &[u8]) -> IResult<&[u8], (HunkLineType, &[u8]), ParseError> {
+    if let Ok((input, (line_type, line))) = alt((
+        map(preceded(tag(c!(b'+')),
+                     take_until_newline_incl),
+            |line| (HunkLineType::Add, &line[..])),
+        map(preceded(tag(c!(b'-')),
+                     take_until_newline_incl),
+            |line| (HunkLineType::Remove, &line[..])),
+        map(preceded(tag(c!(b' ')),
+                     take_until_newline_incl),
+            |line| (HunkLineType::Context, &line[..])),
 
-                        // XXX: patch allows context lines starting with TAB character. That TAB is then part of the line.
-                        do_parse!(peek!(tag!(c!(b'\t'))) >>
-                                  line: take_until_newline_incl >>
-                                  ((HunkLineType::Context, &line[..]))) |
+        // XXX: patch allows context lines starting with TAB character. That TAB is then part of the line.
+        map(preceded(peek(tag(c!(b'\t'))),
+                     take_until_newline_incl),
+            |line| (HunkLineType::Context, &line[..])),
 
-                        // XXX: patch allows completely empty line as an empty context line.
-                        value!((HunkLineType::Context, c!(b'\n')), newline)
-                    )
-                )
-            ),
-
-            opt!(tag!(s!(NO_NEW_LINE_TAG)))
-        ),
-    |((line_type, line), no_newline_tag)| {
-        // Was there "No newline..." tag?
-        if no_newline_tag.is_none() {
-            // There wasn't, return what we have.
-            (line_type, line)
-        } else {
-            // There was, remove the newline at the end
-            (line_type, &line[0..(line.len() - 1)])
+        // XXX: patch allows completely empty line as an empty context line.
+        map(newline,
+            |line| (HunkLineType::Context, &line[..])),
+    ))(input) {
+        match opt(tag(s!(NO_NEW_LINE_TAG)))(input) {
+            Ok((input, no_newline_tag)) => {
+                // Was there "No newline..." tag?
+                Ok((input, if no_newline_tag.is_none() {
+                    // There wasn't, return what we have.
+                    (line_type, line)
+                } else {
+                    // There was, remove the newline at the end
+                    (line_type, &line[0..(line.len() - 1)])
+                }))
+            }
+            Err(e) => Err(e),
         }
-    })
-);
+    } else {
+        Err(nom::Err::Failure(ParseError::BadLineInHunk { line: error_line(input) }))
+    }
+}
 
 #[cfg(test)]
 #[test]
@@ -823,7 +896,7 @@ fn test_parse_hunk_line() {
                         });
 }
 
-fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, TextHunk<'a>> {
+fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
     let (mut input, mut header) = parse_hunk_header(input)?;
 
     let mut hunk = Hunk::new(
@@ -842,13 +915,13 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
             Ok(ok) => ok,
             Err(err @ nom::Err::Failure(_)) => return Err(err),
             Err(nom::Err::Incomplete(_)) => unreachable!(),
-            Err(nom::Err::Error(_)) => return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32)))),
+            Err(nom::Err::Error(_)) => return Err(nom::Err::Failure(ParseError::UnexpectedEndOfFile)),
         };
 
         match line_type {
             HunkLineType::Add => {
                 if header.add_count == 0 {
-                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk { line: error_line(input) }));
                 }
 
                 hunk.add.content.push(line);
@@ -859,7 +932,7 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
             }
             HunkLineType::Remove => {
                 if header.remove_count == 0 {
-                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk { line: error_line(input) }));
                 }
 
                 hunk.remove.content.push(line);
@@ -870,7 +943,7 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
             }
             HunkLineType::Context => {
                 if header.remove_count == 0 || header.add_count == 0 {
-                    return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadLineInHunk as u32))));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk { line: error_line(input) }));
                 }
 
                 hunk.add.content.push(line);
@@ -907,7 +980,7 @@ fn test_parse_hunk() {
  hhh
 "#;
 
-    let h = parse_hunk(CompleteByteSlice(hunk_txt)).unwrap().1;
+    let h = parse_hunk(hunk_txt).unwrap().1;
     assert_eq!(h.remove.target_line, 99);
     assert_eq!(h.add.target_line, 109);
 
@@ -960,7 +1033,7 @@ xxxxx
 
 // We use hand-written function instead of just `named!` with `many1!` combinator, because `many1!`
 // hides `nom::Err::Failure` errors, so they were not propagated up.
-fn parse_hunks(mut input: CompleteByteSlice) -> IResult<CompleteByteSlice, HunksVec<&[u8]>> {
+fn parse_hunks(mut input: &[u8]) -> IResult<&[u8], HunksVec<&[u8]>, ParseError> {
     let mut hunks = HunksVec::<&[u8]>::new();
     loop {
         match parse_hunk(input) {
@@ -971,11 +1044,12 @@ fn parse_hunks(mut input: CompleteByteSlice) -> IResult<CompleteByteSlice, Hunks
             Err(nom::Err::Incomplete(_)) => {
                 unreachable!();
             }
-            Err(nom::Err::Error(nom::Context::Code(input_, _))) => {
+            Err(nom::Err::Error(ParseError::Unknown { .. })) => {
                 // TODO: Do anything for the case of not even one hunk?
-                return Ok((input_, hunks));
+                return Ok((input, hunks));
             }
-            Err(err @ nom::Err::Failure(_)) => {
+            Err(err @ nom::Err::Failure(_)) |
+            Err(err @ nom::Err::Error(_)) => {
                 return Err(err);
             }
         }
@@ -999,7 +1073,7 @@ Some other line...
 Other content.
 "#;
 
-    let hs = parse_hunks(CompleteByteSlice(hunks_txt)).unwrap().1;
+    let hs = parse_hunks(hunks_txt).unwrap().1;
     assert_eq!(hs.len(), 2);
 
     assert_eq!(hs[0].remove.target_line, 99);
@@ -1136,8 +1210,8 @@ enum MetadataState {
     GitDiff,
 }
 
-fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
-    -> IResult<CompleteByteSlice, (Vec<&'a [u8]>, TextFilePatch<'a>)>
+fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
+    -> IResult<&[u8], (Vec<&'a [u8]>, TextFilePatch<'a>), ParseError>
 {
     let mut header = Vec::new();
     let mut state = MetadataState::Start;
@@ -1189,7 +1263,7 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
                         // Return if we are at the end of patch
                         if patch_line == EndOfPatch {
                             // Note: This is Error, not Failure, because it could be just because there are no more filepatches at the end of file. Not a fatal error.
-                            return Err(nom::Err::Error(nom::Context::Code(input, nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32))));
+                            return Err(nom::Err::Error(ParseError::UnexpectedEndOfFile));
                         }
 
                         // Reset metadata if it was separator
@@ -1230,7 +1304,7 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
             }
 
             GitMetadata(GitBinaryPatch) => {
-                return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::UnsupportedMetadata as u32))));
+                return Err(nom::Err::Failure(ParseError::UnsupportedMetadata { line: error_line(input) }));
             }
 
             GitMetadata(_) => {
@@ -1249,7 +1323,7 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
     let filepatch = metadata.build_filepatch(hunks).map_err(
         |error| match error {
              FilePatchMetadataBuildError::MissingFilenames(_) =>
-                nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::MissingFilenameForHunk as u32)))
+                nom::Err::Failure(ParseError::MissingFilenameForHunk { hunk_line: error_line(input) }),
         }
     )?;
 
@@ -1275,7 +1349,7 @@ Some other line...
 Other content.
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1305,7 +1379,7 @@ Some other line...
 Other content.
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1332,7 +1406,7 @@ garbage3
 +ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1360,7 +1434,7 @@ garbage3
 +ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1388,7 +1462,7 @@ garbage3
 -ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1416,7 +1490,7 @@ garbage3
 -ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1453,7 +1527,7 @@ Some other line...
 Other content.
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1479,7 +1553,7 @@ rename to filename2
 +++ filename2
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1508,7 +1582,7 @@ rename to filename2
  ddd
 "#;
 
-    let (header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), true).unwrap().1;
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
     assert_eq!(header.len(), 3);
     assert_eq!(header[0], b"garbage1\n");
@@ -1532,9 +1606,10 @@ GIT binary patch
 ???
 "#;
 
-    let ret = parse_filepatch(CompleteByteSlice(filepatch_txt), false);
+    let ret = parse_filepatch(filepatch_txt, false);
     match ret {
-        Err(error) => {
+        Err(nom::Err::Error(error)) |
+        Err(nom::Err::Failure(error)) => {
             assert_eq!(ParseError::from(error),
                        ParseError::UnsupportedMetadata {
                            line: "GIT binary patch".to_string()
@@ -1559,10 +1634,11 @@ garbage3
  ppp
 "#;
 
-    let ret = parse_filepatch(CompleteByteSlice(filepatch_txt), false);
+    let ret = parse_filepatch(filepatch_txt, false);
     match ret {
-        Err(error) => {
-            assert_eq!(ParseError::from(error),
+        Err(nom::Err::Failure(error)) |
+        Err(nom::Err::Error(error)) => {
+            assert_eq!(error,
                        ParseError::MissingFilenameForHunk {
                            hunk_line: "@@ -200,3 +210,3 @@ place2".to_string()
                        });
@@ -1594,7 +1670,7 @@ new mode 100755
  ddd
 "#;
 
-    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(filepatch_txt, false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1620,7 +1696,7 @@ diff --git filename2 filename2
  ddd
 "#;
 
-    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(filepatch_txt, false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1638,7 +1714,7 @@ old mode 100644
 new mode 100755
 "#;
 
-    let (_header, file_patch) = parse_filepatch(CompleteByteSlice(filepatch_txt), false).unwrap().1;
+    let (_header, file_patch) = parse_filepatch(filepatch_txt, false).unwrap().1;
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1648,7 +1724,7 @@ new mode 100755
 }
 
 pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, Error> {
-    let mut input = CompleteByteSlice(bytes);
+    let mut input = bytes.clone();
 
     let mut header = Vec::new();
     let mut file_patches = Vec::<TextFilePatch>::new();
@@ -1663,7 +1739,7 @@ pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result
             Err(nom::Err::Error(_)) => break,
 
             // Actual error
-            Err(err @ nom::Err::Failure(_)) => { return Err(ParseError::from(err).into()); }
+            Err(err @ nom::Err::Failure(_)) => { return Err(err.into()); }
 
             // No way this could happen
             Err(nom::Err::Incomplete(_)) => unreachable!(),
