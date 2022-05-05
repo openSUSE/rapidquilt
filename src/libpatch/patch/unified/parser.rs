@@ -324,7 +324,7 @@ fn test_parse_filename() {
 /// Similar to `fetchmode` function in patch.
 fn parse_mode(input: CompleteByteSlice) -> IResult<CompleteByteSlice, u32> {
     let (input, _) = take_while!(input, is_space)?;
-    let (input, digits) = take_while1!(input, is_oct_digit)?;
+    let (input_, digits) = take_while1!(input, is_oct_digit)?;
 
     if digits.len() != 6 { // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
         return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadMode as u32))));
@@ -332,7 +332,7 @@ fn parse_mode(input: CompleteByteSlice) -> IResult<CompleteByteSlice, u32> {
 
     let mode_str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
     match u32::from_str_radix(mode_str, 8) {
-        Ok(number) => Ok((input, number)),
+        Ok(number) => Ok((input_, number)),
         Err(_) => Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::BadMode as u32)))),
     }
 }
