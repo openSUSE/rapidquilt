@@ -845,8 +845,6 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
             Err(nom::Err::Error(_)) => return Err(nom::Err::Failure(error_position!(input, nom::ErrorKind::Custom(ParseErrorCode::UnexpectedEndOfFile as u32)))),
         };
 
-        input = input_;
-
         match line_type {
             HunkLineType::Add => {
                 if header.add_count == 0 {
@@ -887,6 +885,8 @@ fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, Te
                 }
             }
         }
+
+        input = input_;
     }
 
     Ok((input, hunk))
