@@ -12,7 +12,7 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take, take_till1, take_until, take_while, take_while1},
     character::{is_digit, is_oct_digit},
-    combinator::{eof, opt, peek, map, recognize, success},
+    combinator::{cond, eof, not, opt, peek, map, recognize, success},
     error::ErrorKind,
     sequence::{delimited, pair, preceded, tuple},
     IResult,
@@ -573,37 +573,12 @@ enum PatchLine<'a> {
     Garbage(&'a [u8]),
     Metadata(MetadataLine<'a>),
     GitMetadata(GitMetadataLine),
-    StartOfHunk,
     EndOfPatch,
-}
-
-fn parse_start_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
-    alt((
-        map(parse_metadata_line, |line| PatchLine::Metadata(line)),
-        map(take_until_newline_incl, |line| PatchLine::Garbage(line)),
-        map(eof, |_| PatchLine::EndOfPatch),
-    ))(input)
-}
-
-#[cfg(test)]
-#[test]
-fn test_parse_start_patch_line() {
-    use self::PatchLine::*;
-    use self::MetadataLine::*;
-
-    assert_parsed!(parse_start_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
-    assert_parsed!(parse_start_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
-    assert_parsed!(parse_start_patch_line, b"+++ bbb\n", Metadata(PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
-
-    assert_parsed!(parse_start_patch_line, b"@@ -1 +1 @@\n", Garbage(b"@@ -1 +1 @@\n"));
-
-    assert_parsed!(parse_start_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
 }
 
 fn parse_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
     alt((
         map(parse_metadata_line, |line| PatchLine::Metadata(line)),
-        map(peek(parse_hunk_header), |_| PatchLine::StartOfHunk),
         map(take_until_newline_incl, |line| PatchLine::Garbage(line)),
         map(eof, |_| PatchLine::EndOfPatch),
     ))(input)
@@ -617,9 +592,7 @@ fn test_parse_patch_line() {
 
     assert_parsed!(parse_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
     assert_parsed!(parse_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
-
-    let line = b"@@ -1 +1 @@\n";
-    assert_parsed!(parse_patch_line, line, StartOfHunk, line);
+    assert_parsed!(parse_patch_line, b"+++ bbb\n", Metadata(PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
 
     assert_parsed!(parse_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
 
@@ -641,7 +614,6 @@ fn parse_git_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
     alt((
         map(parse_metadata_line, |line| PatchLine::Metadata(line)),
         map(parse_git_metadata_line, |line| PatchLine::GitMetadata(line)),
-        map(peek(parse_hunk_header), |_| PatchLine::StartOfHunk),
         map(take_until_newline_incl, |line| PatchLine::Garbage(line)),
         map(eof, |_| PatchLine::EndOfPatch),
     ))(input)
@@ -656,9 +628,6 @@ fn test_parse_git_patch_line() {
 
     assert_parsed!(parse_git_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
     assert_parsed!(parse_git_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
-
-    let line = b"@@ -1 +1 @@\n";
-    assert_parsed!(parse_git_patch_line, line, StartOfHunk, line);
 
     assert_parsed!(parse_git_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
 
@@ -1094,6 +1063,10 @@ struct FilePatchMetadata<'a> {
 }
 
 impl<'a> FilePatchMetadata<'a> {
+    pub fn have_filename(&self) -> bool {
+        self.old_filename.is_some() || self.new_filename.is_some()
+    }
+
     pub fn recognize_kind(&self, hunks: &[TextHunk]) -> FilePatchKind {
         // Check if the patch source or target is a zero-length file.
         if hunks.len() == 1 {
@@ -1201,7 +1174,6 @@ fn permissions_from_mode(mode: u32) -> Option<Permissions> {
 
 #[derive(Debug, PartialEq)]
 enum MetadataState {
-    Start,
     Normal,
     GitDiff,
 }
@@ -1210,15 +1182,15 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
     -> IResult<&[u8], (Vec<&'a [u8]>, TextFilePatch<'a>), ParseError>
 {
     let mut header = Vec::new();
-    let mut state = MetadataState::Start;
+    let mut state = MetadataState::Normal;
     let mut extended_headers = false;
 
     let mut metadata = FilePatchMetadata::default();
 
     // First we read metadata lines or garbage and wait until we find a first hunk.
-    loop {
+    while cond(metadata.have_filename(),
+               not(parse_hunk_header))(input).is_ok() {
         let (input_, patch_line) = match state {
-            MetadataState::Start => parse_start_patch_line(input)?,
             MetadataState::Normal => parse_patch_line(input)?,
             MetadataState::GitDiff => parse_git_patch_line(input)?,
         };
@@ -1237,8 +1209,6 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
                     header.push(garbage);
                 }
             }
-
-            StartOfHunk => { input = input_; break; }
 
             EndOfPatch => {
                 // We have reached end of file without any hunks. It
@@ -1275,11 +1245,9 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
             }
             Metadata(PlusFilename(filename)) => {
                 metadata.new_filename = Some(filename);
-                state = MetadataState::Normal;
             }
             Metadata(MinusFilename(filename)) => {
                 metadata.old_filename = Some(filename);
-                state = MetadataState::Normal;
             }
 
             GitMetadata(RenameFrom) => {
