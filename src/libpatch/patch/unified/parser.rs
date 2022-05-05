@@ -1215,6 +1215,7 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
 {
     let mut header = Vec::new();
     let mut state = MetadataState::Start;
+    let mut extended_headers = false;
 
     let mut metadata = FilePatchMetadata::default();
 
@@ -1230,6 +1231,10 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
         use self::MetadataLine::*;
         use self::GitMetadataLine::*;
 
+        if let GitMetadata(_) = patch_line {
+            extended_headers = true;
+        }
+
         match patch_line {
             Garbage(garbage) => {
                 if want_header {
@@ -1239,42 +1244,41 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
 
             StartOfHunk => { input = input_; break; }
 
-            EndOfPatch | Metadata(MetadataLine::GitDiffSeparator(..)) => {
+            EndOfPatch => {
+                // We have reached end of file without any hunks. It
+                // could be still valid patch that only renames a file or
+                // changes permissions... So lets check for that.
+                return if extended_headers {
+                    metadata.build_hunkless_filepatch()
+                        .map(|filepatch| (input, (header, filepatch)))
+                        .map_err(|error| match error {
+                            FilePatchMetadataBuildError::MissingFilenames(_) =>
+                                nom::Err::Failure(ParseError::MissingFilenameForHunk { hunk_line: error_line(input) })
+                        })
+                } else {
+                    Err(nom::Err::Error(ParseError::UnexpectedEndOfFile))
+                };
+            }
+
+            Metadata(MetadataLine::GitDiffSeparator(old_filename, new_filename)) => {
                 // No more header lines after the first non-garbage line
                 want_header = false;
 
-                // We reached end of file or separator and have no hunks. It
-                // could be still valid patch that only renames a file or
-                // changes permissions... So lets check for that.
-                match metadata.build_hunkless_filepatch() {
-                    Ok(filepatch) => {
-                        // It was possible to have hunkless filepatch, great!
-
+                // Check if it is a valid patch (see above).
+                if extended_headers {
+                    if let Ok(filepatch) = metadata.build_hunkless_filepatch() {
                         // Note that in this case we don't set `input = input_`, because we don't want to consume the GitDiffSeparator
-
                         return Ok((input, (header, filepatch)));
                     }
-                    Err(FilePatchMetadataBuildError::MissingFilenames(incomplete_metadata)) => {
-                        // Otherwise it just means that everything that may have
-                        // looked like metadata until now was just garbage.
-
-                        // Return if we are at the end of patch
-                        if patch_line == EndOfPatch {
-                            // Note: This is Error, not Failure, because it could be just because there are no more filepatches at the end of file. Not a fatal error.
-                            return Err(nom::Err::Error(ParseError::UnexpectedEndOfFile));
-                        }
-
-                        // Reset metadata if it was separator
-                        if let Metadata(MetadataLine::GitDiffSeparator(old_filename, new_filename)) = patch_line {
-                            metadata = FilePatchMetadata::default();
-                            metadata.old_filename = Some(old_filename);
-                            metadata.new_filename = Some(new_filename);
-                            state = MetadataState::GitDiff;
-                        } else {
-                            metadata = incomplete_metadata;
-                        }
-                    }
                 }
+
+                // Otherwise it just means that everything that may have
+                // looked like metadata until now was just garbage.
+                // Reset metadata.
+                metadata = FilePatchMetadata::default();
+                metadata.old_filename = Some(old_filename);
+                metadata.new_filename = Some(new_filename);
+                state = MetadataState::GitDiff;
             }
             Metadata(PlusFilename(filename)) => {
                 metadata.new_filename = Some(filename);
