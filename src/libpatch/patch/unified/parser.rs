@@ -643,7 +643,11 @@ fn test_parse_number_usize() {
     assert_parsed!(parse_number_usize, b"1", 1);
     assert_parsed!(parse_number_usize, b"123", 123);
 
-    assert_parse_error_code!(parse_number_usize, b"123456789012345678901234567890", ParseErrorCode::NumberTooBig as u32);
+    let num = "123456789012345678901234567890";
+    assert_parse_error!(parse_number_usize, num.as_bytes(),
+                        ParseError::NumberTooBig {
+                            number_str: num.to_string(),
+                        });
 }
 
 // Parses line and count like "3,4" or just "3"
@@ -828,8 +832,14 @@ fn test_parse_hunk_line() {
     assert_parsed!(parse_hunk_line, b"\n", (HunkLineType::Context, s!(b"\n")));
 
     // Bad line
-    assert_parse_error_code!(parse_hunk_line, b"wtf is this\n", ParseErrorCode::BadLineInHunk as u32);
-    assert_parse_error_code!(parse_hunk_line, b"wtf", ParseErrorCode::BadLineInHunk as u32);
+    assert_parse_error!(parse_hunk_line, b"wtf is this\n",
+                        ParseError::BadLineInHunk {
+                            line: "wtf is this".to_string()
+                        });
+    assert_parse_error!(parse_hunk_line, b"wtf",
+                        ParseError::BadLineInHunk {
+                            line: "wtf".to_string()
+                        });
 }
 
 fn parse_hunk<'a>(input: CompleteByteSlice<'a>) -> IResult<CompleteByteSlice, TextHunk<'a>> {
@@ -935,7 +945,10 @@ fn test_parse_hunk() {
  bbb
  ccc
 "#;
-    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
+    assert_parse_error!(parse_hunk, s!(hunk_txt),
+                        ParseError::BadLineInHunk {
+                            line: "".to_string()
+                        });
 
 
     // Bad line in hunk (nonsense)
@@ -945,7 +958,10 @@ fn test_parse_hunk() {
  ccc
 xxxxx
 "#;
-    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
+    assert_parse_error!(parse_hunk, s!(hunk_txt),
+                        ParseError::BadLineInHunk {
+                            line: "xxxxx".to_string()
+                        });
 
 
     // Bad line in hunk (unexpected '+', '-' or ' ')
@@ -955,7 +971,10 @@ xxxxx
 -ccc
  ddd
 "#;
-    assert_parse_error_code!(parse_hunk, s!(hunk_txt), ParseErrorCode::BadLineInHunk as u32);
+    assert_parse_error!(parse_hunk, s!(hunk_txt),
+                        ParseError::BadLineInHunk {
+                            line: " ddd".to_string()
+                        });
 }
 
 // We use hand-written function instead of just `named!` with `many1!` combinator, because `many1!`
