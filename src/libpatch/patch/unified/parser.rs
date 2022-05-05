@@ -116,25 +116,6 @@ macro_rules! assert_parsed {
 }
 
 #[cfg(test)]
-macro_rules! assert_parse_error_code {
-    ( $parse_func:ident, $input:expr, $err_code:expr ) => {
-        {
-            let ret = $parse_func(CompleteByteSlice($input));
-            match ret {
-                Err(nom::Err::Error(  nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) |
-                Err(nom::Err::Failure(nom::Context::Code(_, nom::ErrorKind::Custom(error_code)))) => {
-                    assert_eq!(error_code, $err_code);
-                }
-
-                _ => {
-                    panic!("Parsing {:?}, got unexpected return: {:?}", $input, ret);
-                }
-            }
-        }
-    };
-}
-
-#[cfg(test)]
 macro_rules! assert_parse_error {
     ( $parse_func:ident, $input:expr, $error:expr ) => {
         {
