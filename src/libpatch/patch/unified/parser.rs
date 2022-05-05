@@ -1093,10 +1093,6 @@ struct FilePatchMetadata<'a> {
     new_permissions: Option<Permissions>,
 }
 
-enum FilePatchMetadataBuildError<'a> {
-    MissingFilenames(FilePatchMetadata<'a>),
-}
-
 impl<'a> FilePatchMetadata<'a> {
     pub fn recognize_kind(&self, hunks: &[TextHunk]) -> FilePatchKind {
         // Check if the patch source or target is a zero-length file.
@@ -1123,7 +1119,7 @@ impl<'a> FilePatchMetadata<'a> {
     }
 
     /// This function will return `None` if some necessary metadata is missing
-    pub fn build_filepatch(self, hunks: HunksVec<'a, &'a [u8]>) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError<'a>> {
+    pub fn build_filepatch(self, hunks: HunksVec<'a, &'a [u8]>) -> Option<TextFilePatch<'a>> {
         let builder = FilePatchBuilder::<&[u8]>::default();
 
         // Set the kind
@@ -1142,14 +1138,14 @@ impl<'a> FilePatchMetadata<'a> {
         let builder = if self.rename_from && self.rename_to {
             // If it is renaming patch, we must have both filenames
             if !has_old_filename || !has_new_filename {
-                return Err(FilePatchMetadataBuildError::MissingFilenames(self));
+                return None;
             }
 
             builder.is_rename(true)
         } else {
             // If it is non-renaming patch, we must have at least one filename
             if !has_old_filename && !has_new_filename {
-                return Err(FilePatchMetadataBuildError::MissingFilenames(self));
+                return None;
             }
 
             builder
@@ -1177,11 +1173,11 @@ impl<'a> FilePatchMetadata<'a> {
             .hunks(hunks);
 
         // Build
-        Ok(builder.build().unwrap()) // NOTE(unwrap): It would be our bug if we didn't provide all necessary values.
+        Some(builder.build().unwrap()) // NOTE(unwrap): It would be our bug if we didn't provide all necessary values.
     }
 
     /// This function will return `None` if some necessary metadata is missing
-    pub fn build_hunkless_filepatch(self) -> Result<TextFilePatch<'a>, FilePatchMetadataBuildError<'a>> {
+    pub fn build_hunkless_filepatch(self) -> Option<TextFilePatch<'a>> {
         self.build_filepatch(HunksVec::new())
     }
 }
@@ -1249,12 +1245,9 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
                 // could be still valid patch that only renames a file or
                 // changes permissions... So lets check for that.
                 return if extended_headers {
-                    metadata.build_hunkless_filepatch()
+                    metadata.build_hunkless_filepatch().ok_or(
+                        nom::Err::Failure(ParseError::MissingFilenameForHunk { hunk_line: error_line(input) }))
                         .map(|filepatch| (input, (header, filepatch)))
-                        .map_err(|error| match error {
-                            FilePatchMetadataBuildError::MissingFilenames(_) =>
-                                nom::Err::Failure(ParseError::MissingFilenameForHunk { hunk_line: error_line(input) })
-                        })
                 } else {
                     Err(nom::Err::Error(ParseError::UnexpectedEndOfFile))
                 };
@@ -1266,7 +1259,7 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
 
                 // Check if it is a valid patch (see above).
                 if extended_headers {
-                    if let Ok(filepatch) = metadata.build_hunkless_filepatch() {
+                    if let Some(filepatch) = metadata.build_hunkless_filepatch() {
                         // Note that in this case we don't set `input = input_`, because we don't want to consume the GitDiffSeparator
                         return Ok((input, (header, filepatch)));
                     }
@@ -1322,11 +1315,8 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
     let (input_, hunks) = parse_hunks(input)?;
 
     // We can make our filepatch
-    let filepatch = metadata.build_filepatch(hunks).map_err(
-        |error| match error {
-             FilePatchMetadataBuildError::MissingFilenames(_) =>
-                nom::Err::Failure(ParseError::MissingFilenameForHunk { hunk_line: error_line(input) }),
-        }
+    let filepatch = metadata.build_filepatch(hunks).ok_or(
+        nom::Err::Failure(ParseError::MissingFilenameForHunk { hunk_line: error_line(input) })
     )?;
 
     input = input_;
