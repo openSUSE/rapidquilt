@@ -288,23 +288,25 @@ named!(parse_filename<CompleteByteSlice, Filename>,
 #[cfg(test)]
 #[test]
 fn test_parse_filename() {
-    fn assert_path(input: &[u8], result: &str) {
-        assert_parsed!(parse_filename, input, Filename::Real(Cow::Owned(PathBuf::from(result))));
+    macro_rules! assert_path {
+        ($input:expr, $result:expr) => {
+            assert_parsed!(parse_filename, $input, Filename::Real(Cow::Owned(PathBuf::from($result))));
+        };
     }
 
-    assert_path(b"aaa", "aaa");
-    assert_path(b"      aaa", "aaa");
-    assert_path(b"aaa\nbbb", "aaa");
-    assert_path(b"aaa time", "aaa");
+    assert_path!(b"aaa", "aaa");
+    assert_path!(b"      aaa", "aaa");
+    assert_path!(b"aaa\nbbb", "aaa");
+    assert_path!(b"aaa time", "aaa");
 
-    assert_path(b"\"aaa\"", "aaa");
-    assert_path(b"      \"aaa\"", "aaa");
-    assert_path(b"\"aa aa\"", "aa aa");
-    assert_path(b"\"aa\\\"aa\"", "aa\"aa");
-    assert_path(b"\"aa\\\\aa\"", "aa\\aa");
-    assert_path(b"\"aa\\naa\"", "aa\naa");
+    assert_path!(b"\"aaa\"", "aaa");
+    assert_path!(b"      \"aaa\"", "aaa");
+    assert_path!(b"\"aa aa\"", "aa aa");
+    assert_path!(b"\"aa\\\"aa\"", "aa\"aa");
+    assert_path!(b"\"aa\\\\aa\"", "aa\\aa");
+    assert_path!(b"\"aa\\naa\"", "aa\naa");
 
-    assert_path(b"\"aa\\142aa\"", "aabaa");
+    assert_path!(b"\"aa\\142aa\"", "aabaa");
 
     assert_parsed!(parse_filename, b"/dev/null", Filename::DevNull);
     assert_parsed!(parse_filename, b"\"/dev/null\"", Filename::DevNull);
