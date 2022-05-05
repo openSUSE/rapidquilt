@@ -102,13 +102,15 @@ impl<'a> From<nom::Err<CompleteByteSlice<'a>>> for ParseError {
 #[cfg(test)]
 macro_rules! assert_parsed {
     ( $parse_func:ident, $input:expr, $result:expr ) => {
+        assert_parsed!($parse_func, $input, $result, b"")
+    };
+    ( $parse_func:ident, $input:expr, $result:expr, $remain:expr ) => {
         {
             let ret = $parse_func(CompleteByteSlice($input));
-            let ret = ret.map(|tuple| tuple.1); // We only care about the second item. This lets
-                                                // allows us use assert_eq to check for Ok/Err and
-                                                // the first value at once. That gives us good
-                                                // failure messages.
-            assert_eq!(ret.as_ref(), Ok(&$result));
+            let remain = ret.as_ref().map(|tuple| tuple.0);
+            let result = ret.as_ref().map(|tuple| &tuple.1);
+            assert_eq!(result, Ok(&$result), "parse result mismatch");
+            assert_eq!(remain, Ok(CompleteByteSlice($remain)), "parse remainder mismatch");
         }
     };
 }
@@ -290,14 +292,17 @@ named!(parse_filename<CompleteByteSlice, Filename>,
 fn test_parse_filename() {
     macro_rules! assert_path {
         ($input:expr, $result:expr) => {
-            assert_parsed!(parse_filename, $input, Filename::Real(Cow::Owned(PathBuf::from($result))));
+            assert_path!($input, $result, b"");
+        };
+        ($input:expr, $result:expr, $remain:expr) => {
+            assert_parsed!(parse_filename, $input, Filename::Real(Cow::Owned(PathBuf::from($result))), $remain);
         };
     }
 
     assert_path!(b"aaa", "aaa");
     assert_path!(b"      aaa", "aaa");
-    assert_path!(b"aaa\nbbb", "aaa");
-    assert_path!(b"aaa time", "aaa");
+    assert_path!(b"aaa\nbbb", "aaa", b"\nbbb");
+    assert_path!(b"aaa time", "aaa", b" time");
 
     assert_path!(b"\"aaa\"", "aaa");
     assert_path!(b"      \"aaa\"", "aaa");
@@ -533,7 +538,8 @@ fn test_parse_patch_line() {
     assert_parsed!(parse_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
     assert_parsed!(parse_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
 
-    assert_parsed!(parse_patch_line, b"@@ -1 +1 @@\n", StartOfHunk);
+    let line = b"@@ -1 +1 @@\n";
+    assert_parsed!(parse_patch_line, line, StartOfHunk, line);
 
     assert_parsed!(parse_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
 
@@ -571,7 +577,8 @@ fn test_parse_git_patch_line() {
     assert_parsed!(parse_git_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
     assert_parsed!(parse_git_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
 
-    assert_parsed!(parse_git_patch_line, b"@@ -1 +1 @@\n", StartOfHunk);
+    let line = b"@@ -1 +1 @@\n";
+    assert_parsed!(parse_git_patch_line, line, StartOfHunk, line);
 
     assert_parsed!(parse_git_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
 
