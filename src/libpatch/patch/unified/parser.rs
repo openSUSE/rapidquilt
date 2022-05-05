@@ -1244,7 +1244,6 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
 
     // Read the hunks!
     let (input_, hunks) = parse_hunks(input)?;
-    input = input_;
 
     // We can make our filepatch
     let filepatch = metadata.build_filepatch(hunks).map_err(
@@ -1254,6 +1253,7 @@ fn parse_filepatch<'a>(mut input: CompleteByteSlice<'a>, mut want_header: bool)
         }
     )?;
 
+    input = input_;
     Ok((input, (header, filepatch)))
 }
 
@@ -1543,6 +1543,33 @@ GIT binary patch
 
         _ => {
             panic!("Got unexpected success when parsing patch with unsupported metadata!");
+        }
+    }
+
+    // Missing filename
+    let filepatch_txt = br#"garbage1
+garbage2
+garbage3
+--- /dev/null
++++ /dev/null
+@@ -200,3 +210,3 @@ place2
+ mmm
+-nnn
++ooo
+ ppp
+"#;
+
+    let ret = parse_filepatch(CompleteByteSlice(filepatch_txt), false);
+    match ret {
+        Err(error) => {
+            assert_eq!(ParseError::from(error),
+                       ParseError::MissingFilenameForHunk {
+                           hunk_line: "@@ -200,3 +210,3 @@ place2".to_string()
+                       });
+        }
+
+        _ => {
+            panic!("Got unexpected success when parsing patch with missing filenames!");
         }
     }
 }
