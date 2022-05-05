@@ -1235,8 +1235,6 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
                 if want_header {
                     header.push(garbage);
                 }
-                input = input_;
-                continue;
             }
 
             StartOfHunk => { input = input_; break; }
