@@ -854,7 +854,7 @@ impl<'a> TextFilePatch<'a> {
 pub struct Patch<'a, Line> {
     /// All "garbage" lines preceding the first FilePatch.
     /// These lines include the final new line character.
-    pub header: Vec<&'a [u8]>,
+    pub header: &'a [u8],
 
     /// All FilePatches included in the patch file
     pub file_patches: Vec<FilePatch<'a, Line>>,

@@ -98,6 +98,17 @@ macro_rules! assert_parse_error {
     };
 }
 
+#[cfg(test)]
+macro_rules! assert_lines_eq {
+    ( $input:expr, $lines:expr ) => {
+        {
+            for (line, expect) in $input.split(|&c| c == b'\n').zip($lines) {
+                assert_eq!(line, expect.as_bytes());
+            }
+        }
+    };
+}
+
 /// Shortcut to make slice from byte string literal
 macro_rules! s { ( $byte_string:expr ) => { &$byte_string[..] } }
 
@@ -1178,10 +1189,16 @@ enum MetadataState {
     GitDiff,
 }
 
-fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
-    -> IResult<&[u8], (Vec<&'a [u8]>, TextFilePatch<'a>), ParseError>
+fn offsetof<T>(container: &[T], slice: &[T]) -> usize
 {
-    let mut header = Vec::new();
+    (slice.as_ptr() as usize) - (container.as_ptr() as usize)
+}
+
+fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
+    -> IResult<&[u8], (&'a [u8], TextFilePatch<'a>), ParseError>
+{
+    let mut input = bytes.clone();
+    let mut header = &bytes[..0];
     let mut state = MetadataState::Normal;
     let mut extended_headers = false;
 
@@ -1204,9 +1221,9 @@ fn parse_filepatch<'a>(mut input: &'a [u8], mut want_header: bool)
         }
 
         match patch_line {
-            Garbage(garbage) => {
+            Garbage(_) => {
                 if want_header {
-                    header.push(garbage);
+                    header = &bytes[..offsetof(bytes, input_)];
                 }
             }
 
@@ -1311,10 +1328,10 @@ Other content.
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1341,10 +1358,10 @@ Other content.
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1368,10 +1385,10 @@ garbage3
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
     assert_eq!(file_patch.old_filename(), None);
@@ -1396,10 +1413,10 @@ garbage3
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Create);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1424,10 +1441,10 @@ garbage3
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1452,10 +1469,10 @@ garbage3
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Delete);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1489,10 +1506,10 @@ Other content.
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1515,10 +1532,10 @@ rename to filename2
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1544,10 +1561,10 @@ rename to filename2
 
     let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
 
-    assert_eq!(header.len(), 3);
-    assert_eq!(header[0], b"garbage1\n");
-    assert_eq!(header[1], b"garbage2\n");
-    assert_eq!(header[2], b"garbage3\n");
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1555,6 +1572,35 @@ rename to filename2
     assert_eq!(file_patch.old_permissions(), None);
     assert_eq!(file_patch.new_permissions(), None);
     assert_eq!(file_patch.hunks.len(), 1);
+
+
+    // Garbage that looks like metadata
+    let filepatch_txt = br#"garbage1
++++ garbage2
+garbage3
+--- filename1
++++ filename1
+@@ -200,3 +210,3 @@ place2
+ mmm
+-nnn
++ooo
+ ppp
+"#;
+
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+
+    assert_lines_eq!(header, [
+        "garbage1",
+        "+++ garbage2",
+        "garbage3"]);
+
+    assert_eq!(file_patch.kind(), FilePatchKind::Modify);
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.old_permissions(), None);
+    assert_eq!(file_patch.new_permissions(), None);
+    assert_eq!(file_patch.hunks.len(), 1);
+    assert_eq!(file_patch.hunks[0].add.content[0], s!(b"mmm\n"));
 
 
     // Unsupported metadata
@@ -1686,7 +1732,7 @@ new mode 100755
 pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, Error> {
     let mut input = bytes.clone();
 
-    let mut header = Vec::new();
+    let mut header = &bytes[..0];
     let mut file_patches = Vec::<TextFilePatch>::new();
 
     loop {
@@ -1751,10 +1797,10 @@ garbage7
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
 
-    assert_eq!(patch.header.len(), 3);
-    assert_eq!(patch.header[0], b"garbage1\n");
-    assert_eq!(patch.header[1], b"garbage2\n");
-    assert_eq!(patch.header[2], b"garbage3\n");
+    assert_lines_eq!(patch.header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     let file_patches = patch.file_patches;
 
@@ -1796,10 +1842,10 @@ rename to filename7
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
 
-    assert_eq!(patch.header.len(), 3);
-    assert_eq!(patch.header[0], b"garbage1\n");
-    assert_eq!(patch.header[1], b"garbage2\n");
-    assert_eq!(patch.header[2], b"garbage3\n");
+    assert_lines_eq!(patch.header, [
+        "garbage1",
+        "garbage2",
+        "garbage3"]);
 
     let file_patches = patch.file_patches;
 
@@ -1833,9 +1879,9 @@ rename from old name is just garbage, no git
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
 
-    assert_eq!(patch.header.len(), 2);
-    assert_eq!(patch.header[0], s!(b"Looks like git diff extended headers:\n"));
-    assert_eq!(patch.header[1], s!(b"rename from old name is just garbage, no git\n"));
+    assert_lines_eq!(patch.header, [
+        "Looks like git diff extended headers:",
+        "rename from old name is just garbage, no git"]);
 
     let file_patches = patch.file_patches;
 
@@ -1884,7 +1930,7 @@ index 0123456789ab..cdefedcba987 100644
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
 
-    assert_eq!(patch.header.len(), 14);
+    assert_eq!(patch.header.iter().filter(|&&c| c == b'\n').count(), 14);
 }
 
 #[cfg(test)]

@@ -31,11 +31,11 @@ fn all_files() -> Result<(), Error> {
 
         // Parse our special headers
         let mut fuzz = 0;
-        for header_line in &patch.header {
+        for header_line in patch.header.split(|&c| c == b'\n') {
             let header_line = String::from_utf8_lossy(header_line);
             match &header_line.splitn(2, ": ").collect::<Vec<_>>()[..] {
                 ["fuzz", fuzz_str] => {
-                    fuzz = fuzz_str[..fuzz_str.len() - 1].parse()?;
+                    fuzz = fuzz_str.parse()?;
                 }
                 _ => {}
             }
