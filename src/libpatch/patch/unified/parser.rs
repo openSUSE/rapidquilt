@@ -11,7 +11,7 @@ use failure::{Error, Fail};
 use nom::{
     branch::alt,
     bytes::complete::{tag, take, take_till1, take_until, take_while, take_while1},
-    character::{is_digit, is_oct_digit},
+    character::{is_digit, is_hex_digit, is_oct_digit},
     combinator::{cond, eof, not, opt, peek, map, recognize, success},
     error::ErrorKind,
     sequence::{delimited, pair, preceded, tuple},
@@ -489,9 +489,46 @@ fn test_parse_metadata_line() {
 
 }
 
+fn parse_sha1(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
+    preceded(take_while(is_space),
+             take_while1(is_hex_digit))(input)
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_sha1() {
+    // A shortened SHA1
+    let sha1 = b"3505ee3";
+    assert_parsed!(parse_sha1, sha1, s!(sha1));
+
+    // A full SHA1 (of an empty file)
+    let sha1 = b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+    assert_parsed!(parse_sha1, sha1, s!(sha1));
+
+    // An oversized SHA1 (GNU patch does not check maximum length)
+    let sha1 = b"0123456789abcdef0123456789abcdef0123456789abcdef";
+    assert_parsed!(parse_sha1, sha1, s!(sha1));
+
+    // An SHA1 preceded by whitespace
+    assert_parsed!(parse_sha1, b" \t 123456", s!(b"123456"));
+
+    // An SHA1 terminated by a non-hex character
+    assert_parsed!(parse_sha1, b"123456:other", s!(b"123456"), s!(b":other"));
+
+    // Invalid sequences
+    assert_parse_error!(parse_sha1, b"", ParseError::Unknown {
+        line: "".to_string(),
+        inner: ErrorKind::TakeWhile1
+    });
+    assert_parse_error!(parse_sha1, b"non-hex", ParseError::Unknown {
+        line: "non-hex".to_string(),
+        inner: ErrorKind::TakeWhile1
+    });
+}
+
 #[derive(Debug, PartialEq)]
-enum GitMetadataLine {
-    Index,
+enum GitMetadataLine<'a> {
+    Index(&'a [u8], &'a[u8], Option<u32>),
 
     OldMode(u32),
     NewMode(u32),
@@ -510,9 +547,13 @@ enum GitMetadataLine {
 fn parse_git_metadata_line(input: &[u8]) -> IResult<&[u8], GitMetadataLine, ParseError> {
     alt((
         map(delimited(tag(s!(b"index ")),
-                      take_until_newline,
+                      tuple((
+                          parse_sha1,
+                          preceded(tag(s!(b"..")), parse_sha1),
+                          opt(parse_mode),
+                      )),
                       newline),
-            |_| GitMetadataLine::Index),
+            |(old_sha1, new_sha1, mode)| GitMetadataLine::Index(old_sha1, new_sha1, mode)),
 
         // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
         map(delimited(tag(s!(b"rename from ")),
@@ -563,7 +604,8 @@ fn test_parse_git_metadata_line() {
     use self::GitMetadataLine::*;
 
     // All of them in basic form
-    assert_parsed!(parse_git_metadata_line, b"index 123456789ab..fecdba98765 100644\n", Index);
+    assert_parsed!(parse_git_metadata_line, b"index 123456789ab..fecdba98765\n", Index(b"123456789ab", b"fecdba98765", None));
+    assert_parsed!(parse_git_metadata_line, b"index 123456789ab..fecdba98765 100644\n", Index(b"123456789ab", b"fecdba98765", Some(0o100644)));
 
     assert_parsed!(parse_git_metadata_line, b"old mode 100644\n",         OldMode(0o100644));
     assert_parsed!(parse_git_metadata_line, b"new mode 100644\n",         NewMode(0o100644));
@@ -583,7 +625,7 @@ fn test_parse_git_metadata_line() {
 enum PatchLine<'a> {
     Garbage(&'a [u8]),
     Metadata(MetadataLine<'a>),
-    GitMetadata(GitMetadataLine),
+    GitMetadata(GitMetadataLine<'a>),
     EndOfPatch,
 }
 
@@ -642,7 +684,7 @@ fn test_parse_git_patch_line() {
 
     assert_parsed!(parse_git_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
 
-    assert_parsed!(parse_git_patch_line, b"index 0123456789a..fedcba98765 100644\n", GitMetadata(Index));
+    assert_parsed!(parse_git_patch_line, b"index 0123456789a..fedcba98765 100644\n", GitMetadata(Index(b"0123456789a", b"fedcba98765", Some(0o100644))));
 
     assert_parsed!(parse_git_patch_line, b"old mode 100644\n",          GitMetadata(OldMode(0o100644)));
     assert_parsed!(parse_git_patch_line, b"new mode 100755\n",          GitMetadata(NewMode(0o100755)));
