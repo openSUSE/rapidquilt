@@ -1254,6 +1254,8 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
 
                 // Otherwise it just means that everything that may have
                 // looked like metadata until now was just garbage.
+                header = &bytes[..offsetof(bytes, input)];
+
                 // Reset metadata.
                 metadata = FilePatchMetadata::default();
                 metadata.old_filename = Some(old_filename);
@@ -1593,6 +1595,36 @@ garbage3
         "garbage1",
         "+++ garbage2",
         "garbage3"]);
+
+    assert_eq!(file_patch.kind(), FilePatchKind::Modify);
+    assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
+    assert_eq!(file_patch.old_permissions(), None);
+    assert_eq!(file_patch.new_permissions(), None);
+    assert_eq!(file_patch.hunks.len(), 1);
+    assert_eq!(file_patch.hunks[0].add.content[0], s!(b"mmm\n"));
+
+
+    // Garbage that looks like metadata just before a diff --git line
+    let filepatch_txt = br#"garbage1
+garbage2
++++ garbage3
+diff --git filename1 filename1
+--- filename1
++++ filename1
+@@ -200,3 +210,3 @@ place2
+ mmm
+-nnn
++ooo
+ ppp
+"#;
+
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+
+    assert_lines_eq!(header, [
+        "garbage1",
+        "garbage2",
+        "+++ garbage3"]);
 
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
