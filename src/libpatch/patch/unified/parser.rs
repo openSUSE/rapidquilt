@@ -14,7 +14,7 @@ use nom::{
     character::{is_digit, is_hex_digit, is_oct_digit},
     combinator::{cond, eof, not, opt, peek, map, recognize, success},
     error::ErrorKind,
-    sequence::{delimited, pair, preceded, tuple},
+    sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
 };
 
@@ -858,7 +858,7 @@ fn parse_hunk_line(input: &[u8]) -> IResult<&[u8], (HunkLineType, &[u8]), ParseE
         map(newline,
             |line| (HunkLineType::Context, &line[..])),
     ))(input) {
-        match opt(tag(s!(NO_NEW_LINE_TAG)))(input) {
+        match opt(terminated(tag(c!(NO_NEW_LINE_TAG[0])), take_until_newline_incl))(input) {
             Ok((input, no_newline_tag)) => {
                 // Was there "No newline..." tag?
                 Ok((input, if no_newline_tag.is_none() {
@@ -898,6 +898,9 @@ fn test_parse_hunk_line() {
     assert_parsed!(parse_hunk_line, b"+    bla ble bli;\n\\ No newline at end of file\n", (HunkLineType::Add,     s!(b"    bla ble bli;")));
     assert_parsed!(parse_hunk_line, b"-    bla ble bli;\n\\ No newline at end of file\n", (HunkLineType::Remove,  s!(b"    bla ble bli;")));
     assert_parsed!(parse_hunk_line, b"     bla ble bli;\n\\ No newline at end of file\n", (HunkLineType::Context, s!(b"    bla ble bli;")));
+
+    // Localized newline...
+    assert_parsed!(parse_hunk_line, "     bla ble bli;\n\\ Chybí znak konce řádku na konci souboru\n".as_bytes(), (HunkLineType::Context, s!(b"    bla ble bli;")));
 
     // XXX: patch specialty: See comment in `hunk_line`.
     assert_parsed!(parse_hunk_line, b"\t\n",                 (HunkLineType::Context, s!(b"\t\n")));
