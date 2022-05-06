@@ -1113,6 +1113,8 @@ struct FilePatchMetadata<'a> {
     rename_to: bool,
     old_permissions: Option<Permissions>,
     new_permissions: Option<Permissions>,
+    old_sha1: Option<&'a [u8]>,
+    new_sha1: Option<&'a [u8]>,
 }
 
 impl<'a> FilePatchMetadata<'a> {
@@ -1194,6 +1196,10 @@ impl<'a> FilePatchMetadata<'a> {
             // Set the permissions
             .old_permissions(self.old_permissions)
             .new_permissions(self.new_permissions)
+
+            // Set SHA1
+            .old_sha1(self.old_sha1)
+            .new_sha1(self.new_sha1)
 
             // Set the hunks
             .hunks(hunks);
@@ -1309,6 +1315,11 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
             }
             Metadata(MinusFilename(filename)) => {
                 metadata.old_filename = Some(filename);
+            }
+
+            GitMetadata(Index(old_sha1, new_sha1, _)) => {
+                metadata.old_sha1 = Some(old_sha1);
+                metadata.new_sha1 = Some(new_sha1);
             }
 
             GitMetadata(RenameFrom) => {

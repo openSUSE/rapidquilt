@@ -538,6 +538,14 @@ pub struct FilePatch<'a, Line> {
     #[builder(default)]
     new_permissions: Option<fs::Permissions>,
 
+    /// The old SHA1, if this was a git-style patch
+    #[builder(default)]
+    old_sha1: Option<&'a [u8]>,
+
+    /// The new SHA1, if this was a git-style patch
+    #[builder(default)]
+    new_sha1: Option<&'a [u8]>,
+
     #[builder(default)]
     hunks: HunksVec<'a, Line>,
 }
@@ -555,6 +563,9 @@ impl<'a, Line> FilePatch<'a, Line> {
     pub fn old_permissions(&self) -> Option<&fs::Permissions> { self.old_permissions.as_ref() }
     #[allow(dead_code)]
     pub fn new_permissions(&self) -> Option<&fs::Permissions> { self.new_permissions.as_ref() }
+
+    pub fn old_sha1(&self) -> Option<&[u8]> { self.old_sha1 }
+    pub fn new_sha1(&self) -> Option<&[u8]> { self.new_sha1 }
 
     pub fn hunks(&self) -> &[Hunk<'a, Line>] { &self.hunks }
 

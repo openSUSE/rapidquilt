@@ -147,6 +147,10 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, &'a [u8]>,
                     writeln!(writer, "new mode {:o}", permissions.mode())?;
                 }
             }
+
+            if let (Some(old_sha1), Some(new_sha1)) = (filepatch.old_sha1(), filepatch.new_sha1()) {
+                writeln!(writer, "index {}..{}", String::from_utf8_lossy(old_sha1), String::from_utf8_lossy(new_sha1))?;
+            }
         }
         #[cfg(not(unix))]
         () => {
