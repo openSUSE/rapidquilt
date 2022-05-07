@@ -36,7 +36,7 @@ pub enum ParseError<'a> {
 
 impl<'a> nom::error::ParseError<&'a [u8]> for ParseError<'a> {
     fn from_error_kind(input: &'a [u8], kind: ErrorKind) -> Self {
-        Self::Unknown(error_line(input), kind)
+        Self::Unknown(input, kind)
     }
 
     fn append(_: &[u8], _: ErrorKind, other: Self) -> Self {
@@ -75,28 +75,28 @@ impl<'a> From<ParseError<'a>> for StaticParseError {
     fn from(err: ParseError) -> Self {
         use ParseError::*;
         match err {
-            UnsupportedMetadata(line) =>
-                Self::UnsupportedMetadata(String::from_utf8_lossy(line).to_string()),
-            MissingFilenameForHunk(hunk_line) =>
-                Self::MissingFilenameForHunk(String::from_utf8_lossy(hunk_line).to_string()),
+            UnsupportedMetadata(input) =>
+                Self::UnsupportedMetadata(String::from_utf8_lossy(error_line(input)).to_string()),
+            MissingFilenameForHunk(input) =>
+                Self::MissingFilenameForHunk(String::from_utf8_lossy(error_line(input)).to_string()),
 
             UnexpectedEndOfFile =>
                 Self::UnexpectedEndOfFile,
 
-            BadLineInHunk(line) =>
-                Self::BadLineInHunk(String::from_utf8_lossy(line).to_string()),
+            BadLineInHunk(input) =>
+                Self::BadLineInHunk(String::from_utf8_lossy(error_line(input)).to_string()),
 
             NumberTooBig(number_str) =>
                 Self::NumberTooBig(String::from_utf8_lossy(number_str).to_string()),
 
-            BadMode(mode_str) =>
-                Self::BadMode(String::from_utf8_lossy(mode_str).to_string()),
+            BadMode(input) =>
+                Self::BadMode(String::from_utf8_lossy(error_line(input)).to_string()),
 
             BadSequence(sequence) =>
                 Self::BadSequence(String::from_utf8_lossy(sequence).to_string()),
 
-            Unknown(line, inner) =>
-                Self::Unknown(String::from_utf8_lossy(line).to_string(), inner),
+            Unknown(input, inner) =>
+                Self::Unknown(String::from_utf8_lossy(error_line(input)).to_string(), inner),
         }
     }
 }
@@ -444,13 +444,13 @@ fn parse_mode(input: &[u8]) -> IResult<&[u8], u32, ParseError> {
     let (input_, digits) = take_while1(is_oct_digit)(input)?;
 
     if digits.len() != 6 { // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
-        return Err(nom::Err::Failure(ParseError::BadMode(error_line(input))));
+        return Err(nom::Err::Failure(ParseError::BadMode(input)));
     }
 
     let mode_str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
     match u32::from_str_radix(mode_str, 8) {
         Ok(number) => Ok((input_, number)),
-        Err(_) => Err(nom::Err::Failure(ParseError::BadMode(error_line(input)))),
+        Err(_) => Err(nom::Err::Failure(ParseError::BadMode(input))),
     }
 }
 
@@ -905,7 +905,7 @@ fn parse_hunk_line(input: &[u8]) -> IResult<&[u8], (HunkLineType, &[u8]), ParseE
             Err(e) => Err(e),
         }
     } else {
-        Err(nom::Err::Failure(ParseError::BadLineInHunk(error_line(input))))
+        Err(nom::Err::Failure(ParseError::BadLineInHunk(input)))
     }
 }
 
@@ -975,7 +975,7 @@ fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
         match line_type {
             HunkLineType::Add => {
                 if header.add_count == 0 {
-                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(error_line(input))));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(input)));
                 }
 
                 hunk.add.content.push(line);
@@ -986,7 +986,7 @@ fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
             }
             HunkLineType::Remove => {
                 if header.remove_count == 0 {
-                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(error_line(input))));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(input)));
                 }
 
                 hunk.remove.content.push(line);
@@ -997,7 +997,7 @@ fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
             }
             HunkLineType::Context => {
                 if header.remove_count == 0 || header.add_count == 0 {
-                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(error_line(input))));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(input)));
                 }
 
                 hunk.add.content.push(line);
@@ -1307,7 +1307,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
                 // changes permissions... So lets check for that.
                 return if extended_headers {
                     metadata.build_hunkless_filepatch().ok_or(
-                        nom::Err::Failure(ParseError::MissingFilenameForHunk(error_line(input))))
+                        nom::Err::Failure(ParseError::MissingFilenameForHunk(input)))
                         .map(|filepatch| (input, (header, filepatch)))
                 } else {
                     Err(nom::Err::Error(ParseError::UnexpectedEndOfFile))
@@ -1365,7 +1365,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
             }
 
             GitMetadata(GitBinaryPatch) => {
-                return Err(nom::Err::Failure(ParseError::UnsupportedMetadata(error_line(input))));
+                return Err(nom::Err::Failure(ParseError::UnsupportedMetadata(input)));
             }
 
             GitMetadata(_) => {
@@ -1382,7 +1382,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
 
     // We can make our filepatch
     let filepatch = metadata.build_filepatch(hunks).ok_or(
-        nom::Err::Failure(ParseError::MissingFilenameForHunk(error_line(input)))
+        nom::Err::Failure(ParseError::MissingFilenameForHunk(input))
     )?;
 
     input = input_;
