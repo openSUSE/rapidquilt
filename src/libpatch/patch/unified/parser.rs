@@ -90,7 +90,7 @@ impl<'a> From<ParseError<'a>> for StaticParseError {
                 Self::NumberTooBig(String::from_utf8_lossy(number_str).to_string()),
 
             BadMode(input) =>
-                Self::BadMode(String::from_utf8_lossy(error_line(input)).to_string()),
+                Self::BadMode(String::from_utf8_lossy(error_word(input)).to_string()),
 
             BadSequence(sequence) =>
                 Self::BadSequence(String::from_utf8_lossy(sequence).to_string()),
@@ -186,6 +186,16 @@ fn take_until_newline_incl(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
 
 fn error_line(input: &[u8]) -> &[u8] {
     match memchr::memchr(b'\n', input) {
+        Some(index) => &input[..index],
+        None => &input[..],
+    }
+}
+
+fn error_word(input: &[u8]) -> &[u8] {
+    match input.iter().position(|c|
+                                !(b'0'..b'9').contains(c) &&
+                                !(b'A'..b'Z').contains(c) &&
+                                !(b'a'..b'z').contains(c)) {
         Some(index) => &input[..index],
         None => &input[..],
     }
@@ -483,6 +493,11 @@ fn test_parse_mode() {
     assert_bad_mode!("1");
     assert_bad_mode!("10000000");
     assert_bad_mode!("1000000000000000000000000000");
+
+    // Report only the mode, not the rest of the line
+    assert_parse_error!(
+        parse_mode, b"100abc, more input here",
+                StaticParseError::BadMode("100abc".to_string()));
 }
 
 #[derive(Debug, PartialEq)]
