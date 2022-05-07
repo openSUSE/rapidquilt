@@ -92,8 +92,8 @@ impl<'a> From<ParseError<'a>> for StaticParseError {
             BadMode(input) =>
                 Self::BadMode(String::from_utf8_lossy(error_word(input)).to_string()),
 
-            BadSequence(sequence) =>
-                Self::BadSequence(String::from_utf8_lossy(sequence).to_string()),
+            BadSequence(input) =>
+                Self::BadSequence(String::from_utf8_lossy(error_sequence(input)).to_string()),
 
             Unknown(input, inner) =>
                 Self::Unknown(String::from_utf8_lossy(error_line(input)).to_string(), inner),
@@ -201,6 +201,19 @@ fn error_word(input: &[u8]) -> &[u8] {
     }
 }
 
+fn error_sequence(input: &[u8]) -> &[u8] {
+    let index = match input.get(1) {
+        None => 1,
+        Some(c) => if !(b'0'..b'3').contains(c) { 2 } else {
+            match input.get(2) {
+                None => 2,
+                Some(c) => if !(b'0'..b'7').contains(c) { 3 } else { 4 }
+            }
+        }
+    };
+    input.get(..index).unwrap_or(&input[..])
+}
+
 // Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
 // of the path as-is in the input data.
 fn parse_filename_direct(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
@@ -214,41 +227,35 @@ fn parse_filename_direct(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
 /// Requires exactly three octal digits that represent a number between
 /// 0 and 0o377. On failure, `None` is returned together with the number
 /// of bytes required to demonstrate the error.
-fn parse_oct3(input: &[u8]) -> (Option<u8>, usize) {
-    let len = input.len();
-    if len < 1 {
-        (None, 0)
-    } else if !(b'0'..=b'3').contains(&input[0]) || len < 2 {
-        (None, 1)
-    } else if !(b'0'..=b'7').contains(&input[1]) || len < 3 {
-        (None, 2)
-    } else if !(b'0'..=b'7').contains(&input[2]) {
-        (None, 3)
-    } else {
-        (Some(((input[0] - b'0') << 6) |
-              ((input[1] - b'0') << 3) |
-              ((input[2] - b'0'))),
-         3)
-    }
+fn parse_oct3(input: &[u8]) -> Option<u8> {
+    if input.len() >= 3 &&
+        (b'0'..=b'3').contains(&input[0]) &&
+        (b'0'..=b'7').contains(&input[1]) &&
+        (b'0'..=b'7').contains(&input[2])
+    {
+        Some(((input[0] - b'0') << 6) |
+             ((input[1] - b'0') << 3) |
+             ((input[2] - b'0')))
+    } else { None }
 }
 
 #[cfg(test)]
 #[test]
 fn test_parse_oct3() {
     // Valid numbers
-    assert_eq!(parse_oct3(b"123"), (Some(0o123), 3));
-    assert_eq!(parse_oct3(b"3456"), (Some(0o345), 3));
+    assert_eq!(parse_oct3(b"123"), Some(0o123));
+    assert_eq!(parse_oct3(b"3456"), Some(0o345));
 
     // Various invalid sequences
-    assert_eq!(parse_oct3(b""), (None, 0));
-    assert_eq!(parse_oct3(b"4"), (None, 1));
-    assert_eq!(parse_oct3(b"x"), (None, 1));
-    assert_eq!(parse_oct3(b"1"), (None, 1));
-    assert_eq!(parse_oct3(b"18"), (None, 2));
-    assert_eq!(parse_oct3(b"1x"), (None, 2));
-    assert_eq!(parse_oct3(b"12"), (None, 2));
-    assert_eq!(parse_oct3(b"128"), (None, 3));
-    assert_eq!(parse_oct3(b"12x"), (None, 3));
+    assert_eq!(parse_oct3(b""), None);
+    assert_eq!(parse_oct3(b"4"), None);
+    assert_eq!(parse_oct3(b"x"), None);
+    assert_eq!(parse_oct3(b"1"), None);
+    assert_eq!(parse_oct3(b"18"), None);
+    assert_eq!(parse_oct3(b"1x"), None);
+    assert_eq!(parse_oct3(b"12"), None);
+    assert_eq!(parse_oct3(b"128"), None);
+    assert_eq!(parse_oct3(b"12x"), None);
 }
 
 /// Parses a C-style string. The implementation very closely mimics the
@@ -272,12 +279,12 @@ fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
                     Some(b'\"') => b'\"',
                     _ => {
                         match parse_oct3(&input[index..]) {
-                            (Some(val), len) => {
-                                index += len - 1;
+                            Some(val) => {
+                                index += 2; // difference from a one-letter sequence
                                 val
                             }
-                            (None, len) => {
-                                return Err(ParseError::BadSequence(&input[index-1..index+len]));
+                            None => {
+                                return Err(ParseError::BadSequence(&input[index-1..]));
                             }
                         }
                     }
@@ -295,6 +302,14 @@ fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
 #[cfg(test)]
 #[test]
 fn test_parse_c_string() {
+    macro_rules! assert_bad_sequence {
+        ($input:expr, $sequence:expr) => {
+            assert_eq!(parse_c_string($input)
+                       .map_err(|err| StaticParseError::from(err)),
+                       Err(StaticParseError::BadSequence($sequence.to_string())));
+        }
+    }
+
     // Valid escapes
     assert_parsed!(parse_c_string, b"BEL: \\a", b"BEL: \x07".to_vec());
     assert_parsed!(parse_c_string, b"BS: \\b", b"BS: \x08".to_vec());
@@ -313,20 +328,13 @@ fn test_parse_c_string() {
     assert_parsed!(parse_c_string, b"terminated\"", b"terminated".to_vec(), b"\"");
 
     // Invalid escapes
-    assert_eq!(parse_c_string(b"Unknown \\! escape"),
-               Err(ParseError::BadSequence(s!(b"\\!"))));
-    assert_eq!(parse_c_string(b"Unterminated \\"),
-               Err(ParseError::BadSequence(s!(b"\\"))));
-    assert_eq!(parse_c_string(b"One-digit octal: \\1."),
-               Err(ParseError::BadSequence(s!(b"\\1."))));
-    assert_eq!(parse_c_string(b"One-digit octal at end: \\1"),
-               Err(ParseError::BadSequence(s!(b"\\1"))));
-    assert_eq!(parse_c_string(b"Two-digit octal: \\12."),
-               Err(ParseError::BadSequence(s!(b"\\12."))));
-    assert_eq!(parse_c_string(b"Two-digit octal at end: \\12"),
-               Err(ParseError::BadSequence(s!(b"\\12"))));
-    assert_eq!(parse_c_string(b"Too big octal: \\666."),
-               Err(ParseError::BadSequence(s!(b"\\6"))));
+    assert_bad_sequence!(b"Unknown \\! escape", "\\!");
+    assert_bad_sequence!(b"Unterminated \\", "\\");
+    assert_bad_sequence!(b"One-digit octal: \\1.", "\\1.");
+    assert_bad_sequence!(b"One-digit octal at end: \\1", "\\1");
+    assert_bad_sequence!(b"Two-digit octal: \\12.", "\\12.");
+    assert_bad_sequence!(b"Two-digit octal at end: \\12", "\\12");
+    assert_bad_sequence!(b"Too big octal: \\666.", "\\6");
 }
 
 // Parses a quoted filename that may contain escaped characters. Returns owned buffer with the
