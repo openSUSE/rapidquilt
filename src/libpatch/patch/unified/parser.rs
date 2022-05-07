@@ -22,9 +22,30 @@ use crate::patch::*;
 use crate::patch::unified::*;
 
 
+#[derive(Debug, PartialEq)]
+pub enum ParseError<'a> {
+    UnsupportedMetadata(&'a [u8]),
+    MissingFilenameForHunk(&'a [u8]),
+    UnexpectedEndOfFile,
+    BadLineInHunk(&'a [u8]),
+    NumberTooBig(&'a [u8]),
+    BadMode(&'a [u8]),
+    BadSequence(&'a [u8]),
+    Unknown(&'a [u8], ErrorKind),
+}
 
-#[derive(Debug, Fail, PartialEq)]
-pub enum ParseError {
+impl<'a> nom::error::ParseError<&'a [u8]> for ParseError<'a> {
+    fn from_error_kind(input: &'a [u8], kind: ErrorKind) -> Self {
+        Self::Unknown(error_line(input), kind)
+    }
+
+    fn append(_: &[u8], _: ErrorKind, other: Self) -> Self {
+        other
+    }
+}
+
+#[derive(Debug, Fail)]
+pub enum StaticParseError {
     #[fail(display = "Unsupported metadata: \"{}\"", line)]
     UnsupportedMetadata { line: String },
 
@@ -50,16 +71,33 @@ pub enum ParseError {
     Unknown { line: String, inner: ErrorKind },
 }
 
-impl nom::error::ParseError<&[u8]> for ParseError {
-    fn from_error_kind(input: &[u8], kind: ErrorKind) -> Self {
-        Self::Unknown {
-            line: String::from_utf8_lossy(&input[..]).to_string(),
-            inner: kind,
-        }
-    }
+impl<'a> From<ParseError<'a>> for StaticParseError {
+    fn from(err: ParseError) -> Self {
+        use ParseError::*;
+        match err {
+            UnsupportedMetadata(line) =>
+                Self::UnsupportedMetadata { line: String::from_utf8_lossy(line).to_string() },
+            MissingFilenameForHunk(hunk_line) =>
+                Self::MissingFilenameForHunk { hunk_line: String::from_utf8_lossy(hunk_line).to_string() },
 
-    fn append(_: &[u8], _: ErrorKind, other: Self) -> Self {
-        other
+            UnexpectedEndOfFile =>
+                Self::UnexpectedEndOfFile,
+
+            BadLineInHunk(line) =>
+                Self::BadLineInHunk { line: String::from_utf8_lossy(line).to_string() },
+
+            NumberTooBig(number_str) =>
+                Self::NumberTooBig { number_str: String::from_utf8_lossy(number_str).to_string() },
+
+            BadMode(mode_str) =>
+                Self::BadMode { mode_str: String::from_utf8_lossy(mode_str).to_string() },
+
+            BadSequence(sequence) =>
+                Self::BadSequence { sequence: String::from_utf8_lossy(sequence).to_string() },
+
+            Unknown(line, inner) =>
+                Self::Unknown { line: String::from_utf8_lossy(line).to_string(), inner },
+        }
     }
 }
 
@@ -144,11 +182,8 @@ fn maybe_take_until_newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
     take_while(|c| c!= b'\n')(input)
 }
 
-fn error_line(input: &[u8]) -> String {
-    match maybe_take_until_newline(input) {
-        Ok((_, line)) => String::from_utf8_lossy(line).to_string(),
-        _ => "?".to_string(),
-    }
+fn error_line(input: &[u8]) -> &[u8] {
+    maybe_take_until_newline(input).map(|(_,line)| line).unwrap_or(s!(b"?"))
 }
 
 // Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
@@ -227,7 +262,7 @@ fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
                                 val
                             }
                             (None, len) => {
-                                return Err(ParseError::BadSequence { sequence: String::from_utf8_lossy(&input[index-1..index+len]).to_string() });
+                                return Err(ParseError::BadSequence(&input[index-1..index+len]));
                             }
                         }
                     }
@@ -264,19 +299,19 @@ fn test_parse_c_string() {
 
     // Invalid escapes
     assert_eq!(parse_c_string(b"Unknown \\! escape"),
-               Err(ParseError::BadSequence { sequence: String::from("\\!") }));
+               Err(ParseError::BadSequence(s!(b"\\!"))));
     assert_eq!(parse_c_string(b"Unterminated \\"),
-               Err(ParseError::BadSequence { sequence: String::from("\\") }));
+               Err(ParseError::BadSequence(s!(b"\\"))));
     assert_eq!(parse_c_string(b"One-digit octal: \\1."),
-               Err(ParseError::BadSequence { sequence: String::from("\\1.") }));
+               Err(ParseError::BadSequence(s!(b"\\1."))));
     assert_eq!(parse_c_string(b"One-digit octal at end: \\1"),
-               Err(ParseError::BadSequence { sequence: String::from("\\1") }));
+               Err(ParseError::BadSequence(s!(b"\\1"))));
     assert_eq!(parse_c_string(b"Two-digit octal: \\12."),
-               Err(ParseError::BadSequence { sequence: String::from("\\12.") }));
+               Err(ParseError::BadSequence(s!(b"\\12."))));
     assert_eq!(parse_c_string(b"Two-digit octal at end: \\12"),
-               Err(ParseError::BadSequence { sequence: String::from("\\12") }));
+               Err(ParseError::BadSequence(s!(b"\\12"))));
     assert_eq!(parse_c_string(b"Too big octal: \\666."),
-               Err(ParseError::BadSequence { sequence: String::from("\\6") }));
+               Err(ParseError::BadSequence(s!(b"\\6"))));
 }
 
 // Parses a quoted filename that may contain escaped characters. Returns owned buffer with the
@@ -409,13 +444,13 @@ fn parse_mode(input: &[u8]) -> IResult<&[u8], u32, ParseError> {
     let (input_, digits) = take_while1(is_oct_digit)(input)?;
 
     if digits.len() != 6 { // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
-        return Err(nom::Err::Failure(ParseError::BadMode { mode_str: error_line(input) }));
+        return Err(nom::Err::Failure(ParseError::BadMode(error_line(input))));
     }
 
     let mode_str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
     match u32::from_str_radix(mode_str, 8) {
         Ok(number) => Ok((input_, number)),
-        Err(_) => Err(nom::Err::Failure(ParseError::BadMode { mode_str: error_line(input) })),
+        Err(_) => Err(nom::Err::Failure(ParseError::BadMode(error_line(input)))),
     }
 }
 
@@ -426,8 +461,8 @@ fn test_parse_mode() {
         ($mode:expr) => {
             let mode = $mode;
             assert_parse_error!(
-                parse_mode, mode.as_bytes(),
-                ParseError::BadMode { mode_str: mode.to_string() });
+                parse_mode, mode,
+                ParseError::BadMode(mode));
         };
     );
 
@@ -439,10 +474,10 @@ fn test_parse_mode() {
     assert_parsed!(parse_mode, b"100755", 0o100755);
     assert_parsed!(parse_mode, b"100644", 0o100644);
 
-    assert_bad_mode!("100aaa");
-    assert_bad_mode!("1");
-    assert_bad_mode!("10000000");
-    assert_bad_mode!("1000000000000000000000000000");
+    assert_bad_mode!(b"100aaa");
+    assert_bad_mode!(b"1");
+    assert_bad_mode!(b"10000000");
+    assert_bad_mode!(b"1000000000000000000000000000");
 }
 
 #[derive(Debug, PartialEq)]
@@ -516,14 +551,14 @@ fn test_parse_sha1() {
     assert_parsed!(parse_sha1, b"123456:other", s!(b"123456"), s!(b":other"));
 
     // Invalid sequences
-    assert_parse_error!(parse_sha1, b"", ParseError::Unknown {
-        line: "".to_string(),
-        inner: ErrorKind::TakeWhile1
-    });
-    assert_parse_error!(parse_sha1, b"non-hex", ParseError::Unknown {
-        line: "non-hex".to_string(),
-        inner: ErrorKind::TakeWhile1
-    });
+    assert_parse_error!(parse_sha1, b"", ParseError::Unknown(
+        s!(b""),
+        ErrorKind::TakeWhile1
+    ));
+    assert_parse_error!(parse_sha1, b"non-hex", ParseError::Unknown(
+        s!(b"non-hex"),
+        ErrorKind::TakeWhile1
+    ));
 }
 
 #[derive(Debug, PartialEq)]
@@ -703,7 +738,7 @@ fn parse_number_usize(input: &[u8]) -> IResult<&[u8], usize, ParseError> {
     let str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
     match usize::from_str(str) {
         Ok(number) => Ok((input_, number)),
-        Err(_) => Err(nom::Err::Failure(ParseError::NumberTooBig { number_str: String::from_utf8_lossy(digits).to_string() })),
+        Err(_) => Err(nom::Err::Failure(ParseError::NumberTooBig(digits))),
     }
 }
 
@@ -714,11 +749,9 @@ fn test_parse_number_usize() {
     assert_parsed!(parse_number_usize, b"1", 1);
     assert_parsed!(parse_number_usize, b"123", 123);
 
-    let num = "123456789012345678901234567890";
-    assert_parse_error!(parse_number_usize, num.as_bytes(),
-                        ParseError::NumberTooBig {
-                            number_str: num.to_string(),
-                        });
+    let num = b"123456789012345678901234567890";
+    assert_parse_error!(parse_number_usize, num,
+                        ParseError::NumberTooBig(num));
 }
 
 // Parses line and count like "3,4" or just "3"
@@ -872,7 +905,7 @@ fn parse_hunk_line(input: &[u8]) -> IResult<&[u8], (HunkLineType, &[u8]), ParseE
             Err(e) => Err(e),
         }
     } else {
-        Err(nom::Err::Failure(ParseError::BadLineInHunk { line: error_line(input) }))
+        Err(nom::Err::Failure(ParseError::BadLineInHunk(error_line(input))))
     }
 }
 
@@ -912,13 +945,9 @@ fn test_parse_hunk_line() {
 
     // Bad line
     assert_parse_error!(parse_hunk_line, b"wtf is this\n",
-                        ParseError::BadLineInHunk {
-                            line: "wtf is this".to_string()
-                        });
+                        ParseError::BadLineInHunk(s!(b"wtf is this")));
     assert_parse_error!(parse_hunk_line, b"wtf",
-                        ParseError::BadLineInHunk {
-                            line: "wtf".to_string()
-                        });
+                        ParseError::BadLineInHunk(s!(b"wtf")));
 }
 
 fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
@@ -946,7 +975,7 @@ fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
         match line_type {
             HunkLineType::Add => {
                 if header.add_count == 0 {
-                    return Err(nom::Err::Failure(ParseError::BadLineInHunk { line: error_line(input) }));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(error_line(input))));
                 }
 
                 hunk.add.content.push(line);
@@ -957,7 +986,7 @@ fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
             }
             HunkLineType::Remove => {
                 if header.remove_count == 0 {
-                    return Err(nom::Err::Failure(ParseError::BadLineInHunk { line: error_line(input) }));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(error_line(input))));
                 }
 
                 hunk.remove.content.push(line);
@@ -968,7 +997,7 @@ fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
             }
             HunkLineType::Context => {
                 if header.remove_count == 0 || header.add_count == 0 {
-                    return Err(nom::Err::Failure(ParseError::BadLineInHunk { line: error_line(input) }));
+                    return Err(nom::Err::Failure(ParseError::BadLineInHunk(error_line(input))));
                 }
 
                 hunk.add.content.push(line);
@@ -1025,9 +1054,7 @@ fn test_parse_hunk() {
  ccc
 "#;
     assert_parse_error!(parse_hunk, s!(hunk_txt),
-                        ParseError::BadLineInHunk {
-                            line: "".to_string()
-                        });
+                        ParseError::BadLineInHunk(s!(b"")));
 
 
     // Bad line in hunk (nonsense)
@@ -1038,9 +1065,7 @@ fn test_parse_hunk() {
 xxxxx
 "#;
     assert_parse_error!(parse_hunk, s!(hunk_txt),
-                        ParseError::BadLineInHunk {
-                            line: "xxxxx".to_string()
-                        });
+                        ParseError::BadLineInHunk(s!(b"xxxxx")));
 
 
     // Bad line in hunk (unexpected '+', '-' or ' ')
@@ -1051,9 +1076,7 @@ xxxxx
  ddd
 "#;
     assert_parse_error!(parse_hunk, s!(hunk_txt),
-                        ParseError::BadLineInHunk {
-                            line: " ddd".to_string()
-                        });
+                        ParseError::BadLineInHunk(s!(b" ddd")));
 }
 
 // We use hand-written function instead of just `named!` with `many1!` combinator, because `many1!`
@@ -1069,7 +1092,7 @@ fn parse_hunks(mut input: &[u8]) -> IResult<&[u8], HunksVec<&[u8]>, ParseError> 
             Err(nom::Err::Incomplete(_)) => {
                 unreachable!();
             }
-            Err(nom::Err::Error(ParseError::Unknown { .. })) => {
+            Err(nom::Err::Error(ParseError::Unknown( .. ))) => {
                 // TODO: Do anything for the case of not even one hunk?
                 return Ok((input, hunks));
             }
@@ -1284,7 +1307,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
                 // changes permissions... So lets check for that.
                 return if extended_headers {
                     metadata.build_hunkless_filepatch().ok_or(
-                        nom::Err::Failure(ParseError::MissingFilenameForHunk { hunk_line: error_line(input) }))
+                        nom::Err::Failure(ParseError::MissingFilenameForHunk(error_line(input))))
                         .map(|filepatch| (input, (header, filepatch)))
                 } else {
                     Err(nom::Err::Error(ParseError::UnexpectedEndOfFile))
@@ -1342,7 +1365,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
             }
 
             GitMetadata(GitBinaryPatch) => {
-                return Err(nom::Err::Failure(ParseError::UnsupportedMetadata { line: error_line(input) }));
+                return Err(nom::Err::Failure(ParseError::UnsupportedMetadata(error_line(input))));
             }
 
             GitMetadata(_) => {
@@ -1359,7 +1382,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
 
     // We can make our filepatch
     let filepatch = metadata.build_filepatch(hunks).ok_or(
-        nom::Err::Failure(ParseError::MissingFilenameForHunk { hunk_line: error_line(input) })
+        nom::Err::Failure(ParseError::MissingFilenameForHunk(error_line(input)))
     )?;
 
     input = input_;
@@ -1705,9 +1728,7 @@ GIT binary patch
         Err(nom::Err::Error(error)) |
         Err(nom::Err::Failure(error)) => {
             assert_eq!(ParseError::from(error),
-                       ParseError::UnsupportedMetadata {
-                           line: "GIT binary patch".to_string()
-                       });
+                       ParseError::UnsupportedMetadata(s!(b"GIT binary patch")));
         }
 
         _ => {
@@ -1733,9 +1754,9 @@ garbage3
         Err(nom::Err::Failure(error)) |
         Err(nom::Err::Error(error)) => {
             assert_eq!(error,
-                       ParseError::MissingFilenameForHunk {
-                           hunk_line: "@@ -200,3 +210,3 @@ place2".to_string()
-                       });
+                       ParseError::MissingFilenameForHunk(
+                           s!(b"@@ -200,3 +210,3 @@ place2")
+                       ));
         }
 
         _ => {
@@ -1833,7 +1854,9 @@ pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result
             Err(nom::Err::Error(_)) => break,
 
             // Actual error
-            Err(err @ nom::Err::Failure(_)) => { return Err(err.into()); }
+            Err(nom::Err::Failure(err)) => {
+                return Err(failure::Error::from(StaticParseError::from(err)));
+            }
 
             // No way this could happen
             Err(nom::Err::Incomplete(_)) => unreachable!(),
