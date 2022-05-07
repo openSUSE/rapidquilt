@@ -46,29 +46,29 @@ impl<'a> nom::error::ParseError<&'a [u8]> for ParseError<'a> {
 
 #[derive(Debug, Fail)]
 pub enum StaticParseError {
-    #[fail(display = "Unsupported metadata: \"{}\"", line)]
-    UnsupportedMetadata { line: String },
+    #[fail(display = "Unsupported metadata: \"{}\"", 0)]
+    UnsupportedMetadata(String),
 
-    #[fail(display = "Could not figure out the filename for hunk \"{}\"", hunk_line)]
-    MissingFilenameForHunk { hunk_line: String },
+    #[fail(display = "Could not figure out the filename for hunk \"{}\"", 0)]
+    MissingFilenameForHunk(String),
 
     #[fail(display = "Unexpected end of file")]
     UnexpectedEndOfFile,
 
-    #[fail(display = "Unexpected line in the middle of hunk: \"{}\"", line)]
-    BadLineInHunk { line: String },
+    #[fail(display = "Unexpected line in the middle of hunk: \"{}\"", 0)]
+    BadLineInHunk(String),
 
-    #[fail(display = "Number too big: \"{}\"", number_str)]
-    NumberTooBig { number_str: String },
+    #[fail(display = "Number too big: \"{}\"", 0)]
+    NumberTooBig(String),
 
-    #[fail(display = "Invalid mode: \"{}\"", mode_str)]
-    BadMode { mode_str: String },
+    #[fail(display = "Invalid mode: \"{}\"", 0)]
+    BadMode(String),
 
-    #[fail(display = "Invalid escape sequence: \"{}\"", sequence)]
-    BadSequence { sequence: String },
+    #[fail(display = "Invalid escape sequence: \"{}\"", 0)]
+    BadSequence(String),
 
-    #[fail(display = "Unknown parse failure: \"{:?}\" on line \"{}\"", inner, line)]
-    Unknown { line: String, inner: ErrorKind },
+    #[fail(display = "Unknown parse failure: \"{:?}\" on line \"{}\"", 1, 0)]
+    Unknown(String, ErrorKind),
 }
 
 impl<'a> From<ParseError<'a>> for StaticParseError {
@@ -76,27 +76,27 @@ impl<'a> From<ParseError<'a>> for StaticParseError {
         use ParseError::*;
         match err {
             UnsupportedMetadata(line) =>
-                Self::UnsupportedMetadata { line: String::from_utf8_lossy(line).to_string() },
+                Self::UnsupportedMetadata(String::from_utf8_lossy(line).to_string()),
             MissingFilenameForHunk(hunk_line) =>
-                Self::MissingFilenameForHunk { hunk_line: String::from_utf8_lossy(hunk_line).to_string() },
+                Self::MissingFilenameForHunk(String::from_utf8_lossy(hunk_line).to_string()),
 
             UnexpectedEndOfFile =>
                 Self::UnexpectedEndOfFile,
 
             BadLineInHunk(line) =>
-                Self::BadLineInHunk { line: String::from_utf8_lossy(line).to_string() },
+                Self::BadLineInHunk(String::from_utf8_lossy(line).to_string()),
 
             NumberTooBig(number_str) =>
-                Self::NumberTooBig { number_str: String::from_utf8_lossy(number_str).to_string() },
+                Self::NumberTooBig(String::from_utf8_lossy(number_str).to_string()),
 
             BadMode(mode_str) =>
-                Self::BadMode { mode_str: String::from_utf8_lossy(mode_str).to_string() },
+                Self::BadMode(String::from_utf8_lossy(mode_str).to_string()),
 
             BadSequence(sequence) =>
-                Self::BadSequence { sequence: String::from_utf8_lossy(sequence).to_string() },
+                Self::BadSequence(String::from_utf8_lossy(sequence).to_string()),
 
             Unknown(line, inner) =>
-                Self::Unknown { line: String::from_utf8_lossy(line).to_string(), inner },
+                Self::Unknown(String::from_utf8_lossy(line).to_string(), inner),
         }
     }
 }
