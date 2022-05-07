@@ -12,9 +12,9 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_till1, take_while, take_while1},
     character::{is_digit, is_hex_digit, is_oct_digit},
-    combinator::{cond, eof, not, opt, peek, map, success},
+    combinator::{cond, eof, not, opt, map, success},
     error::ErrorKind,
-    sequence::{delimited, pair, preceded, terminated, tuple},
+    sequence::{delimited, pair, preceded, tuple},
     IResult,
 };
 
@@ -876,41 +876,33 @@ enum HunkLineType {
 }
 
 fn parse_hunk_line(input: &[u8]) -> IResult<&[u8], (HunkLineType, &[u8]), ParseError> {
-    if let Ok((input, (line_type, line))) = alt((
-        map(preceded(tag(c!(b'+')),
-                     take_until_newline_incl),
-            |line| (HunkLineType::Add, &line[..])),
-        map(preceded(tag(c!(b'-')),
-                     take_until_newline_incl),
-            |line| (HunkLineType::Remove, &line[..])),
-        map(preceded(tag(c!(b' ')),
-                     take_until_newline_incl),
-            |line| (HunkLineType::Context, &line[..])),
-
+    let (hunk_line_type, (input, line)) = match input.get(0) {
+        Some(b'+') =>
+            (HunkLineType::Add, take_until_newline_incl(&input[1..])?),
+        Some(b'-') =>
+            (HunkLineType::Remove, take_until_newline_incl(&input[1..])?),
+        Some(b' ') =>
+            (HunkLineType::Context, take_until_newline_incl(&input[1..])?),
         // XXX: patch allows context lines starting with TAB character. That TAB is then part of the line.
-        map(preceded(peek(tag(c!(b'\t'))),
-                     take_until_newline_incl),
-            |line| (HunkLineType::Context, &line[..])),
-
+        Some(b'\t') =>
+            (HunkLineType::Context, take_until_newline_incl(input)?),
         // XXX: patch allows completely empty line as an empty context line.
-        map(newline,
-            |line| (HunkLineType::Context, &line[..])),
-    ))(input) {
-        match opt(terminated(tag(c!(NO_NEW_LINE_TAG[0])), take_until_newline_incl))(input) {
-            Ok((input, no_newline_tag)) => {
-                // Was there "No newline..." tag?
-                Ok((input, if no_newline_tag.is_none() {
-                    // There wasn't, return what we have.
-                    (line_type, line)
-                } else {
-                    // There was, remove the newline at the end
-                    (line_type, &line[0..(line.len() - 1)])
-                }))
-            }
-            Err(e) => Err(e),
+        Some(b'\n') =>
+            (HunkLineType::Context, Ok((&input[1..], &input[0..1]))?),
+        Some(_) => {
+            return Err(nom::Err::Failure(ParseError::BadLineInHunk(input)));
         }
-    } else {
-        Err(nom::Err::Failure(ParseError::BadLineInHunk(input)))
+        None => {
+            return Err(nom::Err::Error(ParseError::UnexpectedEndOfFile));
+        }
+    };
+    // Was there "No newline..." tag?
+    match input.get(0) {
+        // There was, remove the newline at the end
+        Some(&c) if c == NO_NEW_LINE_TAG[0] =>
+            Ok((take_until_newline_incl(input)?.0, (hunk_line_type, &line[..line.len() - 1]))),
+        // There wasn't, return what we have.
+        _ => Ok((input, (hunk_line_type, line))),
     }
 }
 
@@ -970,12 +962,7 @@ fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
     let mut there_was_a_non_context_line = false;
 
     while header.add_count > 0 || header.remove_count > 0 {
-        let (input_, (line_type, line)) = match parse_hunk_line(input) {
-            Ok(ok) => ok,
-            Err(err @ nom::Err::Failure(_)) => return Err(err),
-            Err(nom::Err::Incomplete(_)) => unreachable!(),
-            Err(nom::Err::Error(_)) => return Err(nom::Err::Failure(ParseError::UnexpectedEndOfFile)),
-        };
+        let (input_, (line_type, line)) = parse_hunk_line(input)?;
 
         match line_type {
             HunkLineType::Add => {
@@ -1059,7 +1046,7 @@ fn test_parse_hunk() {
  ccc
 "#;
     assert_parse_error!(parse_hunk, s!(hunk_txt),
-                        StaticParseError::BadLineInHunk("".to_string()));
+                        StaticParseError::UnexpectedEndOfFile);
 
 
     // Bad line in hunk (nonsense)
