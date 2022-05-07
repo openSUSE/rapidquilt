@@ -10,9 +10,9 @@ use failure::{Error, Fail};
 
 use nom::{
     branch::alt,
-    bytes::complete::{tag, take, take_till1, take_until, take_while, take_while1},
+    bytes::complete::{tag, take_till1, take_while, take_while1},
     character::{is_digit, is_hex_digit, is_oct_digit},
-    combinator::{cond, eof, not, opt, peek, map, recognize, success},
+    combinator::{cond, eof, not, opt, peek, map, success},
     error::ErrorKind,
     sequence::{delimited, pair, preceded, terminated, tuple},
     IResult,
@@ -171,19 +171,24 @@ fn newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
 }
 
 fn take_until_newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
-    take_until(c!(b'\n'))(input)
+    match memchr::memchr(b'\n', input) {
+        Some(index) => Ok((&input[index..], &input[..index])),
+        None => Err(nom::Err::Error(ParseError::UnexpectedEndOfFile)),
+    }
 }
 
 fn take_until_newline_incl(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
-    recognize(pair(take_until_newline, take(1usize)))(input)
-}
-
-fn maybe_take_until_newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
-    take_while(|c| c!= b'\n')(input)
+    match memchr::memchr(b'\n', input) {
+        Some(index) => Ok((&input[index+1..], &input[..index+1])),
+        None => Err(nom::Err::Error(ParseError::UnexpectedEndOfFile)),
+    }
 }
 
 fn error_line(input: &[u8]) -> &[u8] {
-    maybe_take_until_newline(input).map(|(_,line)| line).unwrap_or(s!(b"?"))
+    match memchr::memchr(b'\n', input) {
+        Some(index) => &input[..index],
+        None => &input[..],
+    }
 }
 
 // Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
@@ -494,16 +499,16 @@ fn parse_metadata_line(input: &[u8]) -> IResult<&[u8], MetadataLine, ParseError>
     alt((
         map(delimited(tag(s!(b"diff --git ")),
                       pair(parse_filename, parse_filename),
-                      pair(take_until_newline, newline)),
+                      take_until_newline_incl),
             |(old_filename, new_filename)| MetadataLine::GitDiffSeparator(old_filename, new_filename)),
 
         map(delimited(tag(s!(b"--- ")),
                       parse_filename,
-                      pair(take_until_newline, newline)),
+                      take_until_newline_incl),
             |filename| MetadataLine::MinusFilename(filename)),
         map(delimited(tag(s!(b"+++ ")),
                       parse_filename,
-                      pair(take_until_newline, newline)),
+                      take_until_newline_incl),
             |filename| MetadataLine::PlusFilename(filename))
     ))(input)
 }
