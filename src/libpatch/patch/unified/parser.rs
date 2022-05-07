@@ -44,7 +44,7 @@ impl<'a> nom::error::ParseError<&'a [u8]> for ParseError<'a> {
     }
 }
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Fail, PartialEq)]
 pub enum StaticParseError {
     #[fail(display = "Unsupported metadata: \"{}\"", 0)]
     UnsupportedMetadata(String),
@@ -125,7 +125,7 @@ macro_rules! assert_parse_error {
             match ret {
                 Err(nom::Err::Error(error)) |
                 Err(nom::Err::Failure(error)) => {
-                    assert_eq!(error, $error);
+                    assert_eq!(StaticParseError::from(error), $error);
                 }
 
                 _ => {
@@ -461,8 +461,8 @@ fn test_parse_mode() {
         ($mode:expr) => {
             let mode = $mode;
             assert_parse_error!(
-                parse_mode, mode,
-                ParseError::BadMode(mode));
+                parse_mode, mode.as_bytes(),
+                StaticParseError::BadMode(mode.to_string()));
         };
     );
 
@@ -474,10 +474,10 @@ fn test_parse_mode() {
     assert_parsed!(parse_mode, b"100755", 0o100755);
     assert_parsed!(parse_mode, b"100644", 0o100644);
 
-    assert_bad_mode!(b"100aaa");
-    assert_bad_mode!(b"1");
-    assert_bad_mode!(b"10000000");
-    assert_bad_mode!(b"1000000000000000000000000000");
+    assert_bad_mode!("100aaa");
+    assert_bad_mode!("1");
+    assert_bad_mode!("10000000");
+    assert_bad_mode!("1000000000000000000000000000");
 }
 
 #[derive(Debug, PartialEq)]
@@ -551,12 +551,12 @@ fn test_parse_sha1() {
     assert_parsed!(parse_sha1, b"123456:other", s!(b"123456"), s!(b":other"));
 
     // Invalid sequences
-    assert_parse_error!(parse_sha1, b"", ParseError::Unknown(
-        s!(b""),
+    assert_parse_error!(parse_sha1, b"", StaticParseError::Unknown(
+        "".to_string(),
         ErrorKind::TakeWhile1
     ));
-    assert_parse_error!(parse_sha1, b"non-hex", ParseError::Unknown(
-        s!(b"non-hex"),
+    assert_parse_error!(parse_sha1, b"non-hex", StaticParseError::Unknown(
+        "non-hex".to_string(),
         ErrorKind::TakeWhile1
     ));
 }
@@ -749,9 +749,9 @@ fn test_parse_number_usize() {
     assert_parsed!(parse_number_usize, b"1", 1);
     assert_parsed!(parse_number_usize, b"123", 123);
 
-    let num = b"123456789012345678901234567890";
-    assert_parse_error!(parse_number_usize, num,
-                        ParseError::NumberTooBig(num));
+    let num = "123456789012345678901234567890";
+    assert_parse_error!(parse_number_usize, num.as_bytes(),
+                        StaticParseError::NumberTooBig(num.to_string()));
 }
 
 // Parses line and count like "3,4" or just "3"
@@ -945,9 +945,9 @@ fn test_parse_hunk_line() {
 
     // Bad line
     assert_parse_error!(parse_hunk_line, b"wtf is this\n",
-                        ParseError::BadLineInHunk(s!(b"wtf is this")));
+                        StaticParseError::BadLineInHunk("wtf is this".to_string()));
     assert_parse_error!(parse_hunk_line, b"wtf",
-                        ParseError::BadLineInHunk(s!(b"wtf")));
+                        StaticParseError::BadLineInHunk("wtf".to_string()));
 }
 
 fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
@@ -1054,7 +1054,7 @@ fn test_parse_hunk() {
  ccc
 "#;
     assert_parse_error!(parse_hunk, s!(hunk_txt),
-                        ParseError::BadLineInHunk(s!(b"")));
+                        StaticParseError::BadLineInHunk("".to_string()));
 
 
     // Bad line in hunk (nonsense)
@@ -1065,7 +1065,7 @@ fn test_parse_hunk() {
 xxxxx
 "#;
     assert_parse_error!(parse_hunk, s!(hunk_txt),
-                        ParseError::BadLineInHunk(s!(b"xxxxx")));
+                        StaticParseError::BadLineInHunk("xxxxx".to_string()));
 
 
     // Bad line in hunk (unexpected '+', '-' or ' ')
@@ -1076,7 +1076,7 @@ xxxxx
  ddd
 "#;
     assert_parse_error!(parse_hunk, s!(hunk_txt),
-                        ParseError::BadLineInHunk(s!(b" ddd")));
+                        StaticParseError::BadLineInHunk(" ddd".to_string()));
 }
 
 // We use hand-written function instead of just `named!` with `many1!` combinator, because `many1!`
@@ -1727,8 +1727,10 @@ GIT binary patch
     match ret {
         Err(nom::Err::Error(error)) |
         Err(nom::Err::Failure(error)) => {
-            assert_eq!(ParseError::from(error),
-                       ParseError::UnsupportedMetadata(s!(b"GIT binary patch")));
+            assert_eq!(StaticParseError::from(error),
+                       StaticParseError::UnsupportedMetadata(
+                           "GIT binary patch".to_string()
+                       ));
         }
 
         _ => {
@@ -1753,9 +1755,9 @@ garbage3
     match ret {
         Err(nom::Err::Failure(error)) |
         Err(nom::Err::Error(error)) => {
-            assert_eq!(error,
-                       ParseError::MissingFilenameForHunk(
-                           s!(b"@@ -200,3 +210,3 @@ place2")
+            assert_eq!(StaticParseError::from(error),
+                       StaticParseError::MissingFilenameForHunk(
+                           "@@ -200,3 +210,3 @@ place2".to_string()
                        ));
         }
 
