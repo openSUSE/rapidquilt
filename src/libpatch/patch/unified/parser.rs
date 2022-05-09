@@ -12,7 +12,7 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_till1, take_while, take_while1},
     character::{is_digit, is_hex_digit, is_oct_digit},
-    combinator::{cond, eof, not, opt, map, success},
+    combinator::{eof, opt, map, success},
     error::ErrorKind,
     sequence::{delimited, pair, preceded, tuple},
     IResult,
@@ -27,6 +27,7 @@ pub enum ParseError<'a> {
     UnsupportedMetadata(&'a [u8]),
     MissingFilenameForHunk(&'a [u8]),
     UnexpectedEndOfFile,
+    BadHunkHeader(&'a [u8]),
     BadLineInHunk(&'a [u8]),
     NumberTooBig(&'a [u8]),
     BadMode(&'a [u8]),
@@ -55,6 +56,9 @@ pub enum StaticParseError {
     #[fail(display = "Unexpected end of file")]
     UnexpectedEndOfFile,
 
+    #[fail(display = "Malformed hunk header: \"{}\"", 0)]
+    BadHunkHeader(String),
+
     #[fail(display = "Unexpected line in the middle of hunk: \"{}\"", 0)]
     BadLineInHunk(String),
 
@@ -82,6 +86,9 @@ impl<'a> From<ParseError<'a>> for StaticParseError {
 
             UnexpectedEndOfFile =>
                 Self::UnexpectedEndOfFile,
+
+            BadHunkHeader(input) =>
+                Self::BadHunkHeader(String::from_utf8_lossy(error_line(input)).to_string()),
 
             BadLineInHunk(input) =>
                 Self::BadLineInHunk(String::from_utf8_lossy(error_line(input)).to_string()),
@@ -827,80 +834,92 @@ struct HunkHeader<'a> {
 }
 
 // Parses the line like "@@ -3,4 +5,6 @@ function\n"
-fn parse_hunk_header(input: &[u8]) -> IResult<&[u8], HunkHeader, ParseError> {
-    map(
-        tuple((
-            preceded(
-                tag(s!(b"@@ -")),
+fn parse_hunk_header(input: &[u8]) -> IResult<&[u8], Option<HunkHeader>, ParseError> {
+    if let Some(input_) = input.strip_prefix(b"@@ -") {
+        map(
+            tuple((
                 parse_hunk_line_and_count,
-            ),
 
-            preceded(
-                tag(s!(b" +")),
-                parse_hunk_line_and_count,
-            ),
+                preceded(
+                    tag(s!(b" +")),
+                    parse_hunk_line_and_count,
+                ),
 
-            delimited(
-                tuple((
-                    tag(s!(b" @")),
-                    // The second "@" is optional. At least that's what patch accepts.
-                    opt(tag(c!(b'@'))),
-                    opt(tag(c!(b' '))),
-                )),
-                take_until_newline,
-                newline,
-            )
-        )),
-        |(remove_line_and_count, add_line_and_count, function)|
-        HunkHeader {
-            add_line: add_line_and_count.0,
-            add_count: add_line_and_count.1,
-            remove_line: remove_line_and_count.0,
-            remove_count: remove_line_and_count.1,
+                delimited(
+                    tuple((
+                        tag(s!(b" @")),
+                        // The second "@" is optional. At least that's what patch accepts.
+                        opt(tag(c!(b'@'))),
+                        opt(tag(c!(b' '))),
+                    )),
+                    take_until_newline,
+                    newline,
+                )
+            )),
+            |(remove_line_and_count, add_line_and_count, function)|
+            Some(HunkHeader {
+                add_line: add_line_and_count.0,
+                add_count: add_line_and_count.1,
+                remove_line: remove_line_and_count.0,
+                remove_count: remove_line_and_count.1,
 
-            function: &function
-        }
-    )(input)
+                function: &function
+            })
+        )(input_).map_err(
+            |_| nom::Err::Failure(ParseError::BadHunkHeader(input))
+        )
+    } else {
+        Ok((input, None))
+    }
 }
 
 #[cfg(test)]
 #[test]
 fn test_parse_hunk_header() {
-    let h1 = HunkHeader {
+    let h1 = Some(HunkHeader {
         add_line: 3,
         add_count: 4,
         remove_line: 1,
         remove_count: 2,
 
         function: &b""[..],
-    };
+    });
 
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@\n", h1);
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @\n", h1);
 
-    let h2 = HunkHeader {
+    let h2 = Some(HunkHeader {
         add_line: 6,
         add_count: 1,
         remove_line: 5,
         remove_count: 1,
 
         function: &b""[..],
-    };
+    });
 
     assert_parsed!(parse_hunk_header, b"@@ -5 +6 @@\n", h2);
     assert_parsed!(parse_hunk_header, b"@@ -5 +6 @\n", h2);
 
-    let h3 = HunkHeader {
+    let h3 = Some(HunkHeader {
         add_line: 3,
         add_count: 4,
         remove_line: 1,
         remove_count: 2,
 
         function: s!(b"function name"),
-    };
+    });
 
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@ function name\n", h3);
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @ function name\n", h3);
+
+    assert_parsed!(parse_hunk_header, b"", None);
+
+    let line = b"some garbage";
+    assert_parsed!(parse_hunk_header, line, None, line);
+
+    let line = "@@ - invalid";
+    assert_parse_error!(parse_hunk_header, line.as_bytes(),
+                        StaticParseError::BadHunkHeader(line.to_string()));
 }
 
 #[derive(Debug, PartialEq)]
@@ -983,9 +1002,9 @@ fn test_parse_hunk_line() {
 }
 
 fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], Option<TextHunk<'a>>, ParseError> {
-    let (mut input, mut header) = match parse_hunk_header(input) {
-        Ok(result) => result,
-        Err(_) => {
+    let (mut input, mut header) = match parse_hunk_header(input)? {
+        (input, Some(header)) => (input, header),
+        (_, None) => {
             return Ok((input, None));
         }
     };
@@ -1304,8 +1323,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
     let mut metadata = FilePatchMetadata::default();
 
     // First we read metadata lines or garbage and wait until we find a first hunk.
-    while cond(metadata.have_filename(),
-               not(parse_hunk_header))(input).is_ok() {
+    while !metadata.have_filename() || parse_hunk_header(input)?.1.is_none() {
         let (input_, patch_line) = match state {
             MetadataState::Normal => parse_patch_line(input)?,
             MetadataState::GitDiff => parse_git_patch_line(input)?,
