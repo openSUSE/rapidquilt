@@ -148,8 +148,8 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, &'a [u8]>,
                 }
             }
 
-            if let (Some(old_sha1), Some(new_sha1)) = (filepatch.old_sha1(), filepatch.new_sha1()) {
-                writeln!(writer, "index {}..{}", String::from_utf8_lossy(old_sha1), String::from_utf8_lossy(new_sha1))?;
+            if let (Some(old_hash), Some(new_hash)) = (filepatch.old_hash(), filepatch.new_hash()) {
+                writeln!(writer, "index {}..{}", String::from_utf8_lossy(old_hash), String::from_utf8_lossy(new_hash))?;
             }
         }
         #[cfg(not(unix))]

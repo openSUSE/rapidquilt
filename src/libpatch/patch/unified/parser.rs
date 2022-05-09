@@ -552,38 +552,47 @@ fn test_parse_metadata_line() {
 
 }
 
-fn parse_sha1(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
+/// Parses a git object hash.
+///
+/// Git diff produces an abbreviated OID (max 40 lowercase hex digits).
+/// Git apply acccepts uppercase, but rejects hashes longer than 40 digits.
+/// GNU patch does not check hash length, but rejects uppercase hex.
+///
+/// This function permits both uppercase and long hashes.
+/// Rationale: If git switches to a different hash algorithm, there is
+/// some chance that our code will not have to change.
+fn parse_git_hash(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
     preceded(take_while(is_space),
              take_while1(is_hex_digit))(input)
 }
 
 #[cfg(test)]
 #[test]
-fn test_parse_sha1() {
+fn test_parse_git_hash() {
     // A shortened SHA1
-    let sha1 = b"3505ee3";
-    assert_parsed!(parse_sha1, sha1, s!(sha1));
+    let hash = b"3505ee3";
+    assert_parsed!(parse_git_hash, hash, s!(hash));
 
     // A full SHA1 (of an empty file)
-    let sha1 = b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
-    assert_parsed!(parse_sha1, sha1, s!(sha1));
+    let hash = b"e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
+    assert_parsed!(parse_git_hash, hash, s!(hash));
 
     // An oversized SHA1 (GNU patch does not check maximum length)
-    let sha1 = b"0123456789abcdef0123456789abcdef0123456789abcdef";
-    assert_parsed!(parse_sha1, sha1, s!(sha1));
+    let hash = b"0123456789abcdef0123456789abcdef0123456789abcdef";
+    assert_parsed!(parse_git_hash, hash, s!(hash));
 
     // An SHA1 preceded by whitespace
-    assert_parsed!(parse_sha1, b" \t 123456", s!(b"123456"));
+    assert_parsed!(parse_git_hash, b" \t 123456", s!(b"123456"));
 
-    // An SHA1 terminated by a non-hex character
-    assert_parsed!(parse_sha1, b"123456:other", s!(b"123456"), s!(b":other"));
+    // An HASH terminated by a non-hex character
+    assert_parsed!(parse_git_hash, b"123456:other", s!(b"123456"), s!(b":other"));
 
     // Invalid sequences
-    assert_parse_error!(parse_sha1, b"", StaticParseError::Unknown(
+    assert_parse_error!(parse_git_hash, b"", StaticParseError::Unknown(
         "".to_string(),
         ErrorKind::TakeWhile1
     ));
-    assert_parse_error!(parse_sha1, b"non-hex", StaticParseError::Unknown(
+    assert_parse_error!(parse_git_hash, b"non-hex", StaticParseError::Unknown(
         "non-hex".to_string(),
         ErrorKind::TakeWhile1
     ));
@@ -611,12 +620,12 @@ fn parse_git_metadata_line(input: &[u8]) -> IResult<&[u8], GitMetadataLine, Pars
     alt((
         map(delimited(tag(s!(b"index ")),
                       tuple((
-                          parse_sha1,
-                          preceded(tag(s!(b"..")), parse_sha1),
+                          parse_git_hash,
+                          preceded(tag(s!(b"..")), parse_git_hash),
                           opt(parse_mode),
                       )),
                       newline),
-            |(old_sha1, new_sha1, mode)| GitMetadataLine::Index(old_sha1, new_sha1, mode)),
+            |(old_hash, new_hash, mode)| GitMetadataLine::Index(old_hash, new_hash, mode)),
 
         // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
         map(delimited(tag(s!(b"rename from ")),
@@ -1154,8 +1163,8 @@ struct FilePatchMetadata<'a> {
     rename_to: bool,
     old_permissions: Option<Permissions>,
     new_permissions: Option<Permissions>,
-    old_sha1: Option<&'a [u8]>,
-    new_sha1: Option<&'a [u8]>,
+    old_hash: Option<&'a [u8]>,
+    new_hash: Option<&'a [u8]>,
 }
 
 impl<'a> FilePatchMetadata<'a> {
@@ -1238,9 +1247,9 @@ impl<'a> FilePatchMetadata<'a> {
             .old_permissions(self.old_permissions)
             .new_permissions(self.new_permissions)
 
-            // Set SHA1
-            .old_sha1(self.old_sha1)
-            .new_sha1(self.new_sha1)
+            // Set file hashes
+            .old_hash(self.old_hash)
+            .new_hash(self.new_hash)
 
             // Set the hunks
             .hunks(hunks);
@@ -1358,9 +1367,9 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
                 metadata.old_filename = Some(filename);
             }
 
-            GitMetadata(Index(old_sha1, new_sha1, _)) => {
-                metadata.old_sha1 = Some(old_sha1);
-                metadata.new_sha1 = Some(new_sha1);
+            GitMetadata(Index(old_hash, new_hash, _)) => {
+                metadata.old_hash = Some(old_hash);
+                metadata.new_hash = Some(new_hash);
             }
 
             GitMetadata(RenameFrom) => {
