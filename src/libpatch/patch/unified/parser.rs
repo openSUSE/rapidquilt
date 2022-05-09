@@ -562,8 +562,7 @@ fn test_parse_metadata_line() {
 /// Rationale: If git switches to a different hash algorithm, there is
 /// some chance that our code will not have to change.
 fn parse_git_hash(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
-    preceded(take_while(is_space),
-             take_while1(is_hex_digit))(input)
+    take_while1(is_hex_digit)(input)
 }
 
 #[cfg(test)]
@@ -581,9 +580,6 @@ fn test_parse_git_hash() {
     let hash = b"0123456789abcdef0123456789abcdef0123456789abcdef";
     assert_parsed!(parse_git_hash, hash, s!(hash));
 
-    // An SHA1 preceded by whitespace
-    assert_parsed!(parse_git_hash, b" \t 123456", s!(b"123456"));
-
     // An HASH terminated by a non-hex character
     assert_parsed!(parse_git_hash, b"123456:other", s!(b"123456"), s!(b":other"));
 
@@ -592,6 +588,11 @@ fn test_parse_git_hash() {
         "".to_string(),
         ErrorKind::TakeWhile1
     ));
+
+    let hash = " \t 123456";
+    assert_parse_error!(parse_git_hash, hash.as_bytes(), StaticParseError::Unknown(
+        hash.to_string(), ErrorKind::TakeWhile1));
+
     assert_parse_error!(parse_git_hash, b"non-hex", StaticParseError::Unknown(
         "non-hex".to_string(),
         ErrorKind::TakeWhile1
