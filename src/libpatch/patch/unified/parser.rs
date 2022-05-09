@@ -160,9 +160,11 @@ fn is_space(c: u8) -> bool {
 
 fn is_whitespace(c: u8) -> bool {
     c == b' ' ||
+    c == 0xc ||
     c == b'\n' ||
     c == b'\r' ||
-    c == b'\t'
+    c == b'\t' ||
+    c == 0xb
 }
 
 // nom::character::complete::newline is for characters, we need &[u8]
