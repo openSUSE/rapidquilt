@@ -833,44 +833,42 @@ struct HunkHeader<'a> {
     pub function: &'a [u8],
 }
 
-// Parses the line like "@@ -3,4 +5,6 @@ function\n"
+/// Parses a line like "@@ -3,4 +5,6 @@ function\n"
 fn parse_hunk_header(input: &[u8]) -> IResult<&[u8], Option<HunkHeader>, ParseError> {
     if let Some(input_) = input.strip_prefix(b"@@ -") {
-        map(
-            tuple((
-                parse_hunk_line_and_count,
-
-                preceded(
-                    tag(s!(b" +")),
-                    parse_hunk_line_and_count,
-                ),
-
-                delimited(
-                    tuple((
-                        tag(s!(b" @")),
-                        // The second "@" is optional. At least that's what patch accepts.
-                        opt(tag(c!(b'@'))),
-                        opt(tag(c!(b' '))),
-                    )),
-                    take_until_newline,
-                    newline,
-                )
-            )),
-            |(remove_line_and_count, add_line_and_count, function)|
-            Some(HunkHeader {
-                add_line: add_line_and_count.0,
-                add_count: add_line_and_count.1,
-                remove_line: remove_line_and_count.0,
-                remove_count: remove_line_and_count.1,
-
-                function: &function
-            })
-        )(input_).map_err(
-            |_| nom::Err::Failure(ParseError::BadHunkHeader(input))
-        )
+        parse_hunk_header_tail(input_)
+            .ok_or_else(|| nom::Err::Failure(ParseError::BadHunkHeader(input)))
+            .map(|(remain, header)| (remain, Some(header)))
     } else {
         Ok((input, None))
     }
+}
+
+/// Parses the hunk header after the "@@ -" marker
+fn parse_hunk_header_tail(mut input: &[u8]) -> Option<(&[u8], HunkHeader)> {
+    let (add_line, add_count, remove_line, remove_count, function);
+
+    (input, (remove_line, remove_count)) = parse_hunk_line_and_count(input).ok()?;
+    input = input.strip_prefix(b" +")?;
+    (input, (add_line, add_count)) = parse_hunk_line_and_count(input).ok()?;
+    input = input.strip_prefix(b" @")?;
+
+    // Parse function if it is separated by " @@ "
+    if let Some(input_) = input.strip_prefix(b"@ ") {
+        (input, function) = take_until_newline(input_).ok()?;
+        (input, _) = newline(input).ok()?;
+    } else {
+        function = b"";
+        (input, _) = take_until_newline_incl(input).ok()?;
+    }
+
+    Some((input,
+          HunkHeader {
+              add_line, add_count,
+              remove_line, remove_count,
+              function
+          }
+    ))
 }
 
 #[cfg(test)]
@@ -908,9 +906,19 @@ fn test_parse_hunk_header() {
 
         function: s!(b"function name"),
     });
-
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@ function name\n", h3);
-    assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @ function name\n", h3);
+
+    let h4 = Some(HunkHeader {
+        add_line: 3,
+        add_count: 4,
+        remove_line: 1,
+        remove_count: 2,
+
+        function: s!(b""),
+    });
+    assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@function name\n", h4);
+    assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @function name\n", h4);
+    assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @ function name\n", h4);
 
     assert_parsed!(parse_hunk_header, b"", None);
 
