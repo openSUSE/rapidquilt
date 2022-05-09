@@ -39,3 +39,12 @@ More garbage in between.
 Garbage at the end of file.
 asdfasdf
 asdfsadfsadf
+@@ -13,7 +13,7 @@ this is not a hunk header
+ jjj4
+ kkk4
+ lll4
+-mmm4
++nnn4
+ ooo4
+ ppp4
+ qqq4
