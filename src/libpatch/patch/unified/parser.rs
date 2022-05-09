@@ -982,8 +982,13 @@ fn test_parse_hunk_line() {
                         StaticParseError::BadLineInHunk("wtf".to_string()));
 }
 
-fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
-    let (mut input, mut header) = parse_hunk_header(input)?;
+fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], Option<TextHunk<'a>>, ParseError> {
+    let (mut input, mut header) = match parse_hunk_header(input) {
+        Ok(result) => result,
+        Err(_) => {
+            return Ok((input, None));
+        }
+    };
 
     let mut hunk = Hunk::new(
         std::cmp::max(header.remove_line as isize - 1, 0),
@@ -1043,7 +1048,7 @@ fn parse_hunk<'a>(input: &'a [u8]) -> IResult<&[u8], TextHunk<'a>, ParseError> {
         input = input_;
     }
 
-    Ok((input, hunk))
+    Ok((input, Some(hunk)))
 }
 
 #[cfg(test)]
@@ -1061,7 +1066,7 @@ fn test_parse_hunk() {
  hhh
 "#;
 
-    let h = parse_hunk(hunk_txt).unwrap().1;
+    let h = parse_hunk(hunk_txt).unwrap().1.unwrap();
     assert_eq!(h.remove.target_line, 99);
     assert_eq!(h.add.target_line, 109);
 
@@ -1111,21 +1116,14 @@ xxxxx
 fn parse_hunks(mut input: &[u8]) -> IResult<&[u8], HunksVec<&[u8]>, ParseError> {
     let mut hunks = HunksVec::<&[u8]>::new();
     loop {
-        match parse_hunk(input) {
-            Ok((input_, hunk)) => {
+        match parse_hunk(input)? {
+            (input_, Some(hunk)) => {
                 hunks.push(hunk);
                 input = input_;
             }
-            Err(nom::Err::Incomplete(_)) => {
-                unreachable!();
-            }
-            Err(nom::Err::Error(ParseError::Unknown( .. ))) => {
+            (_, None) => {
                 // TODO: Do anything for the case of not even one hunk?
                 return Ok((input, hunks));
-            }
-            Err(err @ nom::Err::Failure(_)) |
-            Err(err @ nom::Err::Error(_)) => {
-                return Err(err);
             }
         }
     }
