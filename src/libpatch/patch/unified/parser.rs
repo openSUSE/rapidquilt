@@ -270,7 +270,10 @@ fn test_parse_oct3() {
 /// Parses a C-style string. The implementation very closely mimics the
 /// GNU patch function of the same name.
 fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
-    let mut index = 0;
+    if input.first() != Some(&b'\"') {
+        return Err(nom::error::ParseError::from_error_kind(input, ErrorKind::Tag));
+    }
+    let mut index = 1;
     let mut res = Vec::new();
     while let Some(&c) = input.get(index) {
         match c {
@@ -300,12 +303,13 @@ fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
                 };
                 res.push(c);
             }
-            b'\"' | b'\n' => return Ok((&input[index..], res)),
+            b'\"' => return Ok((&input[index+1..], res)),
+            b'\n' => return Err(nom::error::ParseError::from_error_kind(input, ErrorKind::Tag)),
             other => res.push(other),
         }
         index += 1;
     }
-    Ok((&input[index..], res))
+    Err(nom::error::ParseError::from_error_kind(&input[index..], ErrorKind::Eof))
 }
 
 #[cfg(test)]
@@ -320,41 +324,35 @@ fn test_parse_c_string() {
     }
 
     // Valid escapes
-    assert_parsed!(parse_c_string, b"BEL: \\a", b"BEL: \x07".to_vec());
-    assert_parsed!(parse_c_string, b"BS: \\b", b"BS: \x08".to_vec());
-    assert_parsed!(parse_c_string, b"HT: \\t", b"HT: \x09".to_vec());
-    assert_parsed!(parse_c_string, b"LF: \\n", b"LF: \x0a".to_vec());
-    assert_parsed!(parse_c_string, b"VT: \\v", b"VT: \x0b".to_vec());
-    assert_parsed!(parse_c_string, b"FF: \\f", b"FF: \x0c".to_vec());
-    assert_parsed!(parse_c_string, b"CR: \\r", b"CR: \x0d".to_vec());
-    assert_parsed!(parse_c_string, b"\\\\ (backslash)", b"\\ (backslash)".to_vec());
-    assert_parsed!(parse_c_string, b"\\\" (quote)", b"\" (quote)".to_vec());
+    assert_parsed!(parse_c_string, b"\"BEL: \\a\"", b"BEL: \x07".to_vec());
+    assert_parsed!(parse_c_string, b"\"BS: \\b\"", b"BS: \x08".to_vec());
+    assert_parsed!(parse_c_string, b"\"HT: \\t\"", b"HT: \x09".to_vec());
+    assert_parsed!(parse_c_string, b"\"LF: \\n\"", b"LF: \x0a".to_vec());
+    assert_parsed!(parse_c_string, b"\"VT: \\v\"", b"VT: \x0b".to_vec());
+    assert_parsed!(parse_c_string, b"\"FF: \\f\"", b"FF: \x0c".to_vec());
+    assert_parsed!(parse_c_string, b"\"CR: \\r\"", b"CR: \x0d".to_vec());
+    assert_parsed!(parse_c_string, b"\"\\\\ (backslash)\"", b"\\ (backslash)".to_vec());
+    assert_parsed!(parse_c_string, b"\"\\\" (quote)\"", b"\" (quote)".to_vec());
 
-    assert_parsed!(parse_c_string, b"\\141\\142\\143", b"abc".to_vec());
-    assert_parsed!(parse_c_string, b"\\201", b"\x81".to_vec());
-
-    // The terminating quote should not be consumed
-    assert_parsed!(parse_c_string, b"terminated\"", b"terminated".to_vec(), b"\"");
+    assert_parsed!(parse_c_string, b"\"\\141\\142\\143\"", b"abc".to_vec());
+    assert_parsed!(parse_c_string, b"\"\\201\"", b"\x81".to_vec());
 
     // Invalid escapes
-    assert_bad_sequence!(b"Unknown \\! escape", "\\!");
-    assert_bad_sequence!(b"Unterminated \\", "\\");
-    assert_bad_sequence!(b"One-digit octal: \\1.", "\\1.");
-    assert_bad_sequence!(b"One-digit octal at end: \\1", "\\1");
-    assert_bad_sequence!(b"Two-digit octal: \\12.", "\\12.");
-    assert_bad_sequence!(b"Two-digit octal at end: \\12", "\\12");
-    assert_bad_sequence!(b"Too big octal: \\666.", "\\6");
-}
+    assert_bad_sequence!(b"\"Unknown \\! escape\"", "\\!");
+    assert_bad_sequence!(b"\"Unterminated \\", "\\");
+    assert_bad_sequence!(b"\"One-digit octal: \\1.\"", "\\1.");
+    assert_bad_sequence!(b"\"One-digit octal at end: \\1", "\\1");
+    assert_bad_sequence!(b"\"Two-digit octal: \\12.\"", "\\12.");
+    assert_bad_sequence!(b"\"Two-digit octal at end: \\12", "\\12");
+    assert_bad_sequence!(b"\"Too big octal: \\666.\"", "\\6");
 
-// Parses a quoted filename that may contain escaped characters. Returns owned buffer with the
-// unescaped filename.
-// Similar to `parse_c_string` function in patch.
-fn parse_filename_quoted(input: &[u8]) -> IResult<&[u8], Vec<u8>, ParseError> {
-    delimited(
-        tag(b"\""),
-        |input| parse_c_string(input).map_err(|error| nom::Err::Error(error)),
-        tag(b"\"")
-    )(input)
+    // Unterminated strings
+    let text = b"\"Sudden newline\n";
+    assert_eq!(parse_c_string(text),
+               Err(ParseError::Unknown(text, ErrorKind::Tag)));
+
+    assert_eq!(parse_c_string(b"\"End of file"),
+               Err(ParseError::Unknown(b"", ErrorKind::Eof)));
 }
 
 #[derive(Debug, PartialEq)]
@@ -377,7 +375,8 @@ fn parse_filename(input: &[u8]) -> IResult<&[u8], Filename, ParseError> {
         alt((
             // First attempt to parse it as quoted filename. This will reject it quickly if it does
             // not start with '"' character
-            map(parse_filename_quoted, |filename_vec| {
+            map(|input| parse_c_string(input).map_err(|error| nom::Err::Error(error)),
+                |filename_vec| {
                 if &filename_vec[..] == NULL_FILENAME {
                     Filename::DevNull
                 } else {
