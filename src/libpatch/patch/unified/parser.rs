@@ -466,6 +466,11 @@ fn test_parse_filename() {
 
     assert_path!(b"\"aa\\142aa\"", "aabaa");
 
+    // Invalid quoted filenames
+    assert_path!(b"\"Unterminated quotes", "\"Unterminated", b" quotes");
+    assert_path!(b"\"Sudden newline\n", "\"Sudden", b" newline\n");
+    assert_path!(b"\"\\999 (quoted)\"", "\"\\999", b" (quoted)\"");
+
     assert_parsed!(parse_filename, b"/dev/null", Filename::DevNull);
     assert_parsed!(parse_filename, b"\"/dev/null\"", Filename::DevNull);
 }
