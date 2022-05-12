@@ -197,14 +197,17 @@ fn newline(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
     }
 }
 
-fn take_until_newline(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
+/// Takes a line from input. The newline byte is skipped but is not part
+/// of the parsed line.
+fn take_line_skip(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
     match memchr::memchr(b'\n', input) {
-        Some(index) => Ok((&input[index..], &input[..index])),
+        Some(index) => Ok((&input[index+1..], &input[..index])),
         None => Err(ErrorBuilder::UnexpectedEndOfFile),
     }
 }
 
-fn take_until_newline_incl(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
+/// Takes a line from input including the newline byte.
+fn take_line_incl(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
     match memchr::memchr(b'\n', input) {
         Some(index) => Ok((&input[index+1..], &input[..index+1])),
         None => Err(ErrorBuilder::UnexpectedEndOfFile),
@@ -592,15 +595,15 @@ fn parse_metadata_line(input: &[u8]) -> Result<(&[u8], MetadataLine), ErrorBuild
     if let Some(input) = input.strip_prefix(b"diff --git ") {
         let (input, old_filename) = parse_filename(input)?;
         let (input, new_filename) = parse_filename(input)?;
-        let (input, _) = take_until_newline_incl(input)?;
+        let (input, _) = take_line_incl(input)?;
         Ok((input, MetadataLine::GitDiffSeparator(old_filename, new_filename)))
     } else if let Some(input) = input.strip_prefix(b"--- ") {
         let (input, filename) = parse_filename(input)?;
-        let (input, _) = take_until_newline_incl(input)?;
+        let (input, _) = take_line_incl(input)?;
         Ok((input, MetadataLine::MinusFilename(filename)))
     } else if let Some(input) = input.strip_prefix(b"+++ ") {
         let (input, filename) = parse_filename(input)?;
-        let (input, _) = take_until_newline_incl(input)?;
+        let (input, _) = take_line_incl(input)?;
         Ok((input, MetadataLine::PlusFilename(filename)))
     } else {
         Err(ErrorBuilder::NoMatch)
@@ -700,24 +703,19 @@ fn parse_git_metadata_line(input: &[u8]) -> Result<(&[u8], GitMetadataLine), Err
         Ok((input, GitMetadataLine::Index(old_hash, new_hash, mode)))
     } else if let Some(input) = input.strip_prefix(b"rename from ") {
         // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
-        let (input, _) = take_until_newline(input)?;
-        let (input, _) = newline(input)?;
+        let (input, _) = take_line_skip(input)?;
         Ok((input, GitMetadataLine::RenameFrom))
     } else if let Some(input) = input.strip_prefix(b"rename to ") {
-        let (input, _) = take_until_newline(input)?;
-        let (input, _) = newline(input)?;
+        let (input, _) = take_line_skip(input)?;
         Ok((input, GitMetadataLine::RenameTo))
     } else if let Some(input) = input.strip_prefix(b"copy from ") {
-        let (input, _) = take_until_newline(input)?;
-        let (input, _) = newline(input)?;
+        let (input, _) = take_line_skip(input)?;
         Ok((input, GitMetadataLine::CopyFrom))
     } else if let Some(input) = input.strip_prefix(b"copy to ") {
-        let (input, _) = take_until_newline(input)?;
-        let (input, _) = newline(input)?;
+        let (input, _) = take_line_skip(input)?;
         Ok((input, GitMetadataLine::CopyTo))
     } else if let Some(input) = input.strip_prefix(b"GIT binary patch") {
-        let (input, _) = take_until_newline(input)?;
-        let (input, _) = newline(input)?;
+        let (input, _) = take_line_skip(input)?;
         Ok((input, GitMetadataLine::GitBinaryPatch))
     } else if let Some(input) = input.strip_prefix(b"old mode ") {
         let (input, mode) = parse_mode(input)?;
@@ -773,7 +771,7 @@ enum PatchLine<'a> {
 
 fn parse_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
-        .or_else(|_| map_parsed(take_until_newline_incl(input), PatchLine::Garbage))
+        .or_else(|_| map_parsed(take_line_incl(input), PatchLine::Garbage))
         .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch))
                  .ok_or(ErrorBuilder::UnexpectedEndOfFile))
 }
@@ -807,7 +805,7 @@ fn test_parse_patch_line() {
 fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
         .or_else(|_| map_parsed(parse_git_metadata_line(input), PatchLine::GitMetadata))
-        .or_else(|_| map_parsed(take_until_newline_incl(input), PatchLine::Garbage))
+        .or_else(|_| map_parsed(take_line_incl(input), PatchLine::Garbage))
         .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch))
                  .ok_or(ErrorBuilder::UnexpectedEndOfFile))
 }
@@ -923,11 +921,10 @@ fn parse_hunk_header_tail(mut input: &[u8]) -> Option<(&[u8], HunkHeader)> {
 
     // Parse function if it is separated by " @@ "
     if let Some(input_) = input.strip_prefix(b"@ ") {
-        (input, function) = take_until_newline(input_).ok()?;
-        (input, _) = newline(input).ok()?;
+        (input, function) = take_line_skip(input_).ok()?;
     } else {
         function = b"";
-        (input, _) = take_until_newline_incl(input).ok()?;
+        (input, _) = take_line_incl(input).ok()?;
     }
 
     Some((input,
@@ -1008,14 +1005,14 @@ enum HunkLineType {
 fn parse_hunk_line(input: &[u8]) -> Result<(&[u8], (HunkLineType, &[u8])), ErrorBuilder> {
     let (hunk_line_type, (input, line)) = match input.get(0) {
         Some(b'+') =>
-            (HunkLineType::Add, take_until_newline_incl(&input[1..])?),
+            (HunkLineType::Add, take_line_incl(&input[1..])?),
         Some(b'-') =>
-            (HunkLineType::Remove, take_until_newline_incl(&input[1..])?),
+            (HunkLineType::Remove, take_line_incl(&input[1..])?),
         Some(b' ') =>
-            (HunkLineType::Context, take_until_newline_incl(&input[1..])?),
+            (HunkLineType::Context, take_line_incl(&input[1..])?),
         // XXX: patch allows context lines starting with TAB character. That TAB is then part of the line.
         Some(b'\t') =>
-            (HunkLineType::Context, take_until_newline_incl(input)?),
+            (HunkLineType::Context, take_line_incl(input)?),
         // XXX: patch allows completely empty line as an empty context line.
         Some(b'\n') =>
             (HunkLineType::Context, Ok((&input[1..], &input[0..1]))?),
@@ -1030,7 +1027,7 @@ fn parse_hunk_line(input: &[u8]) -> Result<(&[u8], (HunkLineType, &[u8])), Error
     match input.get(0) {
         // There was, remove the newline at the end
         Some(&c) if c == NO_NEW_LINE_TAG[0] =>
-            Ok((take_until_newline_incl(input)?.0, (hunk_line_type, &line[..line.len() - 1]))),
+            Ok((take_line_incl(input)?.0, (hunk_line_type, &line[..line.len() - 1]))),
         // There wasn't, return what we have.
         _ => Ok((input, (hunk_line_type, line))),
     }
