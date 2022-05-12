@@ -1437,7 +1437,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
                         nom::Err::Failure(ParseError::MissingFilenameForHunk(input)))
                         .map(|filepatch| (input, (header, filepatch)))
                 } else {
-                    Err(nom::Err::Error(ParseError::UnexpectedEndOfFile))
+                    Err(nom::Err::Error(ParseError::NoMatch))
                 };
             }
 
@@ -1980,9 +1980,10 @@ pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result
             Ok(header_and_filepatch) => header_and_filepatch,
 
             // No more filepatches...
-            Err(nom::Err::Error(_)) => break,
+            Err(nom::Err::Error(ParseError::NoMatch)) => break,
 
             // Actual error
+            Err(nom::Err::Error(err)) |
             Err(nom::Err::Failure(err)) => {
                 return Err(failure::Error::from(StaticParseError::from(err)));
             }
