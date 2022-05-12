@@ -208,9 +208,9 @@ fn error_line(input: &[u8]) -> &[u8] {
 
 fn error_word(input: &[u8]) -> &[u8] {
     match input.iter().position(|c|
-                                !(b'0'..b'9').contains(c) &&
-                                !(b'A'..b'Z').contains(c) &&
-                                !(b'a'..b'z').contains(c)) {
+                                !(b'0'..=b'9').contains(c) &&
+                                !(b'A'..=b'Z').contains(c) &&
+                                !(b'a'..=b'z').contains(c)) {
         Some(index) => &input[..index],
         None => &input[..],
     }
@@ -219,10 +219,10 @@ fn error_word(input: &[u8]) -> &[u8] {
 fn error_sequence(input: &[u8]) -> &[u8] {
     let index = match input.get(1) {
         None => 1,
-        Some(c) => if !(b'0'..b'3').contains(c) { 2 } else {
+        Some(c) => if !(b'0'..=b'3').contains(c) { 2 } else {
             match input.get(2) {
                 None => 2,
-                Some(c) => if !(b'0'..b'7').contains(c) { 3 } else { 4 }
+                Some(c) => if !(b'0'..=b'7').contains(c) { 3 } else { 4 }
             }
         }
     };
