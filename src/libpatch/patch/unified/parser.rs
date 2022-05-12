@@ -29,6 +29,38 @@ enum ErrorBuilder<'a> {
     BadHash(&'a [u8]),
 }
 
+fn delimited_error<F>(input: &[u8], delim: F) -> String
+where
+    F: FnMut(&u8) -> bool,
+{
+    let index = input.iter().position(delim).unwrap_or(input.len());
+    String::from_utf8_lossy(&input[..index]).into()
+}
+
+fn error_line(input: &[u8]) -> String {
+    delimited_error(input, |&c| c == b'\n')
+}
+
+fn error_word(input: &[u8]) -> String {
+    delimited_error(input, |c|
+                    !(b'0'..=b'9').contains(c) &&
+                    !(b'A'..=b'Z').contains(c) &&
+                    !(b'a'..=b'z').contains(c))
+}
+
+fn error_sequence(input: &[u8]) -> String {
+    let index = match input.get(1) {
+        None => 1,
+        Some(c) => if !(b'0'..=b'3').contains(c) { 2 } else {
+            match input.get(2) {
+                None => 2,
+                Some(c) => if !(b'0'..=b'7').contains(c) { 3 } else { 4 }
+            }
+        }
+    };
+    String::from_utf8_lossy(input.get(..index).unwrap_or(&input[..])).into()
+}
+
 #[derive(Debug, Fail, PartialEq)]
 pub enum ParseError {
     #[fail(display = "Unsupported metadata: \"{}\"", 0)]
@@ -73,36 +105,37 @@ impl<'a> From<ErrorBuilder<'a>> for ParseError {
                 unreachable!("NoMatch must be handled by the parser itself"),
 
             UnsupportedMetadata(input) =>
-                Self::UnsupportedMetadata(String::from_utf8_lossy(error_line(input)).to_string()),
+                Self::UnsupportedMetadata(error_line(input)),
+
             MissingFilenameForHunk(input) =>
-                Self::MissingFilenameForHunk(String::from_utf8_lossy(error_line(input)).to_string()),
+                Self::MissingFilenameForHunk(error_line(input)),
 
             UnexpectedEndOfLine(input) =>
-                Self::UnexpectedEndOfLine(String::from_utf8_lossy(error_line(input)).to_string()),
+                Self::UnexpectedEndOfLine(error_line(input)),
 
             UnexpectedEndOfFile =>
                 Self::UnexpectedEndOfFile,
 
             BadHunkHeader(input) =>
-                Self::BadHunkHeader(String::from_utf8_lossy(error_line(input)).to_string()),
+                Self::BadHunkHeader(error_line(input)),
 
             BadLineInHunk(input) =>
-                Self::BadLineInHunk(String::from_utf8_lossy(error_line(input)).to_string()),
+                Self::BadLineInHunk(error_line(input)),
 
             NumberTooBig(number_str) =>
                 Self::NumberTooBig(String::from_utf8_lossy(number_str).to_string()),
 
             BadMode(input) =>
-                Self::BadMode(String::from_utf8_lossy(error_word(input)).to_string()),
+                Self::BadMode(error_word(input)),
 
             BadNumber(input) =>
-                Self::BadNumber(String::from_utf8_lossy(error_word(input)).to_string()),
+                Self::BadNumber(error_word(input)),
 
             BadSequence(input) =>
-                Self::BadSequence(String::from_utf8_lossy(error_sequence(input)).to_string()),
+                Self::BadSequence(error_sequence(input)),
 
             BadHash(input) =>
-                Self::BadHash(String::from_utf8_lossy(error_word(input)).to_string()),
+                Self::BadHash(error_word(input)),
         }
     }
 }
@@ -212,36 +245,6 @@ fn take_line_incl(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
         Some(index) => Ok((&input[index+1..], &input[..index+1])),
         None => Err(ErrorBuilder::UnexpectedEndOfFile),
     }
-}
-
-fn error_line(input: &[u8]) -> &[u8] {
-    match memchr::memchr(b'\n', input) {
-        Some(index) => &input[..index],
-        None => &input[..],
-    }
-}
-
-fn error_word(input: &[u8]) -> &[u8] {
-    match input.iter().position(|c|
-                                !(b'0'..=b'9').contains(c) &&
-                                !(b'A'..=b'Z').contains(c) &&
-                                !(b'a'..=b'z').contains(c)) {
-        Some(index) => &input[..index],
-        None => &input[..],
-    }
-}
-
-fn error_sequence(input: &[u8]) -> &[u8] {
-    let index = match input.get(1) {
-        None => 1,
-        Some(c) => if !(b'0'..=b'3').contains(c) { 2 } else {
-            match input.get(2) {
-                None => 2,
-                Some(c) => if !(b'0'..=b'7').contains(c) { 3 } else { 4 }
-            }
-        }
-    };
-    input.get(..index).unwrap_or(&input[..])
 }
 
 fn map_parsed<I, T1, T2, E, F>(parsed: Result<(I, T1), E>, f: F) -> Result<(I, T2), E>
