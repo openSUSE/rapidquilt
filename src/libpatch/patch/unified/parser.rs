@@ -31,16 +31,6 @@ pub enum ParseError<'a> {
     Unknown(&'a [u8], ErrorKind),
 }
 
-impl<'a> nom::error::ParseError<&'a [u8]> for ParseError<'a> {
-    fn from_error_kind(input: &'a [u8], kind: ErrorKind) -> Self {
-        Self::Unknown(input, kind)
-    }
-
-    fn append(_: &[u8], _: ErrorKind, other: Self) -> Self {
-        other
-    }
-}
-
 #[derive(Debug, Fail, PartialEq)]
 pub enum StaticParseError {
     #[fail(display = "Unsupported metadata: \"{}\"", 0)]
@@ -317,7 +307,7 @@ fn test_parse_oct3() {
 /// GNU patch function of the same name.
 fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
     if input.first() != Some(&b'\"') {
-        return Err(nom::error::ParseError::from_error_kind(input, ErrorKind::Tag));
+        return Err(ParseError::Unknown(input, ErrorKind::Tag));
     }
     let mut index = 1;
     let mut res = Vec::new();
@@ -350,12 +340,12 @@ fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
                 res.push(c);
             }
             b'\"' => return Ok((&input[index+1..], res)),
-            b'\n' => return Err(nom::error::ParseError::from_error_kind(input, ErrorKind::Tag)),
+            b'\n' => return Err(ParseError::Unknown(input, ErrorKind::Tag)),
             other => res.push(other),
         }
         index += 1;
     }
-    Err(nom::error::ParseError::from_error_kind(&input[index..], ErrorKind::Eof))
+    Err(ParseError::Unknown(&input[index..], ErrorKind::Eof))
 }
 
 #[cfg(test)]
