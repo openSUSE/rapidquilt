@@ -10,7 +10,6 @@ use std::vec::Vec;
 use failure::{Error, Fail};
 
 use nom::{
-    error::ErrorKind,
     IResult,
 };
 
@@ -23,13 +22,15 @@ pub enum ParseError<'a> {
     NoMatch,
     UnsupportedMetadata(&'a [u8]),
     MissingFilenameForHunk(&'a [u8]),
+    UnexpectedEndOfLine(&'a [u8]),
     UnexpectedEndOfFile,
     BadHunkHeader(&'a [u8]),
     BadLineInHunk(&'a [u8]),
     NumberTooBig(&'a [u8]),
+    BadNumber(&'a [u8]),
     BadMode(&'a [u8]),
     BadSequence(&'a [u8]),
-    Unknown(&'a [u8], ErrorKind),
+    BadHash(&'a [u8]),
 }
 
 #[derive(Debug, Fail, PartialEq)]
@@ -39,6 +40,9 @@ pub enum StaticParseError {
 
     #[fail(display = "Could not figure out the filename for hunk \"{}\"", 0)]
     MissingFilenameForHunk(String),
+
+    #[fail(display = "Unexpected end of line: {}", 0)]
+    UnexpectedEndOfLine(String),
 
     #[fail(display = "Unexpected end of file")]
     UnexpectedEndOfFile,
@@ -52,14 +56,17 @@ pub enum StaticParseError {
     #[fail(display = "Number too big: \"{}\"", 0)]
     NumberTooBig(String),
 
+    #[fail(display = "Invalid number: \"{}\"", 0)]
+    BadNumber(String),
+
     #[fail(display = "Invalid mode: \"{}\"", 0)]
     BadMode(String),
 
     #[fail(display = "Invalid escape sequence: \"{}\"", 0)]
     BadSequence(String),
 
-    #[fail(display = "Unknown parse failure: \"{:?}\" on line \"{}\"", 1, 0)]
-    Unknown(String, ErrorKind),
+    #[fail(display = "Invalid object hash: \"{}\"", 0)]
+    BadHash(String),
 }
 
 impl<'a> From<ParseError<'a>> for StaticParseError {
@@ -73,6 +80,9 @@ impl<'a> From<ParseError<'a>> for StaticParseError {
                 Self::UnsupportedMetadata(String::from_utf8_lossy(error_line(input)).to_string()),
             MissingFilenameForHunk(input) =>
                 Self::MissingFilenameForHunk(String::from_utf8_lossy(error_line(input)).to_string()),
+
+            UnexpectedEndOfLine(input) =>
+                Self::UnexpectedEndOfLine(String::from_utf8_lossy(error_line(input)).to_string()),
 
             UnexpectedEndOfFile =>
                 Self::UnexpectedEndOfFile,
@@ -89,11 +99,14 @@ impl<'a> From<ParseError<'a>> for StaticParseError {
             BadMode(input) =>
                 Self::BadMode(String::from_utf8_lossy(error_word(input)).to_string()),
 
+            BadNumber(input) =>
+                Self::BadNumber(String::from_utf8_lossy(error_word(input)).to_string()),
+
             BadSequence(input) =>
                 Self::BadSequence(String::from_utf8_lossy(error_sequence(input)).to_string()),
 
-            Unknown(input, inner) =>
-                Self::Unknown(String::from_utf8_lossy(error_line(input)).to_string(), inner),
+            BadHash(input) =>
+                Self::BadHash(String::from_utf8_lossy(error_word(input)).to_string()),
         }
     }
 }
@@ -185,7 +198,7 @@ fn newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
     match input.first() {
         Some(&c) if c == b'\n' => Ok((&input[1..], &input[0..1])),
         Some(_) => Err(nom::Err::Error(ParseError::NoMatch)),
-        None => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Eof))),
+        None => Err(nom::Err::Error(ParseError::UnexpectedEndOfFile)),
     }
 }
 
@@ -344,12 +357,12 @@ fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
                 res.push(c);
             }
             b'\"' => return Ok((&input[index+1..], res)),
-            b'\n' => return Err(ParseError::Unknown(input, ErrorKind::Tag)),
+            b'\n' => return Err(ParseError::UnexpectedEndOfLine(input)),
             other => res.push(other),
         }
         index += 1;
     }
-    Err(ParseError::Unknown(&input[index..], ErrorKind::Eof))
+    Err(ParseError::UnexpectedEndOfFile)
 }
 
 #[cfg(test)]
@@ -389,10 +402,10 @@ fn test_parse_c_string() {
     // Unterminated strings
     let text = b"\"Sudden newline\n";
     assert_eq!(parse_c_string(text),
-               Err(ParseError::Unknown(text, ErrorKind::Tag)));
+               Err(ParseError::UnexpectedEndOfLine(text)));
 
     assert_eq!(parse_c_string(b"\"End of file"),
-               Err(ParseError::Unknown(b"", ErrorKind::Eof)));
+               Err(ParseError::UnexpectedEndOfFile));
 
     // Unquoted string
     assert_eq!(parse_c_string(b"no quote at the beginning"),
@@ -627,7 +640,7 @@ fn test_parse_metadata_line() {
 fn parse_git_hash(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
     match split_at_cond(input, |c| !is_hex_digit(c)) {
         (name, _) if name.is_empty()
-            => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::TakeWhile1))),
+            => Err(nom::Err::Error(ParseError::BadHash(input))),
         (name, rest)
             => Ok((rest, name)),
     }
@@ -652,19 +665,14 @@ fn test_parse_git_hash() {
     assert_parsed!(parse_git_hash, b"123456:other", s!(b"123456"), s!(b":other"));
 
     // Invalid sequences
-    assert_parse_error!(parse_git_hash, b"", StaticParseError::Unknown(
-        "".to_string(),
-        ErrorKind::TakeWhile1
-    ));
+    assert_parse_error!(parse_git_hash, b"",
+                        StaticParseError::BadHash("".to_string()));
 
-    let hash = " \t 123456";
-    assert_parse_error!(parse_git_hash, hash.as_bytes(), StaticParseError::Unknown(
-        hash.to_string(), ErrorKind::TakeWhile1));
+    assert_parse_error!(parse_git_hash, b" \t 123456",
+                        StaticParseError::BadHash("".to_string()));
 
-    assert_parse_error!(parse_git_hash, b"non-hex", StaticParseError::Unknown(
-        "non-hex".to_string(),
-        ErrorKind::TakeWhile1
-    ));
+    assert_parse_error!(parse_git_hash, b"non-hex",
+                        StaticParseError::BadHash("non".to_string()));
 }
 
 #[derive(Debug, PartialEq)]
@@ -771,8 +779,8 @@ enum PatchLine<'a> {
 fn parse_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
         .or_else(|_| map_parsed(take_until_newline_incl(input), PatchLine::Garbage))
-        .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch)).ok_or(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Eof))))
-        .or(Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Alt))))
+        .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch))
+                 .ok_or(nom::Err::Error(ParseError::UnexpectedEndOfFile)))
 }
 
 #[cfg(test)]
@@ -805,8 +813,8 @@ fn parse_git_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
         .or_else(|_| map_parsed(parse_git_metadata_line(input), PatchLine::GitMetadata))
         .or_else(|_| map_parsed(take_until_newline_incl(input), PatchLine::Garbage))
-        .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch)).ok_or(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Eof))))
-        .or(Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Alt))))
+        .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch))
+                 .ok_or(nom::Err::Error(ParseError::UnexpectedEndOfFile)))
 }
 
 #[cfg(test)]
@@ -841,10 +849,11 @@ fn parse_number_usize(input: &[u8]) -> IResult<&[u8], usize, ParseError> {
     match usize::from_str(str) {
         Ok(number) => Ok((input_, number)),
         Err(err) => Err(match err.kind() {
-            IntErrorKind::Empty =>
-                nom::Err::Error(ParseError::Unknown(input, ErrorKind::TakeWhile1)),
-            _ =>
+            IntErrorKind::PosOverflow =>
                 nom::Err::Failure(ParseError::NumberTooBig(digits)),
+
+            _ =>
+                nom::Err::Error(ParseError::BadNumber(input)),
         })
     }
 }
@@ -855,6 +864,14 @@ fn test_parse_number_usize() {
     assert_parsed!(parse_number_usize, b"0", 0);
     assert_parsed!(parse_number_usize, b"1", 1);
     assert_parsed!(parse_number_usize, b"123", 123);
+
+    let num = "";
+    assert_parse_error!(parse_number_usize, num.as_bytes(),
+                        StaticParseError::BadNumber(num.to_string()));
+
+    let num = "xyz";
+    assert_parse_error!(parse_number_usize, num.as_bytes(),
+                        StaticParseError::BadNumber(num.to_string()));
 
     let num = "123456789012345678901234567890";
     assert_parse_error!(parse_number_usize, num.as_bytes(),
