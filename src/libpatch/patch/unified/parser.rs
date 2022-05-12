@@ -1020,7 +1020,7 @@ enum HunkLineType {
 }
 
 fn parse_hunk_line(input: &[u8]) -> Result<(&[u8], (HunkLineType, &[u8])), ErrorBuilder> {
-    let (hunk_line_type, (input, line)) = match input.get(0) {
+    let (hunk_line_type, (input, line)) = match input.first() {
         Some(b'+') =>
             (HunkLineType::Add, take_line_incl(&input[1..])?),
         Some(b'-') =>
@@ -1032,16 +1032,14 @@ fn parse_hunk_line(input: &[u8]) -> Result<(&[u8], (HunkLineType, &[u8])), Error
             (HunkLineType::Context, take_line_incl(input)?),
         // XXX: patch allows completely empty line as an empty context line.
         Some(b'\n') =>
-            (HunkLineType::Context, Ok((&input[1..], &input[0..1]))?),
-        Some(_) => {
-            return Err(ErrorBuilder::BadLineInHunk(input));
-        }
-        None => {
-            return Err(ErrorBuilder::UnexpectedEndOfFile);
-        }
+            (HunkLineType::Context, (&input[1..], &input[..1])),
+        Some(_) =>
+            return Err(ErrorBuilder::BadLineInHunk(input)),
+        None =>
+            return Err(ErrorBuilder::UnexpectedEndOfFile),
     };
     // Was there "No newline..." tag?
-    match input.get(0) {
+    match input.first() {
         // There was, remove the newline at the end
         Some(&c) if c == NO_NEW_LINE_TAG[0] =>
             Ok((take_line_incl(input)?.0, (hunk_line_type, &line[..line.len() - 1]))),
@@ -1091,12 +1089,12 @@ fn test_parse_hunk_line() {
                         ParseError::BadLineInHunk("wtf".to_string()));
 }
 
-fn parse_hunk<'a>(input: &'a [u8]) -> Result<(&[u8], Option<TextHunk<'a>>), ErrorBuilder> {
-    let (mut input, mut header) = match parse_hunk_header(input)? {
+fn parse_hunk<'a>(mut input: &'a [u8]) -> Result<(&[u8], Option<TextHunk<'a>>), ErrorBuilder> {
+    let mut header;
+    (input, header) = match parse_hunk_header(input)? {
         (input, Some(header)) => (input, header),
-        (_, None) => {
-            return Ok((input, None));
-        }
+        (_, None) =>
+            return Ok((input, None)),
     };
 
     let mut hunk = Hunk::new(
