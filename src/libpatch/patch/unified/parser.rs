@@ -595,22 +595,32 @@ enum MetadataLine<'a> {
 }
 
 fn parse_metadata_line(input: &[u8]) -> Result<(&[u8], MetadataLine), ErrorBuilder> {
-    if let Some(input) = input.strip_prefix(b"diff --git ") {
-        let (input, old_filename) = parse_filename(input)?;
-        let (input, new_filename) = parse_filename(input)?;
-        let (input, _) = take_line_incl(input)?;
-        Ok((input, MetadataLine::GitDiffSeparator(old_filename, new_filename)))
-    } else if let Some(input) = input.strip_prefix(b"--- ") {
-        let (input, filename) = parse_filename(input)?;
-        let (input, _) = take_line_incl(input)?;
-        Ok((input, MetadataLine::MinusFilename(filename)))
-    } else if let Some(input) = input.strip_prefix(b"+++ ") {
-        let (input, filename) = parse_filename(input)?;
-        let (input, _) = take_line_incl(input)?;
-        Ok((input, MetadataLine::PlusFilename(filename)))
-    } else {
-        Err(ErrorBuilder::NoMatch)
+    match input.first().ok_or(ErrorBuilder::NoMatch)? {
+        b'd' => {
+            if let Some(input) = input.strip_prefix(b"diff --git ") {
+                let (input, old_filename) = parse_filename(input)?;
+                let (input, new_filename) = parse_filename(input)?;
+                let (input, _) = take_line_incl(input)?;
+                return Ok((input, MetadataLine::GitDiffSeparator(old_filename, new_filename)))
+            }
+        }
+        b'-' => {
+            if let Some(input) = input.strip_prefix(b"--- ") {
+                let (input, filename) = parse_filename(input)?;
+                let (input, _) = take_line_incl(input)?;
+                return Ok((input, MetadataLine::MinusFilename(filename)));
+            }
+        }
+        b'+' => {
+            if let Some(input) = input.strip_prefix(b"+++ ") {
+                let (input, filename) = parse_filename(input)?;
+                let (input, _) = take_line_incl(input)?;
+                return Ok((input, MetadataLine::PlusFilename(filename)));
+            }
+        }
+        _ => {}
     }
+    Err(ErrorBuilder::NoMatch)
 }
 
 #[cfg(test)]
@@ -695,50 +705,72 @@ enum GitMetadataLine<'a> {
 }
 
 fn parse_git_metadata_line(input: &[u8]) -> Result<(&[u8], GitMetadataLine), ErrorBuilder> {
-    if let Some(input) = input.strip_prefix(b"index ") {
-        let (input, old_hash) = parse_git_hash(input)?;
-        let input = input.strip_prefix(b"..")
-            .ok_or(ErrorBuilder::NoMatch)?;
-        let (input, new_hash) = parse_git_hash(input)?;
-        let (input, mode) = map_parsed(parse_mode(input), Some)
-            .unwrap_or((input, None));
-        let (input, _) = newline(input)?;
-        Ok((input, GitMetadataLine::Index(old_hash, new_hash, mode)))
-    } else if let Some(input) = input.strip_prefix(b"rename from ") {
-        // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
-        let (input, _) = take_line_skip(input)?;
-        Ok((input, GitMetadataLine::RenameFrom))
-    } else if let Some(input) = input.strip_prefix(b"rename to ") {
-        let (input, _) = take_line_skip(input)?;
-        Ok((input, GitMetadataLine::RenameTo))
-    } else if let Some(input) = input.strip_prefix(b"copy from ") {
-        let (input, _) = take_line_skip(input)?;
-        Ok((input, GitMetadataLine::CopyFrom))
-    } else if let Some(input) = input.strip_prefix(b"copy to ") {
-        let (input, _) = take_line_skip(input)?;
-        Ok((input, GitMetadataLine::CopyTo))
-    } else if let Some(input) = input.strip_prefix(b"GIT binary patch") {
-        let (input, _) = take_line_skip(input)?;
-        Ok((input, GitMetadataLine::GitBinaryPatch))
-    } else if let Some(input) = input.strip_prefix(b"old mode ") {
-        let (input, mode) = parse_mode(input)?;
-        let (input, _) = newline(input)?;
-        Ok((input, GitMetadataLine::OldMode(mode)))
-    } else if let Some(input) = input.strip_prefix(b"new mode ") {
-        let (input, mode) = parse_mode(input)?;
-        let (input, _) = newline(input)?;
-        Ok((input, GitMetadataLine::NewMode(mode)))
-    } else if let Some(input) = input.strip_prefix(b"deleted file mode ") {
-        let (input, mode) = parse_mode(input)?;
-        let (input, _) = newline(input)?;
-        Ok((input, GitMetadataLine::DeletedFileMode(mode)))
-    } else if let Some(input) = input.strip_prefix(b"new file mode ") {
-        let (input, mode) = parse_mode(input)?;
-        let (input, _) = newline(input)?;
-        Ok((input, GitMetadataLine::NewFileMode(mode)))
-    } else {
-        Err(ErrorBuilder::NoMatch)
+    match input.first().ok_or(ErrorBuilder::NoMatch)? {
+        b'i' => {
+            if let Some(input) = input.strip_prefix(b"index ") {
+                let (input, old_hash) = parse_git_hash(input)?;
+                let input = input.strip_prefix(b"..")
+                    .ok_or(ErrorBuilder::NoMatch)?;
+                let (input, new_hash) = parse_git_hash(input)?;
+                let (input, mode) = map_parsed(parse_mode(input), Some)
+                    .unwrap_or((input, None));
+                let (input, _) = newline(input)?;
+                return Ok((input, GitMetadataLine::Index(old_hash, new_hash, mode)));
+            }
+        }
+        b'r' => {
+            if let Some(input) = input.strip_prefix(b"rename from ") {
+                // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
+                let (input, _) = take_line_skip(input)?;
+                return Ok((input, GitMetadataLine::RenameFrom));
+            } else if let Some(input) = input.strip_prefix(b"rename to ") {
+                let (input, _) = take_line_skip(input)?;
+                return Ok((input, GitMetadataLine::RenameTo));
+            }
+        }
+        b'c' => {
+            if let Some(input) = input.strip_prefix(b"copy from ") {
+                let (input, _) = take_line_skip(input)?;
+                return Ok((input, GitMetadataLine::CopyFrom));
+            } else if let Some(input) = input.strip_prefix(b"copy to ") {
+                let (input, _) = take_line_skip(input)?;
+                return Ok((input, GitMetadataLine::CopyTo));
+            }
+        }
+        b'G' => {
+            if let Some(input) = input.strip_prefix(b"GIT binary patch") {
+                let (input, _) = take_line_skip(input)?;
+                return Ok((input, GitMetadataLine::GitBinaryPatch));
+            }
+        }
+        b'o' => {
+            if let Some(input) = input.strip_prefix(b"old mode ") {
+                let (input, mode) = parse_mode(input)?;
+                let (input, _) = newline(input)?;
+                return Ok((input, GitMetadataLine::OldMode(mode)));
+            }
+        }
+        b'n' => {
+            if let Some(input) = input.strip_prefix(b"new mode ") {
+                let (input, mode) = parse_mode(input)?;
+                let (input, _) = newline(input)?;
+                return Ok((input, GitMetadataLine::NewMode(mode)));
+            } else if let Some(input) = input.strip_prefix(b"new file mode ") {
+                let (input, mode) = parse_mode(input)?;
+                let (input, _) = newline(input)?;
+                return Ok((input, GitMetadataLine::NewFileMode(mode)));
+            }
+        }
+        b'd' => {
+            if let Some(input) = input.strip_prefix(b"deleted file mode ") {
+                let (input, mode) = parse_mode(input)?;
+                let (input, _) = newline(input)?;
+                return Ok((input, GitMetadataLine::DeletedFileMode(mode)));
+            }
+        }
+        _ => {}
     }
+    Err(ErrorBuilder::NoMatch)
 }
 
 #[cfg(test)]
