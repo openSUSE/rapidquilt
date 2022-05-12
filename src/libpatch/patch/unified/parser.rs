@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::fs::Permissions;
+use std::num::IntErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::vec::Vec;
@@ -9,12 +10,7 @@ use std::vec::Vec;
 use failure::{Error, Fail};
 
 use nom::{
-    branch::alt,
-    bytes::complete::{tag, take_till1, take_while, take_while1},
-    character::{is_digit, is_hex_digit, is_oct_digit},
-    combinator::{eof, opt, map, success},
     error::ErrorKind,
-    sequence::{delimited, pair, preceded, tuple},
     IResult,
 };
 
@@ -115,7 +111,7 @@ macro_rules! assert_parsed {
     };
     ( $parse_func:ident, $input:expr, $result:expr, $remain:expr ) => {
         {
-            let ret = $parse_func($input);
+            let ret = $parse_func($input.as_ref());
             let remain = ret.as_ref().map(|tuple| tuple.0);
             let result = ret.as_ref().map(|tuple| &tuple.1);
             assert_eq!(result, Ok(&$result), "parse result mismatch");
@@ -155,16 +151,16 @@ macro_rules! assert_lines_eq {
 }
 
 /// Shortcut to make slice from byte string literal
+#[cfg(test)]
 macro_rules! s { ( $byte_string:expr ) => { &$byte_string[..] } }
 
-/// Shortcut to make single-element slice from byte
-macro_rules! c { ( $byte:expr ) => { &[$byte][..] } }
-
+/// Tests if `c` is an ASCII space or TAB.
 fn is_space(c: u8) -> bool {
     c == b' ' ||
     c == b'\t'
 }
 
+/// Tests if `c` is a POSIX white-space character.
 fn is_whitespace(c: u8) -> bool {
     c == b' ' ||
     c == 0xc ||
@@ -174,9 +170,29 @@ fn is_whitespace(c: u8) -> bool {
     c == 0xb
 }
 
-// nom::character::complete::newline is for characters, we need &[u8]
+/// Tests if `c` is an ASCII decimal digit.
+fn is_digit(c: u8) -> bool {
+    c >= b'0' && c <= b'9'
+}
+
+/// Tests if `c` is an ASCII octal digit.
+fn is_oct_digit(c: u8) -> bool {
+    c >= b'0' && c <= b'7'
+}
+
+/// Tests if `c` is an ASCII hexadecimal digit.
+fn is_hex_digit(c: u8) -> bool {
+    (c >= b'0' && c <= b'9') ||
+    (c >= b'a' && c <= b'f') ||
+    (c >= b'A' && c <= b'F')
+}
+
 fn newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
-    tag(c!(b'\n'))(input)
+    match input.first() {
+        Some(&c) if c == b'\n' => Ok((&input[1..], &input[0..1])),
+        Some(_) => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Tag))),
+        None => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Eof))),
+    }
 }
 
 fn take_until_newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
@@ -223,10 +239,40 @@ fn error_sequence(input: &[u8]) -> &[u8] {
     input.get(..index).unwrap_or(&input[..])
 }
 
+fn map_parsed<I, T1, T2, E, F>(parsed: Result<(I, T1), E>, f: F) -> Result<(I, T2), E>
+where
+    F: FnOnce(T1) -> T2,
+{
+    parsed.map(|(remain, value)| (remain, f(value)))
+}
+
+/// Divides a slice into two at first element that matches `pred`.
+///
+/// The first slice will contain the initial part of `input` where `pred`
+/// returns `false`. The second part is the rest of the slice starting
+/// with the first element for which `pred` returns `true`.
+///
+/// If `pred` is `true` for the first element of `input`, the first
+/// slice will be empty, and the second slice is equal to `input`.
+/// If `pred` is `false` for all elements of `input`, the second slice
+/// will be empty, and the first slice is equal to `input`.
+fn split_at_cond<'a, T, P>(input: &'a [T], pred: P) -> (&'a [T], &'a [T])
+where
+    T: Copy,
+    P: Fn(T) -> bool,
+{
+    input.split_at(input.iter().position(|c| pred(*c)).unwrap_or(input.len()))
+}
+
 // Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
 // of the path as-is in the input data.
 fn parse_filename_direct(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
-    take_till1(is_whitespace)(input)
+    match split_at_cond(input, is_whitespace) {
+        (name, _) if name.is_empty()
+            => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::TakeTill1))),
+        (name, rest)
+            => Ok((rest, name)),
+    }
 }
 
 /// Parses an octal triplet. Returns the parsed number as an option
@@ -369,74 +415,71 @@ enum Filename<'a> {
 // Either written directly without any whitespace or inside quotation marks.
 //
 // Similar to `parse_name` function in patch.
-fn parse_filename(input: &[u8]) -> IResult<&[u8], Filename, ParseError> {
-    preceded(
-        take_while(is_space),
-        alt((
-            // First attempt to parse it as quoted filename. This will reject it quickly if it does
-            // not start with '"' character
-            map(|input| parse_c_string(input).map_err(|error| nom::Err::Error(error)),
-                |filename_vec| {
-                if &filename_vec[..] == NULL_FILENAME {
-                    Filename::DevNull
-                } else {
-                    let pathbuf = match () {
-                        #[cfg(unix)]
-                        () => {
-                            // We have owned buffer, so we must turn it into allocated `PathBuf`, but
-                            // no conversion of encoding is necessary on unix systems.
+fn parse_filename(mut input: &[u8]) -> IResult<&[u8], Filename, ParseError> {
+    (_, input) = split_at_cond(input, |c| !is_space(c));
 
-                            use std::ffi::OsString;
-                            use std::os::unix::ffi::OsStringExt;
-                            PathBuf::from(OsString::from_vec(filename_vec))
-                        }
+    // First attempt to parse it as quoted filename. This will reject it
+    // quickly if it does not start with a '"' character.
+    if let Ok((remain, filename_vec)) = parse_c_string(input) {
+        if &filename_vec[..] == NULL_FILENAME {
+            Ok((remain, Filename::DevNull))
+        } else {
+            let pathbuf = match () {
+                #[cfg(unix)]
+                () => {
+                    // We have an owned buffer, which must be turned into
+                    // an allocated `PathBuf`, but no conversion of encoding
+                    // is necessary on unix systems.
 
-                        #[cfg(not(unix))]
-                        () => {
-                            // In non-unix systems, we don't know how is `Path` represented, so we can
-                            // not just take the byte slice and use it as `Path`. For example on Windows
-                            // paths are a form of UTF-16, while the content of patch file has undefined
-                            // encoding and we assume UTF-8. So conversion has to happen.
-
-                            PathBuf::from(String::from_utf8_lossy(bytes).owned())
-                        }
-                    };
-
-                    Filename::Real(Cow::Owned(pathbuf))
+                    use std::ffi::OsString;
+                    use std::os::unix::ffi::OsStringExt;
+                    PathBuf::from(OsString::from_vec(filename_vec))
                 }
-            }),
-            // Then attempt to parse it as direct filename (without quotes, spaces or escapes)
-            map(parse_filename_direct, |filename| {
-                if &filename[..] == NULL_FILENAME {
-                    Filename::DevNull
-                } else {
-                    let path = match () {
-                        #[cfg(unix)]
-                        () => {
-                            // We have a byte slice, which we can wrap into `Path` and use it without
-                            // any heap allocation.
 
-                            use std::ffi::OsStr;
-                            use std::os::unix::ffi::OsStrExt;
-                            Cow::Borrowed(Path::new(OsStr::from_bytes(filename)))
-                        }
+                #[cfg(not(unix))]
+                () => {
+                    // In non-unix systems, we don't know how `Path` is
+                    // represented, so we can not just take the byte slice
+                    // and use it as `Path`. For example on Windows
+                    // paths are a form of UTF-16, while the content of
+                    // patch file has undefined encoding and we assume
+                    // UTF-8. So, conversion must happen.
 
-                        #[cfg(not(unix))]
-                        () => {
-                            // In non-unix systems, we don't know how is `Path` represented, so we can
-                            // not just take the byte slice and use it as `Path`. For example on Windows
-                            // paths are a form of UTF-16, while the content of patch file has undefined
-                            // encoding and we assume UTF-8. So conversion has to happen.
-
-                            Cow::Owned(PathBuf::from(String::from_utf8_lossy(bytes).owned()))
-                        }
-                    };
-
-                    Filename::Real(path)
+                    PathBuf::from(String::from_utf8_lossy(bytes).owned())
                 }
-            }),
-        ))
-    )(input)
+            };
+
+            Ok((remain, Filename::Real(Cow::Owned(pathbuf))))
+        }
+    } else {
+        // Then attempt to parse it as direct filename (without quotes, spaces or escapes)
+        let (remain, filename) = parse_filename_direct(input)?;
+        if &filename[..] == NULL_FILENAME {
+            Ok((remain, Filename::DevNull))
+        } else {
+            let path = match () {
+                #[cfg(unix)]
+                () => {
+                    // We have a byte slice, which can be wraped into
+                    // a `Path` and used without any heap allocation.
+
+                    use std::ffi::OsStr;
+                    use std::os::unix::ffi::OsStrExt;
+                    Cow::Borrowed(Path::new(OsStr::from_bytes(filename)))
+                }
+
+                #[cfg(not(unix))]
+                () => {
+                    // In non-unix systems, conversion must happen.
+                    // See above.
+
+                    Cow::Owned(PathBuf::from(String::from_utf8_lossy(bytes).owned()))
+                }
+            };
+
+            Ok((remain, Filename::Real(path)))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -475,10 +518,13 @@ fn test_parse_filename() {
 }
 
 /// Similar to `fetchmode` function in patch.
-fn parse_mode(input: &[u8]) -> IResult<&[u8], u32, ParseError> {
-    let (input, _) = take_while(is_space)(input)?;
-    let (input_, digits) = take_while1(is_oct_digit)(input)?;
+fn parse_mode(mut input: &[u8]) -> IResult<&[u8], u32, ParseError> {
+    (_, input) = split_at_cond(input, |c| !is_space(c));
+    let (digits, input_) = split_at_cond(input, |c| !is_oct_digit(c));
 
+    if digits.is_empty() {
+        return Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::TakeWhile1)));
+    }
     if digits.len() != 6 { // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
         return Err(nom::Err::Failure(ParseError::BadMode(input)));
     }
@@ -532,21 +578,22 @@ enum MetadataLine<'a> {
 }
 
 fn parse_metadata_line(input: &[u8]) -> IResult<&[u8], MetadataLine, ParseError> {
-    alt((
-        map(delimited(tag(s!(b"diff --git ")),
-                      pair(parse_filename, parse_filename),
-                      take_until_newline_incl),
-            |(old_filename, new_filename)| MetadataLine::GitDiffSeparator(old_filename, new_filename)),
-
-        map(delimited(tag(s!(b"--- ")),
-                      parse_filename,
-                      take_until_newline_incl),
-            |filename| MetadataLine::MinusFilename(filename)),
-        map(delimited(tag(s!(b"+++ ")),
-                      parse_filename,
-                      take_until_newline_incl),
-            |filename| MetadataLine::PlusFilename(filename))
-    ))(input)
+    if let Some(input) = input.strip_prefix(b"diff --git ") {
+        let (input, old_filename) = parse_filename(input)?;
+        let (input, new_filename) = parse_filename(input)?;
+        let (input, _) = take_until_newline_incl(input)?;
+        Ok((input, MetadataLine::GitDiffSeparator(old_filename, new_filename)))
+    } else if let Some(input) = input.strip_prefix(b"--- ") {
+        let (input, filename) = parse_filename(input)?;
+        let (input, _) = take_until_newline_incl(input)?;
+        Ok((input, MetadataLine::MinusFilename(filename)))
+    } else if let Some(input) = input.strip_prefix(b"+++ ") {
+        let (input, filename) = parse_filename(input)?;
+        let (input, _) = take_until_newline_incl(input)?;
+        Ok((input, MetadataLine::PlusFilename(filename)))
+    } else {
+        Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Alt)))
+    }
 }
 
 #[cfg(test)]
@@ -575,7 +622,12 @@ fn test_parse_metadata_line() {
 /// Rationale: If git switches to a different hash algorithm, there is
 /// some chance that our code will not have to change.
 fn parse_git_hash(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
-    take_while1(is_hex_digit)(input)
+    match split_at_cond(input, |c| !is_hex_digit(c)) {
+        (name, _) if name.is_empty()
+            => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::TakeWhile1))),
+        (name, rest)
+            => Ok((rest, name)),
+    }
 }
 
 #[cfg(test)]
@@ -631,57 +683,55 @@ enum GitMetadataLine<'a> {
 }
 
 fn parse_git_metadata_line(input: &[u8]) -> IResult<&[u8], GitMetadataLine, ParseError> {
-    alt((
-        map(delimited(tag(s!(b"index ")),
-                      tuple((
-                          parse_git_hash,
-                          preceded(tag(s!(b"..")), parse_git_hash),
-                          opt(parse_mode),
-                      )),
-                      newline),
-            |(old_hash, new_hash, mode)| GitMetadataLine::Index(old_hash, new_hash, mode)),
-
+    if let Some(input) = input.strip_prefix(b"index ") {
+        let (input, old_hash) = parse_git_hash(input)?;
+        let input = input.strip_prefix(b"..")
+            .ok_or(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Tag)))?;
+        let (input, new_hash) = parse_git_hash(input)?;
+        let (input, mode) = map_parsed(parse_mode(input), Some)
+            .unwrap_or((input, None));
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::Index(old_hash, new_hash, mode)))
+    } else if let Some(input) = input.strip_prefix(b"rename from ") {
         // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
-        map(delimited(tag(s!(b"rename from ")),
-                      take_until_newline,
-                      newline),
-            |_| GitMetadataLine::RenameFrom),
-        map(delimited(tag(s!(b"rename to ")),
-                      take_until_newline,
-                      newline),
-            |_| GitMetadataLine::RenameTo),
-
-        map(delimited(tag(s!(b"copy from ")),
-                      take_until_newline,
-                      newline),
-            |_| GitMetadataLine::CopyFrom),
-        map(delimited(tag(s!(b"copy to ")),
-                      take_until_newline,
-                      newline),
-            |_| GitMetadataLine::CopyTo),
-
-        map(delimited(tag(s!(b"GIT binary patch")),
-                      take_until_newline,
-                      newline),
-            |_| GitMetadataLine::GitBinaryPatch),
-
-        map(delimited(tag(s!(b"old mode ")),
-                      parse_mode,
-                      newline),
-            |mode| GitMetadataLine::OldMode(mode)),
-        map(delimited(tag(s!(b"new mode ")),
-                      parse_mode,
-                      newline),
-            |mode| GitMetadataLine::NewMode(mode)),
-        map(delimited(tag(s!(b"deleted file mode ")),
-                      parse_mode,
-                      newline),
-            |mode| GitMetadataLine::DeletedFileMode(mode)),
-        map(delimited(tag(s!(b"new file mode ")),
-                      parse_mode,
-                      newline),
-            |mode| GitMetadataLine::NewFileMode(mode)),
-    ))(input)
+        let (input, _) = take_until_newline(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::RenameFrom))
+    } else if let Some(input) = input.strip_prefix(b"rename to ") {
+        let (input, _) = take_until_newline(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::RenameTo))
+    } else if let Some(input) = input.strip_prefix(b"copy from ") {
+        let (input, _) = take_until_newline(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::CopyFrom))
+    } else if let Some(input) = input.strip_prefix(b"copy to ") {
+        let (input, _) = take_until_newline(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::CopyTo))
+    } else if let Some(input) = input.strip_prefix(b"GIT binary patch") {
+        let (input, _) = take_until_newline(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::GitBinaryPatch))
+    } else if let Some(input) = input.strip_prefix(b"old mode ") {
+        let (input, mode) = parse_mode(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::OldMode(mode)))
+    } else if let Some(input) = input.strip_prefix(b"new mode ") {
+        let (input, mode) = parse_mode(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::NewMode(mode)))
+    } else if let Some(input) = input.strip_prefix(b"deleted file mode ") {
+        let (input, mode) = parse_mode(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::DeletedFileMode(mode)))
+    } else if let Some(input) = input.strip_prefix(b"new file mode ") {
+        let (input, mode) = parse_mode(input)?;
+        let (input, _) = newline(input)?;
+        Ok((input, GitMetadataLine::NewFileMode(mode)))
+    } else {
+        Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Alt)))
+    }
 }
 
 #[cfg(test)]
@@ -716,11 +766,10 @@ enum PatchLine<'a> {
 }
 
 fn parse_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
-    alt((
-        map(parse_metadata_line, |line| PatchLine::Metadata(line)),
-        map(take_until_newline_incl, |line| PatchLine::Garbage(line)),
-        map(eof, |_| PatchLine::EndOfPatch),
-    ))(input)
+    map_parsed(parse_metadata_line(input), PatchLine::Metadata)
+        .or_else(|_| map_parsed(take_until_newline_incl(input), PatchLine::Garbage))
+        .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch)).ok_or(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Eof))))
+        .or(Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Alt))))
 }
 
 #[cfg(test)]
@@ -750,12 +799,11 @@ fn test_parse_patch_line() {
 }
 
 fn parse_git_patch_line(input: &[u8]) -> IResult<&[u8], PatchLine, ParseError> {
-    alt((
-        map(parse_metadata_line, |line| PatchLine::Metadata(line)),
-        map(parse_git_metadata_line, |line| PatchLine::GitMetadata(line)),
-        map(take_until_newline_incl, |line| PatchLine::Garbage(line)),
-        map(eof, |_| PatchLine::EndOfPatch),
-    ))(input)
+    map_parsed(parse_metadata_line(input), PatchLine::Metadata)
+        .or_else(|_| map_parsed(parse_git_metadata_line(input), PatchLine::GitMetadata))
+        .or_else(|_| map_parsed(take_until_newline_incl(input), PatchLine::Garbage))
+        .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch)).ok_or(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Eof))))
+        .or(Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Alt))))
 }
 
 #[cfg(test)]
@@ -785,11 +833,16 @@ fn test_parse_git_patch_line() {
 }
 
 fn parse_number_usize(input: &[u8]) -> IResult<&[u8], usize, ParseError> {
-    let (input_, digits) = take_while1(is_digit)(input)?;
+    let (digits, input_) = split_at_cond(input, |c| !is_digit(c));
     let str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
     match usize::from_str(str) {
         Ok(number) => Ok((input_, number)),
-        Err(_) => Err(nom::Err::Failure(ParseError::NumberTooBig(digits))),
+        Err(err) => Err(match err.kind() {
+            IntErrorKind::Empty =>
+                nom::Err::Error(ParseError::Unknown(input, ErrorKind::TakeWhile1)),
+            _ =>
+                nom::Err::Failure(ParseError::NumberTooBig(digits)),
+        })
     }
 }
 
@@ -806,17 +859,16 @@ fn test_parse_number_usize() {
 }
 
 // Parses line and count like "3,4" or just "3"
-fn parse_hunk_line_and_count(input: &[u8]) -> IResult<&[u8], (usize, usize), ParseError> {
-    pair(
-        parse_number_usize,
-        alt((
-            preceded(
-                tag(c!(b',')),
-                parse_number_usize
-            ),
-            success(1) // If there is no ",123" part, then the line count is 1.
-        ))
-    )(input)
+fn parse_hunk_line_and_count(mut input: &[u8]) -> IResult<&[u8], (usize, usize), ParseError> {
+    let (line, count);
+    (input, line) = parse_number_usize(input)?;
+    if input.first() == Some(&b',') {
+        (input, count) = parse_number_usize(&input[1..])?;
+    } else {
+        // If there is no ",123" part, then the line count is 1.
+        count = 1;
+    }
+    Ok((input, (line, count)))
 }
 
 #[cfg(test)]
