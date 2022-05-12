@@ -20,6 +20,7 @@ use crate::patch::unified::*;
 
 #[derive(Debug, PartialEq)]
 pub enum ParseError<'a> {
+    NoMatch,
     UnsupportedMetadata(&'a [u8]),
     MissingFilenameForHunk(&'a [u8]),
     UnexpectedEndOfFile,
@@ -65,6 +66,9 @@ impl<'a> From<ParseError<'a>> for StaticParseError {
     fn from(err: ParseError) -> Self {
         use ParseError::*;
         match err {
+            NoMatch =>
+                unreachable!("NoMatch must be handled by the parser itself"),
+
             UnsupportedMetadata(input) =>
                 Self::UnsupportedMetadata(String::from_utf8_lossy(error_line(input)).to_string()),
             MissingFilenameForHunk(input) =>
@@ -180,7 +184,7 @@ fn is_hex_digit(c: u8) -> bool {
 fn newline(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
     match input.first() {
         Some(&c) if c == b'\n' => Ok((&input[1..], &input[0..1])),
-        Some(_) => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Tag))),
+        Some(_) => Err(nom::Err::Error(ParseError::NoMatch)),
         None => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Eof))),
     }
 }
@@ -259,7 +263,7 @@ where
 fn parse_filename_direct(input: &[u8]) -> IResult<&[u8], &[u8], ParseError> {
     match split_at_cond(input, is_whitespace) {
         (name, _) if name.is_empty()
-            => Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::TakeTill1))),
+            => Err(nom::Err::Error(ParseError::NoMatch)),
         (name, rest)
             => Ok((rest, name)),
     }
@@ -307,7 +311,7 @@ fn test_parse_oct3() {
 /// GNU patch function of the same name.
 fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ParseError> {
     if input.first() != Some(&b'\"') {
-        return Err(ParseError::Unknown(input, ErrorKind::Tag));
+        return Err(ParseError::NoMatch);
     }
     let mut index = 1;
     let mut res = Vec::new();
@@ -389,6 +393,10 @@ fn test_parse_c_string() {
 
     assert_eq!(parse_c_string(b"\"End of file"),
                Err(ParseError::Unknown(b"", ErrorKind::Eof)));
+
+    // Unquoted string
+    assert_eq!(parse_c_string(b"no quote at the beginning"),
+               Err(ParseError::NoMatch))
 }
 
 #[derive(Debug, PartialEq)]
@@ -505,6 +513,8 @@ fn test_parse_filename() {
 
     assert_parsed!(parse_filename, b"/dev/null", Filename::DevNull);
     assert_parsed!(parse_filename, b"\"/dev/null\"", Filename::DevNull);
+
+    assert_eq!(parse_filename(b"  \n"), Err(nom::Err::Error(ParseError::NoMatch)));
 }
 
 /// Similar to `fetchmode` function in patch.
@@ -513,7 +523,7 @@ fn parse_mode(mut input: &[u8]) -> IResult<&[u8], u32, ParseError> {
     let (digits, input_) = split_at_cond(input, |c| !is_oct_digit(c));
 
     if digits.is_empty() {
-        return Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::TakeWhile1)));
+        return Err(nom::Err::Error(ParseError::NoMatch));
     }
     if digits.len() != 6 { // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
         return Err(nom::Err::Failure(ParseError::BadMode(input)));
@@ -545,6 +555,9 @@ fn test_parse_mode() {
 
     assert_parsed!(parse_mode, b"100755", 0o100755);
     assert_parsed!(parse_mode, b"100644", 0o100644);
+
+    assert_eq!(parse_mode(b""), Err(nom::Err::Error(ParseError::NoMatch)));
+    assert_eq!(parse_mode(b"x"), Err(nom::Err::Error(ParseError::NoMatch)));
 
     assert_bad_mode!("100aaa");
     assert_bad_mode!("1");
@@ -582,7 +595,7 @@ fn parse_metadata_line(input: &[u8]) -> IResult<&[u8], MetadataLine, ParseError>
         let (input, _) = take_until_newline_incl(input)?;
         Ok((input, MetadataLine::PlusFilename(filename)))
     } else {
-        Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Alt)))
+        Err(nom::Err::Error(ParseError::NoMatch))
     }
 }
 
@@ -676,7 +689,7 @@ fn parse_git_metadata_line(input: &[u8]) -> IResult<&[u8], GitMetadataLine, Pars
     if let Some(input) = input.strip_prefix(b"index ") {
         let (input, old_hash) = parse_git_hash(input)?;
         let input = input.strip_prefix(b"..")
-            .ok_or(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Tag)))?;
+            .ok_or(nom::Err::Error(ParseError::NoMatch))?;
         let (input, new_hash) = parse_git_hash(input)?;
         let (input, mode) = map_parsed(parse_mode(input), Some)
             .unwrap_or((input, None));
@@ -720,7 +733,7 @@ fn parse_git_metadata_line(input: &[u8]) -> IResult<&[u8], GitMetadataLine, Pars
         let (input, _) = newline(input)?;
         Ok((input, GitMetadataLine::NewFileMode(mode)))
     } else {
-        Err(nom::Err::Error(ParseError::Unknown(input, ErrorKind::Alt)))
+        Err(nom::Err::Error(ParseError::NoMatch))
     }
 }
 
