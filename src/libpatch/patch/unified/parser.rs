@@ -762,6 +762,10 @@ fn test_parse_git_metadata_line() {
     assert_parsed!(parse_git_metadata_line, b"copy to blabla\n", CopyTo);
 
     assert_parsed!(parse_git_metadata_line, b"GIT binary patch ???\n", GitBinaryPatch);
+
+    // Random garbage
+    assert_eq!(parse_git_metadata_line(b"Bla ble bli.\n"),
+               Err(ErrorBuilder::NoMatch));
 }
 
 #[derive(Debug, PartialEq)]
@@ -803,6 +807,11 @@ fn test_parse_patch_line() {
     assert_parsed!(parse_patch_line, b"copy from oldname\n", Garbage(b"copy from oldname\n"));
     assert_parsed!(parse_patch_line, b"copy to newname\n", Garbage(b"copy to newname\n"));
     assert_parsed!(parse_patch_line, b"GIT binary patch\n", Garbage(b"GIT binary patch\n"));
+
+    assert_parsed!(parse_patch_line, b"", EndOfPatch);
+
+    assert_parse_error!(parse_patch_line, b"No newline at EOF",
+                        ParseError::UnexpectedEndOfFile);
 }
 
 fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
@@ -837,6 +846,11 @@ fn test_parse_git_patch_line() {
     assert_parsed!(parse_git_patch_line, b"copy from oldname\n", GitMetadata(CopyFrom));
     assert_parsed!(parse_git_patch_line, b"copy to newname\n", GitMetadata(CopyTo));
     assert_parsed!(parse_git_patch_line, b"GIT binary patch\n", GitMetadata(GitBinaryPatch));
+
+    assert_parsed!(parse_git_patch_line, b"", EndOfPatch);
+
+    assert_parse_error!(parse_git_patch_line, b"No newline at EOF",
+                        ParseError::UnexpectedEndOfFile);
 }
 
 fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder> {
