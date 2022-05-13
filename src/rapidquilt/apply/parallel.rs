@@ -59,7 +59,11 @@ use colored::*;
 use failure::{Error, ResultExt};
 use seahash;
 use rayon;
-use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+use rayon::iter::{
+    IntoParallelRefIterator,
+    ParallelDrainRange,
+    ParallelIterator
+};
 
 use crate::apply::*;
 use crate::apply::common::*;
@@ -391,22 +395,18 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     let apply_results_ref = &apply_results;
 
     // Run the applying threads
-    rayon::scope(move |scope| {
-        for thread_file_patches in text_file_patches_per_thread.drain(..) {
-            // Start the thread
-            scope.spawn(move |_| {
-                let result = apply_worker(
-                    config,
-                    arena,
-                    thread_file_patches,
-                    earliest_broken_patch_index,
-                    analyses);
+    text_file_patches_per_thread.par_drain(..).for_each(
+        move |thread_file_patches| {
+            let result = apply_worker(
+                config,
+                arena,
+                thread_file_patches,
+                earliest_broken_patch_index,
+                analyses);
 
-                // NOTE(unwrap): If the lock is poisoned, another thread panicked. We may as well.
-                apply_results_ref.lock().unwrap().push(result);
-            });
-        }
-    });
+            // NOTE(unwrap): If the lock is poisoned, another thread panicked. We may as well.
+            apply_results_ref.lock().unwrap().push(result);
+        });
 
     // NOTE(unwrap): If the lock is poisoned, another thread panicked. We may as well.
     let mut apply_results = apply_results.into_inner().unwrap();
@@ -424,28 +424,27 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     };
 
     // Run the saving threads
-    rayon::scope(move |scope| {
-        for apply_result in apply_results.drain(..) {
+    apply_results.par_drain(..).filter_map(
+        |apply_result| {
             match apply_result {
-                Ok(state) => {
-                    // Start the thread
-                    scope.spawn(move |_| {
-                        let result = save_files_worker(
-                            config,
-                            shared,
-                            state,
-                            final_patch);
-
-                        // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
-                        thread_results_ref.lock().unwrap().push(result);
-                    });
-                },
+                Ok(state) => Some(state),
                 Err(e) => {
+                    // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
                     thread_results_ref.lock().unwrap().push(Err(e));
-                },
-            };
-        }
-    });
+                    None
+                }
+            }
+        }).for_each(
+        move |state| {
+            let result = save_files_worker(
+                config,
+                shared,
+                state,
+                final_patch);
+
+            // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
+            thread_results_ref.lock().unwrap().push(result);
+        });
 
     // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
     let thread_results = thread_results.into_inner().unwrap();
