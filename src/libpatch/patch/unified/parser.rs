@@ -2,7 +2,6 @@
 
 use std::borrow::Cow;
 use std::fs::Permissions;
-use std::num::IntErrorKind;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::vec::Vec;
@@ -887,13 +886,13 @@ fn test_parse_git_patch_line() {
 
 fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder> {
     let (digits, input_) = split_at_cond(input, |c| !is_digit(c));
+    if digits.is_empty() {
+        return Err(ErrorBuilder::BadNumber(input));
+    }
     let str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
     match usize::from_str(str) {
         Ok(number) => Ok((input_, number)),
-        Err(err) => Err(match err.kind() {
-            IntErrorKind::PosOverflow => ErrorBuilder::NumberTooBig(digits),
-            _ => ErrorBuilder::BadNumber(input),
-        })
+        Err(_) => Err(ErrorBuilder::NumberTooBig(digits)),
     }
 }
 
