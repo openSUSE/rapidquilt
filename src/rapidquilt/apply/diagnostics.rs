@@ -16,6 +16,7 @@ use smallvec::{SmallVec, smallvec};
 
 use strsim::levenshtein;
 use colored::*;
+use failure::Error;
 use libpatch::analysis::{AnalysisSet, Note, NoteSeverity, fn_analysis_note_noop};
 use libpatch::modified_file::ModifiedFile;
 
@@ -98,7 +99,7 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
     applied_patches: &Vec<PatchStatus<'arena, '_>>,
     modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>,
     writer: &mut W)
-    -> Result<(), io::Error>
+    -> Result<(), Error>
 {
     for patch_status in applied_patches.iter().rev() {
         if patch_status.index != broken_patch_index {
@@ -239,7 +240,7 @@ pub fn print_difference_to_closest_match<W: Write>(
     modified_file: &ModifiedFile,
     writer: &mut W,
     prefix: &str)
-    -> Result<(), io::Error>
+    -> Result<(), Error>
 {
     // Get a HunkView that will be the same as the one used during patching
     let hunk_view = hunk.view(report.direction(), report.fuzz());
@@ -358,7 +359,7 @@ pub fn print_difference_to_closest_match<W: Write>(
         InHunk,
     }
 
-    let write_line = |writer: &mut W, line_type: WriteLineType, line_str: &str, line_num: Option<isize>| -> Result<(), io::Error> {
+    let write_line = |writer: &mut W, line_type: WriteLineType, line_str: &str, line_num: Option<isize>| -> Result<(), Error> {
         let line_num_str = match line_num {
             Some(line_num) => Cow::Owned(format!("{:5}:", line_num + 1)),
             None                 => Cow::Borrowed("     :"), // 5 characters for number + 1 for ':'
@@ -411,7 +412,7 @@ pub fn print_difference_to_closest_match<W: Write>(
 }
 
 /// This function prints note from libpatch'es analysis
-pub fn print_analysis_note(patch_filename: &Path, note: &dyn Note, file_patch: &TextFilePatch) -> Result<(), io::Error> {
+pub fn print_analysis_note(patch_filename: &Path, note: &dyn Note, file_patch: &TextFilePatch) -> Result<(), Error> {
     let stderr = io::stderr();
     let mut out = stderr.lock();
 
