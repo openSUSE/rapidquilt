@@ -1,5 +1,7 @@
 # Unreleased changes
 
+* Rewrite the parser and improve its performance by approx. 15 %.
+
 # Version 0.6.4
 
 * New command-line option: `--threads`
