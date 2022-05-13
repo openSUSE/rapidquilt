@@ -949,99 +949,92 @@ struct HunkHeader<'a> {
 }
 
 /// Parses a line like "@@ -3,4 +5,6 @@ function\n"
-fn parse_hunk_header(input: &[u8]) -> Result<(&[u8], Option<HunkHeader>), ErrorBuilder> {
-    if let Some(input_) = input.strip_prefix(b"@@ -") {
-        parse_hunk_header_tail(input_)
-            .ok_or_else(|| ErrorBuilder::BadHunkHeader(input))
-            .map(|(remain, header)| (remain, Some(header)))
-    } else {
-        Ok((input, None))
-    }
-}
-
-/// Parses the hunk header after the "@@ -" marker
-fn parse_hunk_header_tail(mut input: &[u8]) -> Option<(&[u8], HunkHeader)> {
+fn parse_hunk_header(mut input: &[u8]) -> Result<(&[u8], HunkHeader), ErrorBuilder> {
     let (add_line, add_count, remove_line, remove_count, function);
 
-    (input, (remove_line, remove_count)) = parse_hunk_line_and_count(input).ok()?;
-    input = input.strip_prefix(b" +")?;
-    (input, (add_line, add_count)) = parse_hunk_line_and_count(input).ok()?;
-    input = input.strip_prefix(b" @")?;
+    input = input.strip_prefix(b"@@ -")
+        .ok_or(ErrorBuilder::NoMatch)?;
+
+    (input, (remove_line, remove_count)) = parse_hunk_line_and_count(input)
+        .map_err(|_| ErrorBuilder::BadHunkHeader(input))?;
+    input = input.strip_prefix(b" +")
+        .ok_or_else(|| ErrorBuilder::BadHunkHeader(input))?;
+    (input, (add_line, add_count)) = parse_hunk_line_and_count(input)
+        .map_err(|_| ErrorBuilder::BadHunkHeader(input))?;
+    input = input.strip_prefix(b" @")
+        .ok_or_else(|| ErrorBuilder::BadHunkHeader(input))?;
 
     // Parse function if it is separated by " @@ "
     if let Some(input_) = input.strip_prefix(b"@ ") {
-        (input, function) = take_line_skip(input_).ok()?;
+        (input, function) = take_line_skip(input_)?;
     } else {
         function = b"";
-        (input, _) = take_line_incl(input).ok()?;
+        (input, _) = take_line_incl(input)?;
     }
 
-    Some((input,
-          HunkHeader {
-              add_line, add_count,
-              remove_line, remove_count,
-              function
-          }
+    Ok((input,
+        HunkHeader {
+            add_line, add_count,
+            remove_line, remove_count,
+            function
+        }
     ))
 }
 
 #[cfg(test)]
 #[test]
 fn test_parse_hunk_header() {
-    let h1 = Some(HunkHeader {
+    let h1 = HunkHeader {
         add_line: 3,
         add_count: 4,
         remove_line: 1,
         remove_count: 2,
 
         function: &b""[..],
-    });
+    };
 
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@\n", h1);
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @\n", h1);
 
-    let h2 = Some(HunkHeader {
+    let h2 = HunkHeader {
         add_line: 6,
         add_count: 1,
         remove_line: 5,
         remove_count: 1,
 
         function: &b""[..],
-    });
+    };
 
     assert_parsed!(parse_hunk_header, b"@@ -5 +6 @@\n", h2);
     assert_parsed!(parse_hunk_header, b"@@ -5 +6 @\n", h2);
 
-    let h3 = Some(HunkHeader {
+    let h3 = HunkHeader {
         add_line: 3,
         add_count: 4,
         remove_line: 1,
         remove_count: 2,
 
         function: s!(b"function name"),
-    });
+    };
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@ function name\n", h3);
 
-    let h4 = Some(HunkHeader {
+    let h4 = HunkHeader {
         add_line: 3,
         add_count: 4,
         remove_line: 1,
         remove_count: 2,
 
         function: s!(b""),
-    });
+    };
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @@function name\n", h4);
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @function name\n", h4);
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @ function name\n", h4);
 
-    assert_parsed!(parse_hunk_header, b"", None);
+    assert_eq!(parse_hunk_header(b""), Err(ErrorBuilder::NoMatch));
+    assert_eq!(parse_hunk_header(b"some garbage"), Err(ErrorBuilder::NoMatch));
 
-    let line = b"some garbage";
-    assert_parsed!(parse_hunk_header, line, None, line);
-
-    let line = "@@ - invalid";
-    assert_parse_error!(parse_hunk_header, line.as_bytes(),
-                        ParseError::BadHunkHeader(line.to_string()));
+    assert_parse_error!(parse_hunk_header, b"@@ - invalid\n",
+                        ParseError::BadHunkHeader(" invalid".to_string()));
 }
 
 #[derive(Debug, PartialEq)]
@@ -1121,13 +1114,12 @@ fn test_parse_hunk_line() {
                         ParseError::BadLineInHunk("wtf".to_string()));
 }
 
-fn parse_hunk<'a>(mut input: &'a [u8]) -> Result<(&[u8], Option<TextHunk<'a>>), ErrorBuilder> {
+fn parse_hunk<'a>(mut input: &'a [u8]) -> Result<(&[u8], TextHunk<'a>), ErrorBuilder> {
     let mut header;
-    (input, header) = match parse_hunk_header(input)? {
-        (input, Some(header)) => (input, header),
-        (_, None) =>
-            return Ok((input, None)),
-    };
+    (input, header) = parse_hunk_header(input)
+        .map_err(|err| if err == ErrorBuilder::NoMatch { err } else {
+            ErrorBuilder::BadHunkHeader(input)
+        })?;
 
     let mut hunk = Hunk::new(
         std::cmp::max(header.remove_line as isize - 1, 0),
@@ -1187,7 +1179,7 @@ fn parse_hunk<'a>(mut input: &'a [u8]) -> Result<(&[u8], Option<TextHunk<'a>>), 
         input = input_;
     }
 
-    Ok((input, Some(hunk)))
+    Ok((input, hunk))
 }
 
 #[cfg(test)]
@@ -1205,7 +1197,7 @@ fn test_parse_hunk() {
  hhh
 "#;
 
-    let h = parse_hunk(hunk_txt).unwrap().1.unwrap();
+    let h = parse_hunk(hunk_txt).unwrap().1;
     assert_eq!(h.remove.target_line, 99);
     assert_eq!(h.add.target_line, 109);
 
@@ -1248,20 +1240,25 @@ xxxxx
 "#;
     assert_parse_error!(parse_hunk, s!(hunk_txt),
                         ParseError::BadLineInHunk(" ddd".to_string()));
+
+    // Invalid hunk header
+    assert_parse_error!(parse_hunk, b"@@ - invalid\n",
+                        ParseError::BadHunkHeader("@@ - invalid".to_string()));
 }
 
 fn parse_hunks(mut input: &[u8]) -> Result<(&[u8], HunksVec<&[u8]>), ErrorBuilder> {
     let mut hunks = HunksVec::<&[u8]>::new();
     loop {
-        match parse_hunk(input)? {
-            (input_, Some(hunk)) => {
+        match parse_hunk(input) {
+            Ok((input_, hunk)) => {
                 hunks.push(hunk);
                 input = input_;
             }
-            (_, None) => {
+            Err(ErrorBuilder::NoMatch) =>
                 // TODO: Do anything for the case of not even one hunk?
-                return Ok((input, hunks));
-            }
+                return Ok((input, hunks)),
+            Err(err) =>
+                return Err(err),
         }
     }
 }
@@ -1441,7 +1438,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
     let mut metadata = FilePatchMetadata::default();
 
     // First we read metadata lines or garbage and wait until we find a first hunk.
-    while !metadata.have_filename() || parse_hunk_header(input)?.1.is_none() {
+    while !metadata.have_filename() || parse_hunk_header(input) == Err(ErrorBuilder::NoMatch) {
         let (input_, patch_line) = match state {
             MetadataState::Normal => parse_patch_line(input)?,
             MetadataState::GitDiff => parse_git_patch_line(input)?,
