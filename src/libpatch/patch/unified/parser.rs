@@ -427,8 +427,8 @@ enum Filename<'a> {
 // Either written directly without any whitespace or inside quotation marks.
 //
 // Similar to `parse_name` function in patch.
-fn parse_filename(mut input: &[u8]) -> Result<(&[u8], Filename), ErrorBuilder> {
-    (_, input) = split_at_cond(input, |c| !is_space(c));
+fn parse_filename(input: &[u8]) -> Result<(&[u8], Filename), ErrorBuilder> {
+    let (_, input) = split_at_cond(input, |c| !is_space(c));
 
     // First attempt to parse it as quoted filename. This will reject it
     // quickly if it does not start with a '"' character.
@@ -532,8 +532,8 @@ fn test_parse_filename() {
 }
 
 /// Similar to `fetchmode` function in patch.
-fn parse_mode(mut input: &[u8]) -> Result<(&[u8], u32), ErrorBuilder> {
-    (_, input) = split_at_cond(input, |c| !is_space(c));
+fn parse_mode(input: &[u8]) -> Result<(&[u8], u32), ErrorBuilder> {
+    let (_, input) = split_at_cond(input, |c| !is_space(c));
     let (digits, input_) = split_at_cond(input, |c| !is_oct_digit(c));
 
     if digits.is_empty() {
@@ -918,16 +918,15 @@ fn test_parse_number_usize() {
 }
 
 // Parses line and count like "3,4" or just "3"
-fn parse_hunk_line_and_count(mut input: &[u8]) -> Result<(&[u8], (usize, usize)), ErrorBuilder> {
-    let (line, count);
-    (input, line) = parse_number_usize(input)?;
+fn parse_hunk_line_and_count(input: &[u8]) -> Result<(&[u8], (usize, usize)), ErrorBuilder> {
+    let (input, line) = parse_number_usize(input)?;
     if input.first() == Some(&b',') {
-        (input, count) = parse_number_usize(&input[1..])?;
+        let (input, count) = parse_number_usize(&input[1..])?;
+        Ok((input, (line, count)))
     } else {
         // If there is no ",123" part, then the line count is 1.
-        count = 1;
+        Ok((input, (line, 1)))
     }
-    Ok((input, (line, count)))
 }
 
 #[cfg(test)]
@@ -949,28 +948,26 @@ struct HunkHeader<'a> {
 }
 
 /// Parses a line like "@@ -3,4 +5,6 @@ function\n"
-fn parse_hunk_header(mut input: &[u8]) -> Result<(&[u8], HunkHeader), ErrorBuilder> {
-    let (add_line, add_count, remove_line, remove_count, function);
-
-    input = input.strip_prefix(b"@@ -")
+fn parse_hunk_header(input: &[u8]) -> Result<(&[u8], HunkHeader), ErrorBuilder> {
+    let input = input.strip_prefix(b"@@ -")
         .ok_or(ErrorBuilder::NoMatch)?;
 
-    (input, (remove_line, remove_count)) = parse_hunk_line_and_count(input)
+    let (input, (remove_line, remove_count)) = parse_hunk_line_and_count(input)
         .map_err(|_| ErrorBuilder::BadHunkHeader(input))?;
-    input = input.strip_prefix(b" +")
+    let input = input.strip_prefix(b" +")
         .ok_or_else(|| ErrorBuilder::BadHunkHeader(input))?;
-    (input, (add_line, add_count)) = parse_hunk_line_and_count(input)
+    let (input, (add_line, add_count)) = parse_hunk_line_and_count(input)
         .map_err(|_| ErrorBuilder::BadHunkHeader(input))?;
-    input = input.strip_prefix(b" @")
+    let input = input.strip_prefix(b" @")
         .ok_or_else(|| ErrorBuilder::BadHunkHeader(input))?;
 
     // Parse function if it is separated by " @@ "
-    if let Some(input_) = input.strip_prefix(b"@ ") {
-        (input, function) = take_line_skip(input_)?;
-    } else {
-        function = b"";
-        (input, _) = take_line_incl(input)?;
-    }
+    let (input, function) = match input.strip_prefix(b"@ ") {
+        Some(input) =>
+            take_line_skip(input)?,
+        None =>
+            map_parsed(take_line_incl(input), |_| &b""[..])?,
+    };
 
     Ok((input,
         HunkHeader {
@@ -1114,9 +1111,8 @@ fn test_parse_hunk_line() {
                         ParseError::BadLineInHunk("wtf".to_string()));
 }
 
-fn parse_hunk<'a>(mut input: &'a [u8]) -> Result<(&[u8], TextHunk<'a>), ErrorBuilder> {
-    let mut header;
-    (input, header) = parse_hunk_header(input)
+fn parse_hunk<'a>(input: &'a [u8]) -> Result<(&[u8], TextHunk<'a>), ErrorBuilder> {
+    let (mut input, mut header) = parse_hunk_header(input)
         .map_err(|err| if err == ErrorBuilder::NoMatch { err } else {
             ErrorBuilder::BadHunkHeader(input)
         })?;
