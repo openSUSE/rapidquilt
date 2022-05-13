@@ -544,7 +544,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
                     }
 
                     Err(err) => {
-                        return Err(Error::from_boxed_compat(Box::new(err)));
+                        return Err(err.into());
                     }
                 };
 

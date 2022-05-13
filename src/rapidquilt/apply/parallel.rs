@@ -243,7 +243,7 @@ fn save_files_worker<'arena, 'config> (
     // Analyze failure, in case there was any
     let mut failure_analysis = Vec::<u8>::new();
     if let Err(err) = analyze_patch_failure(config.verbosity, final_patch, &state.applied_patches, &state.modified_files, &mut failure_analysis) {
-        return Err(Error::from_boxed_compat(Box::new(err)));
+        return Err(err.into());
     }
 
     // If this is not dry-run, save all the results
