@@ -52,7 +52,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::hash::{BuildHasherDefault, Hash};
 use std::path::Path;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use colored::*;
@@ -205,6 +205,12 @@ fn apply_worker<'arena, 'config>(
     Ok(state)
 }
 
+/// Shared state of all workers
+struct SharedState {
+    saving_modified: AtomicBool,
+    saving_backup: AtomicBool,
+}
+
 /// Contains rendered report from the worker
 #[derive(Default)]
 struct WorkerReport {
@@ -216,13 +222,13 @@ struct WorkerReport {
 ///
 /// `config`: The configuration of the task.
 /// `arena`: This arena is used for loading files.
-/// `thread_id`: Id of this thread. (Only used for logging)
+/// `shared`: State that is shared by all threads.
 /// `thread_file_patches`: The `FilePatch`es for this thread and the indexes of the original patch files they came from.
 /// `final_patch`: Index of the earliest patch that failed to apply.
 /// `analyses`: Set of analyses to run.
-fn save_files_worker<'arena, 'config> (
-    config: &'config ApplyConfig,
-    thread_id: usize,
+fn save_files_worker<'arena> (
+    config: &ApplyConfig,
+    shared: &SharedState,
     mut state: AppliedState,
     final_patch: usize)
     -> Result<WorkerReport, Error>
@@ -253,7 +259,8 @@ fn save_files_worker<'arena, 'config> (
             return Err(err);
         }
 
-        if config.verbosity >= Verbosity::Normal && thread_id == 0 {
+        if config.verbosity >= Verbosity::Normal &&
+            shared.saving_modified.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
             println!("Saving modified files...");
         }
 
@@ -269,7 +276,8 @@ fn save_files_worker<'arena, 'config> (
         (config.do_backups == ApplyConfigDoBackups::OnFail &&
             final_patch != config.series_patches.len())
         {
-            if config.verbosity >= Verbosity::Normal && thread_id == 0 {
+            if config.verbosity >= Verbosity::Normal &&
+                shared.saving_backup.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
                 println!("Saving quilt backup files ({})...", config.backup_count);
             }
 
@@ -410,16 +418,21 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     let thread_results: Mutex<Vec<Result<WorkerReport, Error>>> = Mutex::new(Vec::new());
     let thread_results_ref = &thread_results;
 
+    let shared = &SharedState {
+        saving_modified: AtomicBool::new(false),
+        saving_backup: AtomicBool::new(false),
+    };
+
     // Run the saving threads
     rayon::scope(move |scope| {
-        for (thread_id, apply_result) in apply_results.drain(..).enumerate() {
+        for apply_result in apply_results.drain(..) {
             match apply_result {
                 Ok(state) => {
                     // Start the thread
                     scope.spawn(move |_| {
                         let result = save_files_worker(
                             config,
-                            thread_id,
+                            shared,
                             state,
                             final_patch);
 
