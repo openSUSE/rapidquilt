@@ -1,5 +1,8 @@
 # Unreleased changes
 
+* Avoid language features that are rejected by Rust 1.54. Support for this
+  version is still needed.
+
 # Version 0.6.5
 
 * Rewrite the parser and improve its performance by approx. 15 %.
