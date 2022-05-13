@@ -7,8 +7,9 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::{self, Write};
+use std::fmt::Write;
 use std::hash::BuildHasher;
+use std::io::{self, Write as IoWrite};
 
 use std::path::Path;
 

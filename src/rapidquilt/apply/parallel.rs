@@ -218,7 +218,7 @@ struct SharedState {
 /// Contains rendered report from the worker
 #[derive(Default)]
 struct WorkerReport {
-    failure_analysis: Vec<u8>,
+    failure_analysis: String,
 }
 
 /// This function is executed by every thread during the "Step 4" phase - when
@@ -251,7 +251,7 @@ fn save_files_worker<'arena> (
     };
 
     // Analyze failure, in case there was any
-    let mut failure_analysis = Vec::<u8>::new();
+    let mut failure_analysis = String::new();
     if let Err(err) = analyze_patch_failure(config.verbosity, final_patch, &state.applied_patches, &state.modified_files, &mut failure_analysis) {
         return Err(err.into());
     }
@@ -469,7 +469,7 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
         let thread_reports = thread_reports.into_inner().unwrap();
 
         for result in thread_reports {
-            eprint!("{}", String::from_utf8(result.failure_analysis)?);
+            eprint!("{}", result.failure_analysis);
         }
     }
 

@@ -26,7 +26,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
     let mut final_patch = 0;
 
-    let mut failure_analysis = Vec::<u8>::new();
+    let mut failure_analysis = String::new();
 
     if config.verbosity >= Verbosity::Normal {
         println!("Applying {} patches single-threaded...", config.series_patches.len());
@@ -105,7 +105,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
     if final_patch != config.series_patches.len() {
         eprintln!("{} {} {}", "Patch".yellow(), config.series_patches[final_patch].filename.display(), "FAILED".bright_red().bold());
-        eprint!("{}", String::from_utf8(failure_analysis)?);
+        eprint!("{}", failure_analysis);
     }
 
     if config.stats {
