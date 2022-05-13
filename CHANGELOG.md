@@ -1,5 +1,7 @@
 # Unreleased changes
 
+# Version 0.6.5
+
 * Rewrite the parser and improve its performance by approx. 15 %.
 
 # Version 0.6.4
