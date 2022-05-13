@@ -390,9 +390,13 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     // This is necessary to have complete set of ".rej" files.
     let earliest_broken_patch_index = &AtomicUsize::new(config.series_patches.len());
 
-    // This results from the apply threads.
-    let apply_results: Mutex<Vec<Result<AppliedState, Error>>> = Mutex::new(Vec::with_capacity(threads));
-    let apply_results_ref = &apply_results;
+    // This will hold thread errors (hopefully none)
+    let thread_errors: Mutex<Vec<Error>> = Mutex::new(Vec::new());
+    let thread_errors_ref = &thread_errors;
+
+    // This will hold per-thread successful applied states.
+    let applied_states: Mutex<Vec<AppliedState>> = Mutex::new(Vec::with_capacity(threads));
+    let applied_states_ref = &applied_states;
 
     // Run the applying threads
     text_file_patches_per_thread.par_drain(..).for_each(
@@ -404,37 +408,34 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
                 earliest_broken_patch_index,
                 analyses);
 
-            // NOTE(unwrap): If the lock is poisoned, another thread panicked. We may as well.
-            apply_results_ref.lock().unwrap().push(result);
+            // NOTE(unwrap): If a lock is poisoned, another thread panicked
+            // while holding it. We may as well.
+            match result {
+                Ok(state) =>
+                    applied_states_ref.lock().unwrap().push(state),
+                Err(err) =>
+                    thread_errors_ref.lock().unwrap().push(err),
+            }
         });
 
-    // NOTE(unwrap): If the lock is poisoned, another thread panicked. We may as well.
-    let mut apply_results = apply_results.into_inner().unwrap();
+    // NOTE(unwrap): If the lock is poisoned, another thread panicked.
+    let mut applied_states = applied_states.into_inner().unwrap();
 
-    // Check if we actually applied everything
+    // Where did we stop applying?
     let final_patch = earliest_broken_patch_index.load(Ordering::Acquire);
 
-    // This will record results from the threads.
-    let thread_results: Mutex<Vec<Result<WorkerReport, Error>>> = Mutex::new(Vec::new());
-    let thread_results_ref = &thread_results;
+    // This will hold per-thread successful reports.
+    let thread_reports: Mutex<Vec<WorkerReport>> = Mutex::new(Vec::with_capacity(applied_states.len()));
+    let thread_reports_ref = &thread_reports;
 
+    // Initialize state shared by all threads
     let shared = &SharedState {
         saving_modified: AtomicBool::new(false),
         saving_backup: AtomicBool::new(false),
     };
 
     // Run the saving threads
-    apply_results.par_drain(..).filter_map(
-        |apply_result| {
-            match apply_result {
-                Ok(state) => Some(state),
-                Err(e) => {
-                    // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
-                    thread_results_ref.lock().unwrap().push(Err(e));
-                    None
-                }
-            }
-        }).for_each(
+    applied_states.par_drain(..).for_each(
         move |state| {
             let result = save_files_worker(
                 config,
@@ -442,21 +443,21 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
                 state,
                 final_patch);
 
-            // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
-            thread_results_ref.lock().unwrap().push(result);
+            // NOTE(unwrap): If a lock is poisoned, another thread panicked.
+            match result {
+                Ok(report) =>
+                    thread_reports_ref.lock().unwrap().push(report),
+                Err(err) =>
+                    thread_errors_ref.lock().unwrap().push(err),
+            }
         });
 
-    // NOTE(unwrap): If the lock is poisoned, some other thread panicked. We may as well.
-    let thread_results = thread_results.into_inner().unwrap();
+    // NOTE(unwrap): If the lock is poisoned, another thread panicked.
+    let mut thread_errors = thread_errors.into_inner().unwrap();
 
-    // Split successfull reports and errors
-    let (thread_reports, mut thread_errors): (_, Vec<Result<WorkerReport, Error>>) = thread_results.into_iter().partition(|r| {
-        r.is_ok()
-    });
-
-    // If there was error in any of the applying threads, return the first one out
+    // If there was error in any of the threads, return the first one out
     // TODO: Should we return all of them?
-    if let Some(Err(error)) = thread_errors.drain(..).next() {
+    if let Some(error) = thread_errors.drain(..).next() {
         return Err(error);
     }
 
@@ -464,9 +465,11 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     if final_patch != config.series_patches.len() {
         eprintln!("{} {} {}", "Patch".yellow(), config.series_patches[final_patch].filename.display(), "FAILED".bright_red().bold());
 
+        // NOTE(unwrap): If the lock is poisoned, another thread panicked.
+        let thread_reports = thread_reports.into_inner().unwrap();
+
         for result in thread_reports {
-            // NOTE(unwrap): We already tested for errors above.
-            eprint!("{}", String::from_utf8(result.unwrap().failure_analysis)?);
+            eprint!("{}", String::from_utf8(result.failure_analysis)?);
         }
     }
 
