@@ -2,6 +2,8 @@
 
 * Avoid language features that are rejected by Rust 1.54. Support for this
   version is still needed.
+* Simplify diagonstics of failed hunks. Although the new algorithm is more
+  primitive, it is much faster for large hunks and/or files.
 
 # Version 0.6.5
 

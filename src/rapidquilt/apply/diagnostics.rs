@@ -13,9 +13,6 @@ use std::io::{self, Write as IoWrite};
 
 use std::path::Path;
 
-use smallvec::{SmallVec, smallvec};
-
-use strsim::levenshtein;
 use colored::*;
 use failure::Error;
 use libpatch::analysis::{AnalysisSet, Note, NoteSeverity, fn_analysis_note_noop};
@@ -252,107 +249,61 @@ pub fn print_difference_to_closest_match<W: Write>(
     // The hunk expects some content in the file (its context and remove lines), but the actual
     // content of the file may not match. Some lines may have been modified, some completely removed
     // and some added.
-    //
-    // Regular patch works with a line precision. The whole line either matches or not, nothing in
-    // between. But we need to be smarter and work on the character level, so we start by turning
-    // the file and the hunk into a vector of strings.
 
-    let file_content_txt = modified_file.content.iter().map(|line| {
-        String::from_utf8_lossy(line)
-    }).collect::<Vec<_>>();
-
-    let hunk_content_txt = hunk_view.remove_content().iter().map(|line| {
-        String::from_utf8_lossy(line)
-    }).collect::<Vec<_>>();
-
-    // Next we will calculate levenshtein distance for every pair of lines from the file and from
-    // the hunk. We will save these results into MxN matrix, where M is length of the hunk and N is
-    // length of the file. Item at (m, n) coordinates is the edit distance from the m-th line in
-    // hunk to the n-th line in the file.
-
-    // TODO: We could probably start with empty matrix and calculate the edit distances on-demand
-    //       later? We probably don't need all of them. We should check how many of them are usually
-    //       needed during search...
-
-    type Score = usize;
-    let mut matrix: Vec<Vec<Score>> = Vec::with_capacity(file_content_txt.len());
-    for file_line_txt in &file_content_txt {
-        let mut matrix_row = Vec::with_capacity(hunk_content_txt.len());
-        for hunk_line_txt in &hunk_content_txt {
-            matrix_row.push(levenshtein(file_line_txt, hunk_line_txt));
+    // First, find all matching lines.
+    let mut matches = Vec::with_capacity(hunk_view.remove_content().len());
+    for hunk_line in hunk_view.remove_content() {
+        let mut line_matches = Vec::new();
+        for (line_number, file_line) in modified_file.content.iter().enumerate() {
+            if file_line == hunk_line {
+                line_matches.push(line_number);
+            }
         }
-        matrix.push(matrix_row);
+        matches.push(line_matches);
     }
 
-    // If the hunk was present in its exact form somewhere in the file, there will be a diagonal
-    // line filed with zeroes in the matrix. But that is typically not the case. (You wouldn't call
-    // this function if the hunk applied.) Something in the file doesn't match expectations of the
-    // hunk. This describes the effects of changes on the matrix:
-    //
-    // * If a line that is in both the hunk and the file changed slightly, there will be small
-    //   number instead of zero.
-    //
-    // * If a line was added to the file, there will be extra line with big numbers breaking the
-    //   diagonal with zeroes.
-    //
-    // * If a line was removed from the file, the diagonal won't be perfect diagonal, but will have
-    //   a horizontal step in it.
-    //
-    // So to find the place where the hunk most closely matches, we need to find the cheapest path
-    // from the left side to the right side of the matrix. We can step diagonally down+right, or
-    // just down or just right. The cost of each step is the edit distance stored in the element.
-    //
     // We use dijkstra's algorithm to find the path. Since this implementation allows only single
     // starting point, we add an artificial starting node (MAX, MAX). This node is connected to
     // to every node on the left side of the matrix. The search ends when it manages to find a path
     // all the way out of the right side of the matrix.
-
+    type Score = usize;
     let best_path = pathfinding::directed::dijkstra::dijkstra(
         // Starting point - the artificial point out of the matrix.
         &(std::usize::MAX, std::usize::MAX),
 
         // Function that for given node (x, y) returns iterable with its successors and cost to walk
         // to them.
-        |&(x, y)| -> SmallVec<[((usize, usize), Score); 3]> {
-            // TODO: Change this into generator once they are stable, so we don't have to allocate
-            //       and return SmallVec with all successors at once. (feature "generators")
+        |&(line, index)| -> Vec<((usize, usize), Score)> {
+            let mut result = Vec::new();
 
-            // If this is the artificial starting node, we can make step to every node in the left
-            // side. This basically gives us multiple starting points.
-            if x == std::usize::MAX {
-                return (0..file_content_txt.len()).map(|y1| ((0, y1), matrix[y1][0])).collect();
+            // If this is the artificial starting node, we can make step to
+            // every other node (with an appropriate cost).
+            // This basically gives us multiple starting points.
+            if line == std::usize::MAX {
+                for line in 0..matches.len() {
+                    for index in 0..matches[line].len() {
+                        result.push(((line, index), line));
+                    }
+                }
+                return result;
             }
 
-            // If we could only step out of the matrix, there is nowhere else to go.
-            if x + 1 >= hunk_content_txt.len() || y + 1 >= file_content_txt.len() {
-                return smallvec![];
+            let file_line = matches[line][index] + 1;
+            let line = line + 1;
+            for next_line in line..matches.len() {
+                let next_matches = &matches[next_line];
+                for (next_index, next_file_line) in next_matches.iter().enumerate().filter(|(_, &n)| n >= file_line) {
+                    result.push(((next_line, next_index), next_line - line + next_file_line - file_line));
+                }
             }
+            result.push(((matches.len(), 0), matches.len() - line));
 
-            smallvec![
-                // Move down. We proceed one line further in the file while staying on the same line
-                // in the hunk. If this turns out to be the shortest path, it means that an extra
-                // line was added to the file.
-                ((x,     y + 1), file_content_txt[y + 1].len()),
-
-                // Diagonal move. We take one line from the hunk and from the file at cost of
-                // editing the line from one to another. I.e. if they are the same, the edit
-                // distance is 0 and so the cost is 0.
-                ((x + 1, y + 1), matrix[y + 1][x + 1] * 5),
-
-                // Move right. We proceed one line further in the hunk while staying on the same
-                // line in the file. If this turns out to be the shortest path, it means that there
-                // is line in hunk that is no longer present in the file.
-                ((x + 1, y),     hunk_content_txt[x + 1].len() * 5),
-            ]
+            result
         },
 
         // Success condition.
-        |&(x, _)| x == hunk_content_txt.len() - 1
+        |&(line, _)| line == matches.len()
     );
-
-    // Now we got the best path from the left to the right side of the matrix. Now we have to
-    // interpret the right/down/diagonal steps as the lines being added/removed/modified and print
-    // them out accordingly.
 
     enum WriteLineType {
         Matching,
@@ -360,7 +311,7 @@ pub fn print_difference_to_closest_match<W: Write>(
         InHunk,
     }
 
-    let write_line = |writer: &mut W, line_type: WriteLineType, line_str: &str, line_num: Option<isize>| -> Result<(), Error> {
+    let write_line = |writer: &mut W, line_type: WriteLineType, line_str: &str, line_num: Option<usize>| -> Result<(), Error> {
         let line_num_str = match line_num {
             Some(line_num) => Cow::Owned(format!("{:5}:", line_num + 1)),
             None                 => Cow::Borrowed("     :"), // 5 characters for number + 1 for ':'
@@ -383,26 +334,35 @@ pub fn print_difference_to_closest_match<W: Write>(
         Ok(())
     };
 
-    if let Some(best_path) = best_path {
+    if let Some((best_path, _)) = best_path {
         writeln!(writer)?;
         writeln!(writer, "{}{} Comparison of the content of the {} and the content expected by the {}:", prefix, "hint:".purple(), "file".bright_cyan(), "hunk".bright_magenta())?;
         writeln!(writer)?;
 
-        for step in best_path.0.windows(2) {
-            let (prev_x, prev_y) = step[0];
-            let (x, y)           = step[1];
+        // NOTE: There must be at least two nodes in the path: the artificial
+        // start node and the target node.
+        let (start_line, start_index) = best_path[1];
+        let mut file_line = matches[start_line][start_index] - start_line;
+        let mut hunk_line = 0;
+        for &(next_hunk_line, match_index) in &best_path[1..] {
+            let next_file_line = match matches.get(next_hunk_line) {
+                Some(line_matches) => line_matches[match_index],
+                None => file_line + (next_hunk_line - hunk_line),
+            };
+            while file_line < next_file_line {
+                write_line(writer, WriteLineType::InFile, &String::from_utf8_lossy(modified_file.content[file_line]), Some(file_line))?;
+                file_line += 1;
+            }
 
-            if prev_x == std::usize::MAX || (prev_x + 1 == x && prev_y + 1 == y) {
-                if matrix[y][x] == 0 {
-                    write_line(writer, WriteLineType::Matching, &file_content_txt[y], Some(y as isize))?;
-                } else {
-                    write_line(writer, WriteLineType::InFile, &file_content_txt[y], Some(y as isize))?;
-                    write_line(writer, WriteLineType::InHunk, &hunk_content_txt[x], Some(y as isize))?;
-                }
-            } else if prev_x + 1 == x {
-                write_line(writer, WriteLineType::InHunk, &hunk_content_txt[x], None)?; // No line number if this line is just in hunk
-            } else {
-                write_line(writer, WriteLineType::InFile, &file_content_txt[y], Some(y as isize))?;
+            while hunk_line < next_hunk_line {
+                write_line(writer, WriteLineType::InHunk, &String::from_utf8_lossy(hunk_view.remove_content()[hunk_line]), None)?;
+                hunk_line += 1;
+            }
+
+            if let Some(content) = hunk_view.remove_content().get(hunk_line)  {
+                write_line(writer, WriteLineType::Matching, &String::from_utf8_lossy(content), Some(file_line))?;
+                file_line += 1;
+                hunk_line += 1;
             }
         }
 
