@@ -243,6 +243,8 @@ pub fn print_difference_to_closest_match<W: Write>(
 {
     // Get a HunkView that will be the same as the one used during patching
     let hunk_view = hunk.view(report.direction(), report.fuzz());
+    let hunk_len = hunk_view.remove_content().len();
+    let file_len = modified_file.content.len();
 
     // We want to guess as best as we can where the hunk was supposed to go in the file. This is
     // more complicated (and smarter) than fuzzy patching.
@@ -252,7 +254,7 @@ pub fn print_difference_to_closest_match<W: Write>(
     // and some added.
 
     // First, find all matching lines.
-    let mut matches = Vec::with_capacity(hunk_view.remove_content().len());
+    let mut matches = Vec::with_capacity(hunk_len);
     for hunk_line in hunk_view.remove_content() {
         let mut line_matches = Vec::new();
         for (line_number, file_line) in modified_file.content.iter().enumerate() {
@@ -349,7 +351,7 @@ pub fn print_difference_to_closest_match<W: Write>(
         for &(next_hunk_line, match_index) in &best_path[1..] {
             let next_file_line = match matches.get(next_hunk_line) {
                 Some(line_matches) => line_matches[match_index],
-                None => file_line + (next_hunk_line - hunk_line),
+                None => min(file_len, file_line + (next_hunk_line - hunk_line)),
             };
             while file_line < next_file_line {
                 write_line(writer, WriteLineType::InFile, &String::from_utf8_lossy(modified_file.content[file_line]), Some(file_line))?;
