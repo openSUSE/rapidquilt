@@ -19,7 +19,14 @@ use failure::Error;
 use libpatch::analysis::{AnalysisSet, Note, NoteSeverity, fn_analysis_note_noop};
 use libpatch::modified_file::ModifiedFile;
 
-use libpatch::patch::{TextFilePatch, TextHunk, HunkApplyFailureReason, HunkApplyReport, PatchDirection};
+use libpatch::patch::{
+    TextFilePatch,
+    TextHunk,
+    HunkApplyFailureReason,
+    HunkApplyReport,
+    HunkPosition,
+    PatchDirection
+};
 use libpatch::patch::unified::writer::UnifiedPatchHunkHeaderWriter;
 use libpatch::patch::FilePatchApplyReport;
 
@@ -232,6 +239,13 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
     Ok(())
 }
 
+/// Cost of one line of difference. The value of 256 allows up to 16M lines
+/// without overflowing usize even on 32-bit platforms. By choosing a power
+/// of two, the compiler can (hopefully) optimize the multiplication to a
+/// bit shift. By choosing a bit shift of 8, it may also use a byte shift
+/// on platforms where that would be more efficient.
+const SCORE_SCALE: usize = 256;
+
 /// Figure out where the hunk was supposed to apply and print it out with highlighted differences.
 pub fn print_difference_to_closest_match<W: Write>(
     report: &FilePatchApplyReport,
@@ -269,6 +283,11 @@ pub fn print_difference_to_closest_match<W: Write>(
     // starting point, we add an artificial starting node (MAX, MAX). This node is connected to
     // to every node on the left side of the matrix. The search ends when it manages to find a path
     // all the way out of the right side of the matrix.
+    let target_line = match hunk_view.position() {
+        HunkPosition::Start |
+        HunkPosition::Middle => hunk_view.remove_target_line() as usize,
+        HunkPosition::End => file_len - hunk_len,
+    };
     type Score = usize;
     let best_path = pathfinding::directed::dijkstra::dijkstra(
         // Starting point - the artificial point out of the matrix.
@@ -284,8 +303,13 @@ pub fn print_difference_to_closest_match<W: Write>(
             // This basically gives us multiple starting points.
             if line == std::usize::MAX {
                 for line in 0..matches.len() {
-                    for index in 0..matches[line].len() {
-                        result.push(((line, index), line));
+                    for (index, &file_line) in matches[line].iter().enumerate() {
+                        let line_diff = if file_line < target_line {
+                            target_line - file_line
+                        } else {
+                            file_line - target_line
+                        };
+                        result.push(((line, index), SCORE_SCALE * line + SCORE_SCALE * line_diff / file_len));
                     }
                 }
                 return result;
@@ -296,10 +320,10 @@ pub fn print_difference_to_closest_match<W: Write>(
             for next_line in line..matches.len() {
                 let next_matches = &matches[next_line];
                 for (next_index, next_file_line) in next_matches.iter().enumerate().filter(|(_, &n)| n >= file_line) {
-                    result.push(((next_line, next_index), next_line - line + next_file_line - file_line));
+                    result.push(((next_line, next_index), SCORE_SCALE * (next_line - line + next_file_line - file_line)));
                 }
             }
-            result.push(((matches.len(), 0), matches.len() - line));
+            result.push(((matches.len(), 0), SCORE_SCALE * (matches.len() - line)));
 
             result
         },
