@@ -6,6 +6,7 @@
 //! to provide user-friendly report.
 
 use std::borrow::Cow;
+use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::hash::BuildHasher;
@@ -342,7 +343,8 @@ pub fn print_difference_to_closest_match<W: Write>(
         // NOTE: There must be at least two nodes in the path: the artificial
         // start node and the target node.
         let (start_line, start_index) = best_path[1];
-        let mut file_line = matches[start_line][start_index] - start_line;
+        let mut file_line = matches[start_line][start_index];
+        file_line -= min(file_line, start_line);
         let mut hunk_line = 0;
         for &(next_hunk_line, match_index) in &best_path[1..] {
             let next_file_line = match matches.get(next_hunk_line) {
