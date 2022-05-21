@@ -269,6 +269,7 @@ pub fn print_difference_to_closest_match<W: Write>(
 
     // First, find all matching lines.
     let mut matches = Vec::with_capacity(hunk_len);
+    let mut matches_count = 0;
     for hunk_line in hunk_view.remove_content() {
         let mut line_matches = Vec::new();
         for (line_number, file_line) in modified_file.content.iter().enumerate() {
@@ -276,6 +277,7 @@ pub fn print_difference_to_closest_match<W: Write>(
                 line_matches.push(line_number);
             }
         }
+        matches_count += line_matches.len();
         matches.push(line_matches);
     }
 
@@ -296,7 +298,7 @@ pub fn print_difference_to_closest_match<W: Write>(
         // Function that for given node (x, y) returns iterable with its successors and cost to walk
         // to them.
         |&(line, index)| -> Vec<((usize, usize), Score)> {
-            let mut result = Vec::new();
+            let mut result = Vec::with_capacity(matches_count + 1);
 
             // If this is the artificial starting node, we can make step to
             // every other node (with an appropriate cost).
