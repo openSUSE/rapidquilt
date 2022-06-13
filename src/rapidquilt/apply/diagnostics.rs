@@ -239,6 +239,34 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
     Ok(())
 }
 
+/// Tests if `c` is a space or TAB.
+fn is_space(c: u8) -> bool {
+    c == b' ' ||
+    c == b'\t'
+}
+
+fn compare_ignore_space(a: &[u8], b: &[u8]) -> bool
+{
+    let mut b_iter = b.iter();
+    for &a_byte in a {
+        if is_space(a_byte) {
+            continue;
+        }
+        loop {
+            let &b_byte = match b_iter.next() {
+                Some(n) => n,
+                None => return false,
+            };
+            if b_byte == a_byte {
+                break;
+            } else if !is_space(b_byte) {
+                return false;
+            }
+        }
+    }
+    b_iter.next().is_none()
+}
+
 /// Cost of one line of difference. The value of 256 allows up to 16M lines
 /// without overflowing usize even on 32-bit platforms. By choosing a power
 /// of two, the compiler can (hopefully) optimize the multiplication to a
@@ -273,7 +301,7 @@ pub fn print_difference_to_closest_match<W: Write>(
     for hunk_line in hunk_view.remove_content() {
         let mut line_matches = Vec::new();
         for (line_number, file_line) in modified_file.content.iter().enumerate() {
-            if file_line == hunk_line {
+            if compare_ignore_space(file_line, hunk_line) {
                 line_matches.push(line_number);
             }
         }
@@ -389,7 +417,13 @@ pub fn print_difference_to_closest_match<W: Write>(
             }
 
             if let Some(content) = hunk_view.remove_content().get(hunk_line)  {
-                write_line(writer, WriteLineType::Matching, &String::from_utf8_lossy(content), Some(file_line))?;
+                let file_content = &modified_file.content[file_line];
+                if file_content == content {
+                    write_line(writer, WriteLineType::Matching, &String::from_utf8_lossy(content), Some(file_line))?;
+                } else {
+                    write_line(writer, WriteLineType::InFile, &String::from_utf8_lossy(file_content), Some(file_line))?;
+                    write_line(writer, WriteLineType::InHunk, &String::from_utf8_lossy(content), None)?;
+                }
                 file_line += 1;
                 hunk_line += 1;
             }
