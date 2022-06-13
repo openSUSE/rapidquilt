@@ -290,14 +290,13 @@ pub fn print_difference_to_closest_match<W: Write>(
         HunkPosition::Middle => hunk_view.remove_target_line() as usize,
         HunkPosition::End => file_len - hunk_len,
     };
-    type Score = usize;
     let best_path = pathfinding::directed::dijkstra::dijkstra(
         // Starting point - the artificial point out of the matrix.
         &(std::usize::MAX, std::usize::MAX),
 
         // Function that for given node (x, y) returns iterable with its successors and cost to walk
         // to them.
-        |&(line, index)| -> Vec<((usize, usize), Score)> {
+        |&(line, index)| {
             let mut result = Vec::with_capacity(matches_count + 1);
 
             // If this is the artificial starting node, we can make step to
