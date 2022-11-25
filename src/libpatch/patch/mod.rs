@@ -259,7 +259,7 @@ fn try_apply_hunk<'a, 'hunk>(
             //             previous hunk.."
             HunkPosition::Middle => hunk_view.remove_target_line() + last_hunk_offset,
 
-            HunkPosition::End => (modified_file.content.len() as isize - remove_content.len() as isize),
+            HunkPosition::End => modified_file.content.len() as isize - remove_content.len() as isize,
         },
 
         // In rollback mode, take it from the report
