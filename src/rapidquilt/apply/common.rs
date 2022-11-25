@@ -112,7 +112,12 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
     }
 
     let file_path = config.base_dir.join(&filename);
+    let mut old_permissions = None;
     if file.existed {
+        if file.permissions.is_none() {
+            let meta = std::fs::metadata(&file_path);
+            old_permissions = Some(meta?.permissions());
+        }
         // If the file file existed, delete it. Whether we want to overwrite it
         // or really delete it - the file may be a hard link and we must replace
         // it with a new one, not edit the shared content.
@@ -158,7 +163,10 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
         let mut output = File::create(file_path)?;
 
         // If any patch set non-default permission, set them now
+        // Otherwise preserve existing permissions
         if let Some(ref permissions) = file.permissions {
+            output.set_permissions(permissions.clone())?;
+        } else if let Some(ref permissions) = old_permissions {
             output.set_permissions(permissions.clone())?;
         }
 
