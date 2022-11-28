@@ -252,16 +252,12 @@ fn save_files_worker<'arena> (
 
     // Analyze failure, in case there was any
     let mut failure_analysis = String::new();
-    if let Err(err) = analyze_patch_failure(config.verbosity, final_patch, &state.applied_patches, &state.modified_files, &mut failure_analysis) {
-        return Err(err.into());
-    }
+    analyze_patch_failure(config.verbosity, final_patch, &state.applied_patches, &state.modified_files, &mut failure_analysis)?;
 
     // If this is not dry-run, save all the results
     if !config.dry_run {
         // Rollback the last applied patch and generate .rej files if any
-        if let Err(err) = state.rollback_and_save_rej_files(final_patch) {
-            return Err(err);
-        }
+        state.rollback_and_save_rej_files(final_patch)?;
 
         if config.verbosity >= Verbosity::Normal &&
             shared.saving_modified.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok() {
@@ -270,9 +266,7 @@ fn save_files_worker<'arena> (
 
         // Save all the files we modified
         let mut directories_for_cleaning = HashSet::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default());
-        if let Err(err) = state.modified_files.save(&mut directories_for_cleaning) {
-            return Err(err);
-        }
+        state.modified_files.save(&mut directories_for_cleaning)?;
         clean_empty_directories(config.base_dir, directories_for_cleaning)?;
 
         // Maybe save some backup files
