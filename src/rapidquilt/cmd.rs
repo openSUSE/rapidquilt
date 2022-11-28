@@ -247,7 +247,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         .or_else(|| env::var("RAPIDQUILT_THREADS").ok())
         .and_then(|value_txt| Some(value_txt.parse::<usize>()))
         .transpose().context("Parsing number of threads")?
-        .unwrap_or(rayon::current_num_threads());
+        .unwrap_or_else(rayon::current_num_threads);
 
     let apply_result = if num_threads <= 1 {
         apply_patches(&config, &*arena, &analyses)?

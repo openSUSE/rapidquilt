@@ -375,7 +375,7 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
         for text_file_patch in text_patch.file_patches.drain(..) {
             // Note that we can dispatch by `old_filename` or `new_filename`, we
             // made sure that both will be assigned to the same `thread_id`.
-            let thread_id = filename_to_thread_id[text_file_patch.old_filename().or(text_file_patch.new_filename()).unwrap()];
+            let thread_id = filename_to_thread_id[text_file_patch.old_filename().or_else(|| text_file_patch.new_filename()).unwrap()];
             text_file_patches_per_thread[thread_id].push((index, text_file_patch));
         }
     }
