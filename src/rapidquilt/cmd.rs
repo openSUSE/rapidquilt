@@ -68,46 +68,31 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, 
     file.lines()
         .filter_map(|line| {
             match line {
+                // Comments in series file must start with '#' without whitespace before.
+                Ok(line) if line.is_empty() || line.starts_with('#') => None,
                 Ok(line) => {
-                    // Comments in series file must start with '#' without whitespace before.
-                    if line.is_empty() || line.starts_with('#') {
-                        None
-                    } else {
-                        // Quilt has no way to handle whitespace in filenames of patches. Leading whitespace
-                        // is ignored and then everything up to any other whitespace is considered as filename.
-                        // Anything left out is used as parameters for patch command.
-                        let mut parts = line.split_whitespace().peekable();
+                    // Quilt has no way to handle whitespace in filenames of patches. Leading whitespace
+                    // is ignored and then everything up to any other whitespace is considered as filename.
+                    // Anything left out is used as parameters for patch command.
+                    let mut parts = line.split_whitespace().peekable();
 
-                        if let Some(filename) = parts.next() {
-                            Some((|| -> Result<SeriesPatch, Error> { // Poor-man's try block
-                                let filename = std::path::PathBuf::from(filename);
-
-                                // Fast path when there are no options
-                                if parts.peek().is_none() {
-                                    return Ok(SeriesPatch {
-                                        filename,
-                                        strip: DEFAULT_PATCH_STRIP,
-                                        reverse: false,
-                                    });
-                                }
-
-                                let matches = patch_opts.parse(parts)
-                                    .with_context(|_| format!("Parsing patch options for \"{}\"", filename.display()))?;
-
-                                let strip = matches.opt_str("strip").and_then(|n| n.parse::<usize>().ok()).unwrap_or(DEFAULT_PATCH_STRIP);
-                                let reverse = matches.opt_present("R");
-
-                                Ok(SeriesPatch {
-                                    filename,
-                                    strip,
-                                    reverse,
-                                })
-                            })())
-                        } else {
-                            // Line was just whitespace
-                            None
+                    parts.next().map(|filename| {
+                        let filename = std::path::PathBuf::from(filename);
+                        match parts.peek() {
+                            // Fast path when there are no options
+                            None => Ok(SeriesPatch { filename, strip: DEFAULT_PATCH_STRIP, reverse: false }),
+                            //There are some options, so parse them
+                            Some(_) => patch_opts.parse(parts)
+                                .with_context(|_| format!("Parsing patch options for \"{}\"", filename.display()))
+                                .map_err(|err| err.into())
+                                .map(|matches| {
+                                    let strip = matches.opt_str("strip")
+                                        .and_then(|n| n.parse::<usize>().ok()).unwrap_or(DEFAULT_PATCH_STRIP);
+                                    let reverse = matches.opt_present("R");
+                                    SeriesPatch { filename, strip, reverse }
+                                }),
                         }
-                    }
+                    })
                 }
                 Err(err) => Some(Err(err.into())),
             }
