@@ -4,7 +4,7 @@ use std::fs;
 
 use std::ffi::OsStr;
 use std::path::Path;
-use std::io::ErrorKind;
+use std::io::{Read, ErrorKind};
 use failure::{Error, ResultExt, err_msg};
 
 #[cfg(test)]
@@ -31,10 +31,18 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
         let entry = entry?;
         let src_path = entry.path();
         let dest_path = dst.join(entry.file_name());
-        if src_path.is_file() {
-            let expected = fs::read(&src_path)
+        let mut src_file = std::fs::File::open(&src_path)
+            .context(format!("Opening {:?}", src_path))?;
+        let mut dest_file = std::fs::File::open(&dest_path)
+            .context(format!("Opening {:?}", dest_path))?;
+        let src_meta = src_file.metadata()
+            .context(format!("Querying {:?} metadata", src_path))?;
+        if src_meta.is_file() {
+            let mut expected = Vec::new();
+            src_file.read_to_end(&mut expected)
                 .context(format!("Reading {:?}", src_path))?;
-            let actual = fs::read(&dest_path)
+            let mut actual = Vec::new();
+            dest_file.read_to_end(&mut actual)
                 .context(format!("Reading {:?}", dest_path))?;
             if actual != expected {
                 eprintln!("Mismatch in {:?}", entry.file_name());
@@ -46,7 +54,7 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
 
                 panic!("Directory mismatch at {}", src.display());
             }
-        } else if src_path.is_dir() {
+        } else if src_meta.is_dir() {
             compare_tree(&src_path, &dest_path)?;
         }
     }
