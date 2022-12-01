@@ -37,11 +37,10 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             println!("Patch: {:?}", series_patch.filename);
         }
 
-        let patch = (|| -> Result<_, Error> { // TODO: Replace me with try-block once it is stable. (feature "try_blocks")
-            let data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
-            let patch = parse_patch(&data, series_patch.strip, false)?;
-            Ok(patch)
-        })().with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
+        let patch = arena.load_file(&config.patches_path.join(&series_patch.filename))
+            .map_err(|err| err.into())
+            .and_then(|data| parse_patch(&data, series_patch.strip, false))
+            .with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
         let mut any_report_failed = false;
 

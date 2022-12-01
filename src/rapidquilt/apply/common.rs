@@ -284,14 +284,13 @@ pub fn save_backup_file(config: &ApplyConfig,
         println!("Saving backup file {:?}", path);
     }
 
-    (|| -> Result<(), io::Error> { // TODO: Replace me with try-block when stable. (feature "try_blocks")
-        let real_path = config.base_dir.join(&path);
-        // NOTE(unwrap): We know that there is a parent; we built it ourselves.
-        let path_parent = real_path.parent().unwrap();
-
-        fs::create_dir_all(path_parent)?;
-        original_file.write_to(&mut File::create(real_path)?)
-    })().with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
+     let real_path = config.base_dir.join(&path);
+    // NOTE(unwrap): We know that there is a parent; we built it ourselves.
+    let path_parent = real_path.parent().unwrap();
+    fs::create_dir_all(path_parent)
+        .and_then(|_| File::create(real_path))
+        .and_then(|mut f| original_file.write_to(&mut f))
+        .with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
 
     Ok(())
 }
