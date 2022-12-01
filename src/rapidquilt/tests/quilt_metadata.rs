@@ -37,6 +37,15 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
             .context(format!("Opening {:?}", dest_path))?;
         let src_meta = src_file.metadata()
             .context(format!("Querying {:?} metadata", src_path))?;
+        let dest_meta = dest_file.metadata()
+            .context(format!("Querying {:?} metadata", dest_path))?;
+        if src_meta.permissions() != dest_meta.permissions() {
+            eprintln!("Mismatch in {:?}", entry.file_name());
+            eprintln!("  expected: {:?}", src_meta.permissions());
+            eprintln!("  actual: {:?}", dest_meta.permissions());
+
+            panic!("Permission mismatch at {}", src.display());
+        }
         if src_meta.is_file() {
             let mut expected = Vec::new();
             src_file.read_to_end(&mut expected)
@@ -52,7 +61,7 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
                           String::from_utf8_lossy(&actual));
                 eprintln!(">>>");
 
-                panic!("Directory mismatch at {}", src.display());
+                panic!("Content mismatch at {}", src.display());
             }
         } else if src_meta.is_dir() {
             compare_tree(&src_path, &dest_path)?;
