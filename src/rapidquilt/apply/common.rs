@@ -293,7 +293,12 @@ pub fn save_backup_file(config: &ApplyConfig,
     let path_parent = real_path.parent().unwrap();
     fs::create_dir_all(path_parent)
         .and_then(|_| File::create(real_path))
-        .and_then(|mut f| original_file.write_to(&mut f))
+        .and_then(|mut f| {
+            if let Some(ref permissions) = original_file.permissions {
+                f.set_permissions(permissions.clone())?;
+            }
+            original_file.write_to(&mut f)
+        })
         .with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
 
     Ok(())

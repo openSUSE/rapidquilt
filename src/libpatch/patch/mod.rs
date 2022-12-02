@@ -674,16 +674,27 @@ impl<'a> TextFilePatch<'a> {
                 self.apply_delete(modified_file, direction, fuzz, apply_mode),
         };
 
-        // Set new mode to the file, if there is any
-        let change_permissions_to = match (apply_mode, direction) {
-            (ApplyMode::Rollback(report), _) => &report.previous_permissions,
-            (ApplyMode::Normal, PatchDirection::Forward) => &self.new_permissions,
-            (ApplyMode::Normal, PatchDirection::Revert) => &self.old_permissions,
-        };
-        report.previous_permissions = if let Some(change_permissions_to) = change_permissions_to {
-            modified_file.permissions.replace(change_permissions_to.clone())
-        } else {
-            modified_file.permissions.clone()
+        // Determine the new file mode and record the previous one
+        report.previous_permissions = match apply_mode {
+            ApplyMode::Rollback(previous_report) => {
+                let permissions = &previous_report.previous_permissions;
+                modified_file.permissions = permissions.clone();
+                permissions.clone()
+            }
+
+            ApplyMode::Normal => {
+                let change_permissions_to = match direction {
+                    PatchDirection::Forward => &self.new_permissions,
+                    PatchDirection::Revert => &self.old_permissions,
+                };
+                match change_permissions_to {
+                    Some(permissions) =>
+                        modified_file.permissions.replace(permissions.clone()),
+
+                    None =>
+                        modified_file.permissions.clone(),
+                }
+            }
         };
 
         report
