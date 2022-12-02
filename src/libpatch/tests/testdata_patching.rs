@@ -52,7 +52,7 @@ fn all_files() -> Result<(), Error> {
         // Note: In this case we always expect the old_filename to exist, so we
         //       select it directly.
         let file = fs::read(path.with_file_name(file_patch.old_filename().expect("old_filename missing!").as_ref()))?;
-        let mut modified_file = ModifiedFile::new(&file, true);
+        let mut modified_file = ModifiedFile::new(&file, true, None);
 
         // Patch it
         let report = file_patch.apply(&mut modified_file, PatchDirection::Forward, fuzz, &AnalysisSet::default(), &fn_analysis_note_noop);

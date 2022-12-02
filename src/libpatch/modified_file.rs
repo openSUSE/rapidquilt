@@ -32,7 +32,7 @@ const AVG_LINE_LENGTH: usize = 30; // Heuristics, for initial estimation of line
 
 impl<'arena> ModifiedFile<'arena> {
     /// Create new `ModifiedFile` with lines from given `bytes`.
-    pub fn new(bytes: &'arena [u8], existed: bool) -> Self {
+    pub fn new(bytes: &'arena [u8], existed: bool, permissions: Option<Permissions>) -> Self {
         let mut content = Vec::with_capacity(bytes.len() / AVG_LINE_LENGTH);
 
         content.extend(
@@ -43,7 +43,7 @@ impl<'arena> ModifiedFile<'arena> {
             content,
             deleted: false,
             existed,
-            permissions: None,
+            permissions,
         }
     }
 

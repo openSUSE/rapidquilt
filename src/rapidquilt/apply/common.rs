@@ -223,8 +223,12 @@ impl<'arena, 'config> ModifiedFiles<'arena, 'config> {
             Entry::Occupied(entry) => entry.into_mut(),
 
             Entry::Vacant(entry) => {
-                match arena.load_file(&config.base_dir.join(filename)) {
-                    Ok(data) => entry.insert(ModifiedFile::new(&data, true)),
+                let real_path = config.base_dir.join(filename);
+                match arena.load_file(&real_path) {
+                    Ok(data) => {
+                        let meta = std::fs::metadata(real_path)?;
+                        entry.insert(ModifiedFile::new(&data, true, Some(meta.permissions())))
+                    }
 
                     // If the file doesn't exist, make empty one.
                     Err(ref error) if error.kind() == io::ErrorKind::NotFound =>
