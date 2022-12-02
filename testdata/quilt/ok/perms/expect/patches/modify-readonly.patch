@@ -1,0 +1,9 @@
+---
+ readonly |    2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/readonly
++++ b/readonly
+@@ -1 +1 @@
+-This file is read-only.
++This file is still read-only.
