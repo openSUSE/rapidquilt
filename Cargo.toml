@@ -34,7 +34,7 @@ memchr = { version = "2.2.0", features = ["libc"] }
 pathfinding = "1.1.12"
 rayon = "1.0.3"
 seahash = "3.0.6"
-smallvec = "0.6.9"
+smallvec = "0.6.14"
 strsim = "0.8.0"
 tempfile = "3"
 
