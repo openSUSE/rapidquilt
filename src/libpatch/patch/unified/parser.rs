@@ -1425,7 +1425,7 @@ fn offsetof<T>(container: &[T], slice: &[T]) -> usize
 fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
     -> Result<(&[u8], (&'a [u8], TextFilePatch<'a>)), ErrorBuilder>
 {
-    let mut input = bytes.clone();
+    let mut input = bytes;
     let mut header = &bytes[..0];
     let mut state = MetadataState::Normal;
     let mut extended_headers = false;
@@ -1992,7 +1992,7 @@ new mode 100755
 }
 
 pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, Error> {
-    let mut input = bytes.clone();
+    let mut input = bytes;
 
     let mut header = &bytes[..0];
     let mut file_patches = Vec::<TextFilePatch>::new();
