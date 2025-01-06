@@ -273,6 +273,24 @@ impl<'arena, 'config> ModifiedFiles<'arena, 'config> {
     }
 }
 
+/// Create a file with given permissions, removing existing file if necessary
+pub fn create_file(filename: &PathBuf, permissions: &Option<fs::Permissions>)
+		   -> Result<File, io::Error>
+{
+    let f = match File::create(filename) {
+	Ok(file) => file,
+	Err(error) if error.kind() == io::ErrorKind::PermissionDenied => {
+	    fs::remove_file(filename)?;
+	    File::create(filename)?
+	}
+        Err(error) => return Err(error),
+    };
+    if let Some(ref permissions) = permissions {
+	f.set_permissions(permissions.clone())?;
+    }
+    Ok(f)
+}
+
 /// Write the `original_file` as a quilt backup file.
 pub fn save_backup_file(config: &ApplyConfig,
                         patch_filename: &Path,
@@ -292,13 +310,8 @@ pub fn save_backup_file(config: &ApplyConfig,
     // NOTE(unwrap): We know that there is a parent; we built it ourselves.
     let path_parent = real_path.parent().unwrap();
     fs::create_dir_all(path_parent)
-        .and_then(|_| File::create(real_path))
-        .and_then(|mut f| {
-            if let Some(ref permissions) = original_file.permissions {
-                f.set_permissions(permissions.clone())?;
-            }
-            original_file.write_to(&mut f)
-        })
+        .and_then(|_| create_file(&real_path, &original_file.permissions))
+        .and_then(|mut f| original_file.write_to(&mut f))
         .with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
 
     Ok(())

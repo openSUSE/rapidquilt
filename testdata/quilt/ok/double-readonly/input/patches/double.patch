@@ -1,0 +1,27 @@
+Apply more than one patch to the same file.
+If the file is read-only, the backup must not be written repeatedly,
+because the backup is also made read-only after writing its content.
+
+See https://github.com/openSUSE/rapidquilt/issues/32
+---
+ target |    4 ++--
+ target |    2 +-
+ 2 files changed, 3 insertions(+), 3 deletions(-)
+
+--- a/target
++++ b/target
+@@ -1,4 +1,4 @@
+ This file
+ is going to be
+ patched
+-more than once.
++once more.
+--- a/target
++++ b/target
+@@ -1,4 +1,4 @@
+ This file
+-is going to be
++has been
+ patched
+-once more.
++more than once.
