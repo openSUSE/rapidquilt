@@ -2,7 +2,7 @@
 
 use std::env;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{self, BufRead, BufReader, BufWriter, Write, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::process;
 
@@ -322,7 +322,7 @@ pub fn run<A: IntoIterator>(args: A) -> Result<bool, Error> where A::Item: AsRef
         _ /* auto */ => {
             // Force it off if either of the outputs is not terminal. Otherwise leave on default,
             // which uses some env variables.
-            if atty::isnt(atty::Stream::Stdout) || atty::isnt(atty::Stream::Stderr) {
+            if !io::stdout().is_terminal() || !io::stderr().is_terminal() {
                 colored::control::set_override(false);
             }
         }
