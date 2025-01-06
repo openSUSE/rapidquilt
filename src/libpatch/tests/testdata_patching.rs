@@ -27,7 +27,7 @@ fn all_files() -> Result<(), Error> {
         // Load and parse the patch
         let patch_data = fs::read(&path)?;
         let strip = 0;
-        let mut patch = parse_patch(&patch_data, strip, true)?;
+        let patch = parse_patch(&patch_data, strip, true)?;
 
         // Parse our special headers
         let mut fuzz = 0;
@@ -45,8 +45,7 @@ fn all_files() -> Result<(), Error> {
         if patch.file_patches.len() != 1 {
             panic!("Test patch {} is for {} files, expected exactly one!", path.display(), patch.file_patches.len());
         }
-        let file_patch = patch.file_patches.pop().unwrap();
-        std::mem::drop(patch); // XXX: Not sure why I have to drop manually here, but otherwise I get strange borrow check error.
+        let file_patch = &patch.file_patches[0];
 
         // Load the target file
         // Note: In this case we always expect the old_filename to exist, so we
