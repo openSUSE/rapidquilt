@@ -24,7 +24,7 @@ path = "src/rapidquilt/main.rs"
 [dependencies]
 colored = "1.7.0"
 derive_builder = "0.7.1"
-failure = "0.1.5"
+failure = "0.1.8"
 getopts = "0.2.18"
 itertools = "0.8.0"
 jemallocator = "0.1.9"
