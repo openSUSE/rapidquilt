@@ -3,7 +3,7 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use failure::Fail;
+use thiserror::Error;
 
 pub mod sequential;
 pub mod parallel;
@@ -72,20 +72,20 @@ pub struct ApplyResult {
     pub skipped_patches: usize,
 }
 
-#[derive(Debug, Fail)]
+#[derive(Debug, Error)]
 pub enum ApplyError {
-    #[fail(display = "Failed to load patch {:?}", patch_filename)]
+    #[error("Failed to load patch {patch_filename:?}")]
     PatchLoad { patch_filename: PathBuf },
 
-    #[fail(display = "Failed to load file for patching: {:?}", filename)]
+    #[error("Failed to load file for patching: {filename:?}")]
     LoadFileToPatch { filename: PathBuf },
 
-    #[fail(display = "Failed to save modified file: {:?}", filename)]
+    #[error("Failed to save modified file: {filename:?}")]
     SaveModifiedFile { filename: PathBuf },
 
-    #[fail(display = "Failed to save rejects file: {:?}", filename)]
+    #[error("Failed to save rejects file: {filename:?}")]
     SaveRejectFile { filename: PathBuf },
 
-    #[fail(display = "Failed to save quilt backup file: {:?}", filename)]
+    #[error("Failed to save quilt backup file: {filename:?}")]
     SaveQuiltBackupFile { filename: PathBuf },
 }
