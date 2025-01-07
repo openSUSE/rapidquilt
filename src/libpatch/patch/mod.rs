@@ -314,10 +314,10 @@ fn try_apply_hunk<'a, 'hunk>(
         // backwards for a set of lines matching the context given in the hunk."
 
         let mut best_target_line: Option<isize> = None;
-            let forward_indexes = (target_line + 1)..=(modified_file.content.len() as isize - remove_content.len() as isize);
-            let backward_indexes = (0..target_line).rev();
-            for possible_target_line in forward_indexes.interleave(backward_indexes) { // It is important that `forward_indexes` go first! E.g. offset +5 should be selected over -5.
-                if matches(&remove_content, &modified_file.content, possible_target_line) {
+        let forward_indexes = (target_line + 1)..=(modified_file.content.len() as isize - remove_content.len() as isize);
+        let backward_indexes = (0..target_line).rev();
+        for possible_target_line in forward_indexes.interleave(backward_indexes) { // It is important that `forward_indexes` go first! E.g. offset +5 should be selected over -5.
+            if matches(&remove_content, &modified_file.content, possible_target_line) {
                 best_target_line = Some(possible_target_line);
                 break;
             }
