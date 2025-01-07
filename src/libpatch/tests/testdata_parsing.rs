@@ -3,7 +3,7 @@ use std::io::{BufReader, BufRead, Write};
 use std::path::Path;
 use std::vec::Vec;
 
-use failure::{Error, ResultExt};
+use anyhow::{Context, Result};
 
 use crate::patch::TextPatch;
 use crate::patch::unified::parser::{parse_patch, ParseError};
@@ -11,12 +11,12 @@ use crate::patch::unified::writer::UnifiedPatchWriter;
 
 
 #[cfg(test)]
-fn compare_output<'a>(path: &Path, patch: TextPatch<'a>) -> Result<(), Error> {
+fn compare_output<'a>(path: &Path, patch: TextPatch<'a>) -> Result<()> {
     let mut output = Vec::<u8>::new();
     patch.write_to(&mut output)?;
 
     let expected_output = fs::read(path.with_extension("patch-expected"))
-        .with_context(|_| "Patch parsed ok, but test could not open \"*.patch-expected\" file".to_string())?;
+        .with_context(|| "Patch parsed ok, but test could not open \"*.patch-expected\" file")?;
 
     if output != expected_output {
         let stderr = std::io::stderr();
@@ -38,13 +38,13 @@ fn compare_output<'a>(path: &Path, patch: TextPatch<'a>) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-fn compare_error(path: &Path, error: ParseError) -> Result<(), Error> {
+fn compare_error(path: &Path, error: ParseError) -> Result<()> {
     use std::fmt::Write;
     let mut error_str = String::new();
     write!(error_str, "{:?}\n{}", error, error)?;
 
     let file = File::open(path.with_extension("error"))
-        .with_context(|_| "Patch failed to parse, but test could not open \"*.error\" file".to_string())?;
+        .with_context(|| "Patch failed to parse, but test could not open \"*.error\" file")?;
     let reader = BufReader::new(file);
     let expected_error = reader.lines().next().unwrap()?;
 
@@ -57,7 +57,7 @@ fn compare_error(path: &Path, error: ParseError) -> Result<(), Error> {
 
 #[cfg(test)]
 #[test]
-fn all_files() -> Result<(), Error> {
+fn all_files() -> Result<()> {
     for entry in fs::read_dir("testdata/parsing")? {
         let entry = entry?;
         let path = entry.path();
