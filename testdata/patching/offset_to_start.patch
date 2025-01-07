@@ -1,0 +1,15 @@
+Move a hunk to the start of the file with a negative offset.
+
+Make sure that the offset bounds are set correctly and allow moving the hunk
+up to the very beginning of the file.
+--- file4.in    2019-01-29 14:25:32.384682572 +0100
++++ offset_to_start.out   2025-01-07 17:05:09.973739126 +0100
+@@ -40,7 +40,7 @@
+ aaa
+ bbb
+ ccc
+-0000
++ddd
+ 1111
+ 2222
+ 3333
