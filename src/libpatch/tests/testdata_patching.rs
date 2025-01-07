@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::vec::Vec;
 
-use failure::Error;
+use anyhow::Result;
 
 use crate::analysis::{AnalysisSet, fn_analysis_note_noop};
 use crate::modified_file::ModifiedFile;
@@ -12,7 +12,7 @@ use crate::patch::unified::parser::parse_patch;
 
 #[cfg(test)]
 #[test]
-fn all_files() -> Result<(), Error> {
+fn all_files() -> Result<()> {
     for entry in fs::read_dir("testdata/patching")? {
         // Skip everything that doesn't end with ".patch"
         let entry = entry?;
