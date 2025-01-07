@@ -227,14 +227,14 @@ pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
 ///
 /// `last_hunk_offset`: the offset on which the previous hunk applied
 ///
-/// `last_frozen_line`: last line that was modified by previous hunk. We must not edit anything before that line.
+/// `min_modify_line`: first line that can be modified by a new hunk, i.e. first that is not modified by a previous hunk.
 fn try_apply_hunk<'a, 'hunk>(
     hunk_view: &TextHunkView<'a, 'hunk>,
     my_index: usize,
     modified_file: &ModifiedFile,
     apply_mode: ApplyMode,
     last_hunk_offset: isize,
-    last_frozen_line: isize)
+    min_modify_line: isize)
     -> HunkApplyReport
 {
     // If the file doesn't exist, fail immediatelly
@@ -333,7 +333,7 @@ fn try_apply_hunk<'a, 'hunk>(
 
     if let ApplyMode::Normal = apply_mode {
         // Check if we are not modifying frozen content
-        if target_line + hunk_view.prefix_context() as isize <= last_frozen_line {
+        if target_line + (hunk_view.prefix_context() as isize) < min_modify_line {
             return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
         }
     }
@@ -790,7 +790,7 @@ impl<'a> TextFilePatch<'a> {
         // don't accept more patches than patch. After all, if we accept hunks in arbitrary order,
         // it is not well defined if they should match against the file before or after
         // modifications from the previous hunks.
-        let mut last_frozen_line = -1isize;
+        let mut min_modify_line = 0isize;
 
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
@@ -825,14 +825,14 @@ impl<'a> TextFilePatch<'a> {
 
                 hunk_report = try_apply_hunk(hunk_view, i, modified_file,
                                              apply_mode, last_hunk_offset,
-                                             last_frozen_line);
+                                             min_modify_line);
 
                 // If it succeeded, we are done with this hunk, remember the last_hunk_offset
-                // and last_frozen_line, so we can use them for the next hunk and do not try
+                // and min_modify_line, so we can use them for the next hunk and do not try
                 // any more fuzz levels.
                 if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
                     last_hunk_offset = offset;
-                    last_frozen_line = line + hunk_view.remove_content().len() as isize - hunk_view.suffix_context() as isize;
+                    min_modify_line = line + hunk_view.remove_content().len() as isize - hunk_view.suffix_context() as isize;
                     break;
                 }
             }
