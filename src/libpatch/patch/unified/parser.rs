@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::vec::Vec;
 
-use failure::Fail;
+use thiserror::Error;
 
 use crate::patch::*;
 use crate::patch::unified::*;
@@ -60,39 +60,39 @@ fn error_sequence(input: &[u8]) -> String {
     String::from_utf8_lossy(input.get(..index).unwrap_or(&input[..])).into()
 }
 
-#[derive(Debug, Fail, PartialEq)]
+#[derive(Debug, Error, PartialEq)]
 pub enum ParseError {
-    #[fail(display = "Unsupported metadata: \"{}\"", 0)]
+    #[error("Unsupported metadata: \"{0}\"")]
     UnsupportedMetadata(String),
 
-    #[fail(display = "Could not figure out the filename for hunk \"{}\"", 0)]
+    #[error("Could not figure out the filename for hunk \"{0}\"")]
     MissingFilenameForHunk(String),
 
-    #[fail(display = "Unexpected end of line: {}", 0)]
+    #[error("Unexpected end of line: {0}")]
     UnexpectedEndOfLine(String),
 
-    #[fail(display = "Unexpected end of file")]
+    #[error("Unexpected end of file")]
     UnexpectedEndOfFile,
 
-    #[fail(display = "Malformed hunk header: \"{}\"", 0)]
+    #[error("Malformed hunk header: \"{0}\"")]
     BadHunkHeader(String),
 
-    #[fail(display = "Unexpected line in the middle of hunk: \"{}\"", 0)]
+    #[error("Unexpected line in the middle of hunk: \"{0}\"")]
     BadLineInHunk(String),
 
-    #[fail(display = "Number too big: \"{}\"", 0)]
+    #[error("Number too big: \"{0}\"")]
     NumberTooBig(String),
 
-    #[fail(display = "Invalid number: \"{}\"", 0)]
+    #[error("Invalid number: \"{0}\"")]
     BadNumber(String),
 
-    #[fail(display = "Invalid mode: \"{}\"", 0)]
+    #[error("Invalid mode: \"{0}\"")]
     BadMode(String),
 
-    #[fail(display = "Invalid escape sequence: \"{}\"", 0)]
+    #[error("Invalid escape sequence: \"{0}\"")]
     BadSequence(String),
 
-    #[fail(display = "Invalid object hash: \"{}\"", 0)]
+    #[error("Invalid object hash: \"{0}\"")]
     BadHash(String),
 }
 
