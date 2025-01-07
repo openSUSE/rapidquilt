@@ -6,7 +6,7 @@ use std::vec::Vec;
 use failure::{Error, ResultExt};
 
 use crate::patch::TextPatch;
-use crate::patch::unified::parser::parse_patch;
+use crate::patch::unified::parser::{parse_patch, ParseError};
 use crate::patch::unified::writer::UnifiedPatchWriter;
 
 
@@ -38,7 +38,7 @@ fn compare_output<'a>(path: &Path, patch: TextPatch<'a>) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-fn compare_error(path: &Path, error: Error) -> Result<(), Error> {
+fn compare_error(path: &Path, error: ParseError) -> Result<(), Error> {
     use std::fmt::Write;
     let mut error_str = String::new();
     write!(error_str, "{:?}\n{}", error, error)?;

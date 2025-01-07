@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::vec::Vec;
 
-use failure::{Error, Fail};
+use failure::Fail;
 
 use crate::patch::*;
 use crate::patch::unified::*;
@@ -1991,7 +1991,7 @@ new mode 100755
     assert_eq!(file_patch.hunks.len(), 0);
 }
 
-pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, Error> {
+pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, ParseError> {
     let mut input = bytes;
 
     let mut header = &bytes[..0];
@@ -2008,7 +2008,7 @@ pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result
 
             // Actual error
             Err(err) => {
-                return Err(Error::from(ParseError::from(err)));
+                return Err(ParseError::from(err));
             }
         };
 
