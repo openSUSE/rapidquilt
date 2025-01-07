@@ -247,7 +247,7 @@ fn try_apply_hunk<'a, 'hunk>(
     let add_content = hunk_view.add_content();
 
     // Determine the target line.
-    let mut target_line = match apply_mode {
+    let target_line = match apply_mode {
         // In normal mode, pick what is in the hunk
         ApplyMode::Normal => match hunk_view.position() {
             HunkPosition::Start => hunk_view.remove_target_line(),
@@ -324,14 +324,12 @@ fn try_apply_hunk<'a, 'hunk>(
     }
 
     // Did we find the line or not?
-    match best_target_line {
-        Some(new_target_line) => {
-            target_line = new_target_line;
-        },
+    let target_line = match best_target_line {
+        Some(new_target_line) => new_target_line,
         None => {
             return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
         }
-    }
+    };
 
     if let ApplyMode::Normal = apply_mode {
         // Check if we are not modifying frozen content
