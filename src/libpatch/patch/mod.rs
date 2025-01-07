@@ -292,45 +292,44 @@ fn try_apply_hunk<'a, 'hunk>(
         &haystack[at..(at + needle.len())] == needle
     }
 
-    // Check if the part we want to remove is at the originally intended target_line
-    if !matches(&remove_content, &modified_file.content, target_line) {
-        // It is not on the indended target_line...
+    // man patch (continuation):
+    // "If that is not the correct place, patch scans both forwards and
+    // backwards for a set of lines matching the context given in the hunk."
+    let mut best_target_line: Option<isize> = None;
+    let (min_line, max_line) =
+	if let ApplyMode::Rollback(_) = apply_mode {
+            // If we are in rollback mode, the hunk must match with zero offset.
+	    (target_line, target_line)
+	} else if hunk_view.position() != HunkPosition::Middle {
+            // Only hunks that are intended for somewhere in the middle of the code
+            // can be applied somewhere else based on context. I.e. if the hunk is
+            // targeting the start or the end of the file and it did not match, we
+            // can not try to find any better offset.
+	    (target_line, target_line)
+	} else {
+	    (0, modified_file.content.len() as isize - remove_content.len() as isize)
+	};
+    let backward_targets = (min_line..=target_line).rev();
+    let forward_targets = (target_line+1)..=max_line;
 
-        // If we are in rollback mode, we are in big trouble. Fail early.
-        if let ApplyMode::Rollback(_) = apply_mode {
+    // It is important that `backward_targets` go first!
+    // The intended target line (zero offset) is part of `backward_targets`,
+    // so that a positive offset in `forward_targets` (e.g. +5) is tried
+    // before the corresponding negative offsets (e.g. -5).
+    for possible_target_line in backward_targets.interleave(forward_targets) {
+        if matches(&remove_content, &modified_file.content, possible_target_line) {
+            best_target_line = Some(possible_target_line);
+            break;
+        }
+    }
+
+    // Did we find the line or not?
+    match best_target_line {
+        Some(new_target_line) => {
+            target_line = new_target_line;
+        },
+        None => {
             return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-        }
-
-        // Only hunks that are intended for somewhere in the middle of the code
-        // can be applied somewhere else based on context. I.e. if the hunk is
-        // targeting the start or the end of the file and it did not match, we
-        // can not try to find any better offset.
-        if hunk_view.position() != HunkPosition::Middle {
-            return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-        }
-
-        // man patch (continuation):
-        // "If that is not the correct place, patch scans both forwards and
-        // backwards for a set of lines matching the context given in the hunk."
-
-        let mut best_target_line: Option<isize> = None;
-        let forward_indexes = (target_line + 1)..=(modified_file.content.len() as isize - remove_content.len() as isize);
-        let backward_indexes = (0..target_line).rev();
-        for possible_target_line in forward_indexes.interleave(backward_indexes) { // It is important that `forward_indexes` go first! E.g. offset +5 should be selected over -5.
-            if matches(&remove_content, &modified_file.content, possible_target_line) {
-                best_target_line = Some(possible_target_line);
-                break;
-            }
-        }
-
-        // Did we find the line or not?
-        match best_target_line {
-            Some(new_target_line) => {
-                target_line = new_target_line;
-            },
-            None => {
-                return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-            }
         }
     }
 
