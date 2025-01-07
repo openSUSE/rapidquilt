@@ -854,8 +854,10 @@ impl<'a> TextFilePatch<'a> {
                     let hunk_view = hunk.view(direction, *fuzz);
                     let target_line = *line + modification_offset;
                     *rollback_line = target_line;
-                    let range = (target_line as usize)..(target_line as usize + hunk_view.remove_content().len());
-                    modified_file.content.splice(range.clone(), hunk_view.add_content().iter().cloned()); // Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
+		    let prefix_len = hunk_view.prefix_context();
+		    let suffix_len = hunk_view.suffix_context();
+                    let range = (target_line as usize + prefix_len)..(target_line as usize + hunk_view.remove_content().len() - suffix_len);
+                    modified_file.content.splice(range.clone(), hunk_view.add_content()[prefix_len..(hunk_view.add_content().len() - suffix_len)].iter().cloned()); // Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
 
                     modification_offset += *line_count_diff;
                 }

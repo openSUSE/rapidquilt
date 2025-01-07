@@ -1,0 +1,33 @@
+Leading context overlaps previously modified content.
+
+This is accepted by GNU patch, and the context in all hunks must match the
+original file content.
+--- file.in	2019-01-16 15:02:37.016021405 +0100
++++ hunks_overlapping_modified.out	2019-01-16 15:03:08.724512747 +0100
+@@ -1,7 +1,7 @@
+ aaa
+ bbb
+ ccc
+-ddd
++ddd modified
+ eee
+ fff
+ ggg
+@@ -2,7 +2,7 @@
+ bbb
+ ccc
+ ddd
+-eee
++eee modified
+ fff
+ ggg
+ hhh
+@@ -4,7 +4,7 @@
+ ddd
+ eee
+ fff
+-ggg
++ggg modified
+ hhh
+ iii
+ jjj
