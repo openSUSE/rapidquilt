@@ -19,7 +19,7 @@ use colored::*;
 fn main() {
     match cmd::run(env::args_os().skip(1)) {
         Err(err) => {
-            for (i, cause) in err.iter_chain().enumerate() {
+            for (i, cause) in err.chain().enumerate() {
                 eprintln!("{}{}", "  ".repeat(i), format!("{}", cause).red());
             }
 

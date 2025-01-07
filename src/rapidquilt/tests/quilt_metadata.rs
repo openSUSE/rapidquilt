@@ -5,10 +5,10 @@ use std::fs;
 use std::ffi::OsStr;
 use std::path::Path;
 use std::io::{Read, ErrorKind};
-use failure::{Error, ResultExt, err_msg};
+use anyhow::{anyhow, Context, Result};
 
 #[cfg(test)]
-fn copy_tree(from: &Path, to: &Path) -> Result<(), Error> {
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     for entry in fs::read_dir(from).context(format!("Copying {:?}", from))? {
         let entry = entry?;
         let src_path = entry.path();
@@ -26,7 +26,7 @@ fn copy_tree(from: &Path, to: &Path) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
+fn compare_tree(src: &Path, dst: &Path) -> Result<()> {
     for entry in fs::read_dir(src).context(format!("Reading {:?}", src))? {
         let entry = entry?;
         let src_path = entry.path();
@@ -71,7 +71,7 @@ fn compare_tree(src: &Path, dst: &Path) -> Result<(), Error> {
 }
 
 #[cfg(test)]
-fn check_extra_files(src: &Path, dst: &Path) -> Result<(), Error> {
+fn check_extra_files(src: &Path, dst: &Path) -> Result<()> {
     let mut errors = Vec::<String>::new();
     for entry in fs::read_dir(dst).context(format!("Reading {:?}", dst))? {
         let entry = entry?;
@@ -85,12 +85,12 @@ fn check_extra_files(src: &Path, dst: &Path) -> Result<(), Error> {
     }
     match errors.len() {
         0 => Ok(()),
-        _ => Err(err_msg(errors.join("\n"))),
+        _ => Err(anyhow!(errors.join("\n"))),
     }
 }
 
 #[cfg(test)]
-fn push_all(path: &Path, num_threads: usize, expect: bool) -> Result<(), Error> {
+fn push_all(path: &Path, num_threads: usize, expect: bool) -> Result<()> {
     eprintln!("Push all patches in {}", path.display());
 
     let work_dir = tempfile::tempdir()?;
@@ -113,7 +113,7 @@ fn push_all(path: &Path, num_threads: usize, expect: bool) -> Result<(), Error> 
             compare_tree(&path.join("expect"), &work_path)?;
             check_extra_files(&path.join("expect"), &work_path)
         },
-        Ok(_) => Err(err_msg(match expect {
+        Ok(_) => Err(anyhow!(match expect {
             true => "Push failed unexpectedly",
             false => "Push was expected to fail but it did not",
         })),
@@ -122,14 +122,14 @@ fn push_all(path: &Path, num_threads: usize, expect: bool) -> Result<(), Error> 
 }
 
 #[cfg(test)]
-fn check_series(path: &str, num_threads: usize, expect: bool) -> Result<(), Error> {
+fn check_series(path: &str, num_threads: usize, expect: bool) -> Result<()> {
     let dir = fs::read_dir(path);
     match dir {
         Ok(dir) => {
             for entry in dir {
                 let entry = entry?;
                 if let Err(err) = push_all(&entry.path(), num_threads, expect) {
-                    for fail in err.iter_chain() {
+                    for fail in err.chain() {
                         eprintln!("{}", fail);
                     }
                     panic!("Push all failed for {:?}", entry.file_name());
@@ -138,19 +138,19 @@ fn check_series(path: &str, num_threads: usize, expect: bool) -> Result<(), Erro
             Ok(())
         },
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(Error::from(err)),
+        Err(err) => Err(err.into()),
     }
 }
 
 #[cfg(test)]
 #[test]
-fn ok_series_sequential() -> Result<(), Error> {
+fn ok_series_sequential() -> Result<()> {
     check_series("testdata/quilt/ok", 1, true)
 }
 
 #[cfg(test)]
 #[test]
-fn fail_series_sequential() -> Result<(), Error> {
+fn fail_series_sequential() -> Result<()> {
     check_series("testdata/quilt/fail", 1, false)
 }
 
@@ -159,12 +159,12 @@ const NUM_THREADS: usize = 2;
 
 #[cfg(test)]
 #[test]
-fn ok_series_parallel() -> Result<(), Error> {
+fn ok_series_parallel() -> Result<()> {
     check_series("testdata/quilt/ok", NUM_THREADS, true)
 }
 
 #[cfg(test)]
 #[test]
-fn fail_series_parallel() -> Result<(), Error> {
+fn fail_series_parallel() -> Result<()> {
     check_series("testdata/quilt/fail", NUM_THREADS, false)
 }

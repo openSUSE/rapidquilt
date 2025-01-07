@@ -56,7 +56,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use colored::*;
-use failure::{Error, ResultExt};
+use anyhow::{Context, Error, Result};
 use seahash;
 use rayon;
 use rayon::iter::{
@@ -160,7 +160,7 @@ fn apply_worker<'arena, 'config>(
     thread_file_patches: Vec<(usize, TextFilePatch<'arena>)>,
     earliest_broken_patch_index: &AtomicUsize,
     analyses: &AnalysisSet)
-    -> Result<AppliedState<'arena, 'config>, Error>
+    -> Result<AppliedState<'arena, 'config>>
 {
     let mut state = AppliedState::new(config, thread_file_patches.len());
 
@@ -235,7 +235,7 @@ fn save_files_worker<'arena> (
     shared: &SharedState,
     mut state: AppliedState,
     final_patch: usize)
-    -> Result<WorkerReport, Error>
+    -> Result<WorkerReport>
 {
     // Rollback if there is anything to rollback
     while let Some(applied_patch) = state.applied_patches.last() {
@@ -295,7 +295,7 @@ fn save_files_worker<'arena> (
 
 /// Apply all patches from the `config` in parallel
 pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
-    -> Result<ApplyResult, Error>
+    -> Result<ApplyResult>
 {
     let threads = rayon::current_num_threads();
 
@@ -308,7 +308,7 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     }
 
     // Load all patches multi-threaded using rayon's parallel iterator.
-    let mut text_patches: Vec<_> = config.series_patches.par_iter().map(|series_patch| -> Result<_, Error> {
+    let mut text_patches: Vec<_> = config.series_patches.par_iter().map(|series_patch| -> Result<_> {
         if config.verbosity >= Verbosity::ExtraVerbose {
             // This will fight for stdout lock. But that's expected in ExtraVerbose mode...
             println!("Parsing patch: {:?}", series_patch.filename);
@@ -364,7 +364,7 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
         config.series_patches.len() / threads * 11 / 10 // Heuristic, we expect mostly equal distribution with max 10% extra per thread.
     ); threads];
     for (index, text_patch) in text_patches.drain(..).enumerate() {
-        let mut text_patch = text_patch.with_context(|_| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
+        let mut text_patch = text_patch.with_context(|| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
         for text_file_patch in text_patch.file_patches.drain(..) {
             // Note that we can dispatch by `old_filename` or `new_filename`, we

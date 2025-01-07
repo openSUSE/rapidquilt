@@ -12,7 +12,7 @@ use std::hash::BuildHasher;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
-use failure::{Error, ResultExt};
+use anyhow::{Context, Result};
 use seahash;
 
 use libpatch::analysis::{AnalysisSet, Note};
@@ -199,11 +199,11 @@ impl<'arena, 'config> ModifiedFiles<'arena, 'config> {
     pub fn save<H: BuildHasher>(
         &self,
         directories_for_cleaning: &mut HashSet<Cow<'arena, Path>, H>)
-        -> Result<(), Error>
+        -> Result<()>
     {
         for (filename, file) in self.iter() {
             save_modified_file(self.config, filename, file, directories_for_cleaning)
-                .with_context(|_| ApplyError::SaveModifiedFile { filename: filename.to_path_buf() })?;
+                .with_context(|| ApplyError::SaveModifiedFile { filename: filename.to_path_buf() })?;
         }
 
         Ok(())
@@ -296,7 +296,7 @@ pub fn save_backup_file(config: &ApplyConfig,
                         patch_filename: &Path,
                         filename: &Path,
                         original_file: &ModifiedFile)
-                        -> Result<(), Error>
+                        -> Result<()>
 {
     let mut path = PathBuf::from(".pc");
     path.push(patch_filename);
@@ -312,7 +312,7 @@ pub fn save_backup_file(config: &ApplyConfig,
     fs::create_dir_all(path_parent)
         .and_then(|_| create_file(&real_path, &original_file.permissions))
         .and_then(|mut f| original_file.write_to(&mut f))
-        .with_context(|_| ApplyError::SaveQuiltBackupFile { filename: path })?;
+        .with_context(|| ApplyError::SaveQuiltBackupFile { filename: path })?;
 
     Ok(())
 }
@@ -445,7 +445,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
         arena: &'arena dyn Arena,
         analyses: &AnalysisSet,
         fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
-        -> Result<bool, Error>
+        -> Result<bool>
     {
         let config = self.config;
         let patch = &config.series_patches[index];
@@ -453,7 +453,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
         // Get the file to patch
         let target_filename = choose_filename_to_patch(config, file_patch.old_filename(), file_patch.new_filename(), &self.modified_files).clone();
         let file = self.modified_files.get_or_load(&target_filename, arena)
-            .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
+            .with_context(|| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
 
         // If the patch renames the file. do it now...
         let (mut file, final_filename) = if file_patch.is_rename() {
@@ -472,7 +472,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
             let mut tmp_file = file.move_out();
 
             let new_file = self.modified_files.get_or_load(new_filename, arena)
-                .with_context(|_| ApplyError::LoadFileToPatch { filename: new_filename.to_path_buf() })?;
+                .with_context(|| ApplyError::LoadFileToPatch { filename: new_filename.to_path_buf() })?;
 
             if !new_file.move_in(&mut tmp_file) {
                 // Regular patch will just happily overwrite existing file if there is any...
@@ -486,7 +486,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
 
                 // Put the content back to the old file.
                 let file = self.modified_files.get_or_load(&target_filename, arena)
-                    .with_context(|_| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
+                    .with_context(|| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
                 file.move_in(&mut tmp_file);
 
                 // Note that we don't place anything into applied_patches - the patch
@@ -532,7 +532,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
     pub fn rollback_and_save_rej_files(
         &mut self,
         rejected_patch_index: usize)
-        -> Result<(), Error>
+        -> Result<()>
     {
         let config = self.config;
         while let Some(applied_patch) = self.applied_patches.last() {
@@ -576,7 +576,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
                 let mut writer = BufWriter::new(file);
 
                 applied_patch.file_patch.write_rej_to(&mut writer, &applied_patch.report).
-                    with_context(|_| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
+                    with_context(|| ApplyError::SaveRejectFile { filename: rej_filename.clone() })?;
             }
 
             self.applied_patches.pop();
@@ -590,7 +590,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
     pub fn rollback_and_save_backup_files(
         &mut self,
         down_to_index: usize)
-        -> Result<(), Error>
+        -> Result<()>
     {
         let config = self.config;
         for applied_patch in self.applied_patches.iter().rev() {

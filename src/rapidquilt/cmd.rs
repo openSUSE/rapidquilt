@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process;
 
 use colored::*;
-use failure::{Error, ResultExt, format_err};
+use anyhow::{bail, Context, Result};
 use getopts::{Matches, Options};
 use std::ffi::OsStr;
 
@@ -57,7 +57,7 @@ fn version() -> ! {
     process::exit(0);
 }
 
-fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, Error> {
+fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>> {
     let mut patch_opts = Options::new();
     patch_opts.optopt("p", "strip", "Strip this many directories in paths of patched files.", "<n>");
     patch_opts.optflag("R", "reverse", "Reverse the patch direction.");
@@ -83,7 +83,7 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, 
                             None => Ok(SeriesPatch { filename, strip: DEFAULT_PATCH_STRIP, reverse: false }),
                             //There are some options, so parse them
                             Some(_) => patch_opts.parse(parts)
-                                .with_context(|_| format!("Parsing patch options for \"{}\"", filename.display()))
+                                .with_context(|| format!("Parsing patch options for \"{}\"", filename.display()))
                                 .map_err(|err| err.into())
                                 .map(|matches| {
                                     let strip = matches.opt_str("strip")
@@ -99,7 +99,7 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>, 
         }).collect()
 }
 
-fn save_applied_patches(config: &ApplyConfig, applied_patches: &[SeriesPatch]) -> Result<(), Error> {
+fn save_applied_patches(config: &ApplyConfig, applied_patches: &[SeriesPatch]) -> Result<()> {
     let quilt_pc = config.base_dir.join(".pc");
     fs::create_dir_all(&quilt_pc)?;
     let mut file_applied_patches = BufWriter::new(fs::OpenOptions::new().create(true).append(true).open(quilt_pc.join("applied-patches"))?);
@@ -116,7 +116,7 @@ enum PushGoal {
 }
 
 /// Returns true if all patches were applied, false if only some, and error if there was error.
-fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args: F, verbosity: Verbosity) -> Result<bool, Error>
+fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args: F, verbosity: Verbosity) -> Result<bool>
 {
     // Parse "push" specific arguments
     let base_dir = matches.opt_str("directory").unwrap_or_default();
@@ -127,7 +127,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         Some(ref s) if s == "onfail" => ApplyConfigDoBackups::OnFail,
         Some(ref s) if s == "never"  => ApplyConfigDoBackups::Never,
         None                         => ApplyConfigDoBackups::OnFail,
-        _ => return Err(format_err!("Bad value given to \"backup\" parameter!")),
+        _ => bail!("Bad value given to \"backup\" parameter!"),
     };
 
     let backup_count = match matches.opt_str("backup-count") {
@@ -168,13 +168,13 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
 
     // Process series file
     let series_patches = read_series_file(base_dir.join("series"))
-        .with_context(|_| "When reading \"series\" file.")?;
+        .with_context(|| "When reading \"series\" file.")?;
 
     // Determine the last patch
     let first_patch = if let Ok(applied_patch_filenames) = read_series_file(base_dir.join(".pc/applied-patches")) {
         for (p1, p2) in series_patches.iter().zip(applied_patch_filenames.iter()) {
             if p1.filename != p2.filename {
-                return Err(format_err!("There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}", p1.filename.display(), p2.filename.display()));
+                bail!("There is mismatch in \"series\" and \".pc/applied-patches\" files! {} vs {}", p1.filename.display(), p2.filename.display());
             }
         }
         applied_patch_filenames.len()
@@ -195,11 +195,11 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         PushGoal::UpTo(patch_filename) => {
             if let Some(index) = series_patches.iter().position(|item| item.filename == patch_filename) {
                 if index < first_patch {
-                    return Err(format_err!("Patch already applied: {:?}", patch_filename));
+                    bail!("Patch already applied: {:?}", patch_filename);
                 }
                 index + 1
             } else {
-                return Err(format_err!("Patch not in series: {:?}", patch_filename));
+                bail!("Patch not in series: {:?}", patch_filename);
             }
         }
     };
@@ -224,7 +224,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
         if analysis_name.eq_ignore_ascii_case("multiapply") {
             analyses.add_default::<MultiApplyAnalysis>();
         } else {
-            return Err(format_err!("Unknown analysis \"{}\"", analysis_name));
+            bail!("Unknown analysis \"{}\"", analysis_name);
         }
     }
 
@@ -245,7 +245,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
 
     if !config.dry_run {
         save_applied_patches(&config, &config.series_patches[0..apply_result.applied_patches])
-            .with_context(|_| "When saving applied patches.")?;
+            .with_context(|| "When saving applied patches.")?;
     }
 
     Ok(apply_result.skipped_patches == 0)
@@ -278,7 +278,7 @@ fn build_arena(use_mmap: bool) -> Box<Arena> {
 // not stable yet.
 //
 // TODO: Use the `std::process::Termination` trait once it is stable.
-pub fn run<A: IntoIterator>(args: A) -> Result<bool, Error> where A::Item: AsRef<OsStr>
+pub fn run<A: IntoIterator>(args: A) -> Result<bool> where A::Item: AsRef<OsStr>
 {
     let mut opts = Options::new();
     opts.optflag("a", "all", "apply all patches in series");
@@ -318,7 +318,7 @@ pub fn run<A: IntoIterator>(args: A) -> Result<bool, Error> where A::Item: AsRef
     match matches.opt_str("color") {
         Some(ref s) if s == "always" => colored::control::set_override(true),
         Some(ref s) if s == "never" => colored::control::set_override(false),
-        Some(ref s) if s != "auto" => return Err(format_err!("Bad value given to \"color\" parameter!")),
+        Some(ref s) if s != "auto" => bail!("Bad value given to \"color\" parameter!"),
         _ /* auto */ => {
             // Force it off if either of the outputs is not terminal. Otherwise leave on default,
             // which uses some env variables.
