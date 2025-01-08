@@ -626,72 +626,31 @@ impl<'a> TextFilePatch<'a> {
                  fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
                  -> FilePatchApplyReport
     {
-        self.apply_internal(modified_file, direction, fuzz, ApplyMode::Normal, analyses, fn_analysis_note)
-    }
-
-    /// Rollback the application (or the revertion - based on direction) of this patch from the `modified_file`
-    /// using the information from the `apply_report`.
-    pub fn rollback(&self,
-                    modified_file: &mut ModifiedFile<'a>,
-                    direction: PatchDirection,
-                    apply_report: &FilePatchApplyReport)
-    {
-        assert!(self.hunks.len() == apply_report.hunk_reports().len());
-
-        let result = self.apply_internal(modified_file, direction.opposite(), 0, ApplyMode::Rollback(apply_report),
-                                         &AnalysisSet::default(), &fn_analysis_note_noop);
-
-        // Rollback must apply cleanly. If not, we have a bug somewhere.
-        if result.failed() {
-            panic!("Rapidquilt attempted to rollback a patch and that failed. This is a bug. Failure report: {:?}", result);
-        }
-    }
-
-    /// Internal function that does the function of both `apply` and `rollback`.
-    fn apply_internal(&self,
-                      modified_file: &mut ModifiedFile<'a>,
-                      direction: PatchDirection,
-                      fuzz: usize,
-                      apply_mode: ApplyMode,
-                      analyses: &AnalysisSet,
-                      fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
-                      -> FilePatchApplyReport
-    {
         // Call the appropriate specialized function
         let mut report = match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
-                self.apply_modify(modified_file, direction, fuzz, apply_mode, analyses, fn_analysis_note),
+                self.apply_modify(modified_file, direction, fuzz, ApplyMode::Normal, analyses, fn_analysis_note),
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
-                self.apply_create(modified_file, direction, fuzz, apply_mode),
+                self.apply_create(modified_file, direction, fuzz, ApplyMode::Normal),
 
             (FilePatchKind::Delete, PatchDirection::Forward) |
             (FilePatchKind::Create, PatchDirection::Revert) =>
-                self.apply_delete(modified_file, direction, fuzz, apply_mode),
+                self.apply_delete(modified_file, direction, fuzz, ApplyMode::Normal),
         };
 
         // Determine the new file mode and record the previous one
-        report.previous_permissions = match apply_mode {
-            ApplyMode::Rollback(previous_report) => {
-                let permissions = &previous_report.previous_permissions;
-                modified_file.permissions = permissions.clone();
-                permissions.clone()
-            }
+        let change_permissions_to = match direction {
+            PatchDirection::Forward => &self.new_permissions,
+            PatchDirection::Revert => &self.old_permissions,
+        };
+        report.previous_permissions = match change_permissions_to {
+            Some(permissions) =>
+                modified_file.permissions.replace(permissions.clone()),
 
-            ApplyMode::Normal => {
-                let change_permissions_to = match direction {
-                    PatchDirection::Forward => &self.new_permissions,
-                    PatchDirection::Revert => &self.old_permissions,
-                };
-                match change_permissions_to {
-                    Some(permissions) =>
-                        modified_file.permissions.replace(permissions.clone()),
-
-                    None =>
-                        modified_file.permissions.clone(),
-                }
-            }
+            None =>
+                modified_file.permissions.clone(),
         };
 
         report
@@ -867,6 +826,43 @@ impl<'a> TextFilePatch<'a> {
         analyses.after_modifications(modified_file, self, direction, &report, fn_analysis_note);
 
         report
+    }
+
+    /// Rollback the application (or the revertion - based on direction) of this patch from the `modified_file`
+    /// using the information from the `apply_report`.
+    pub fn rollback(&self,
+                    modified_file: &mut ModifiedFile<'a>,
+                    direction: PatchDirection,
+                    apply_report: &FilePatchApplyReport)
+    {
+        assert!(self.hunks.len() == apply_report.hunk_reports().len());
+
+	let direction = direction.opposite();
+	let apply_mode = ApplyMode::Rollback(apply_report);
+
+        // Call the appropriate specialized function
+        let mut report = match (self.kind, direction) {
+            (FilePatchKind::Modify, _) =>
+                self.apply_modify(modified_file, direction, 0, apply_mode, &AnalysisSet::default(), &fn_analysis_note_noop),
+
+            (FilePatchKind::Create, PatchDirection::Forward) |
+            (FilePatchKind::Delete, PatchDirection::Revert) =>
+                self.apply_create(modified_file, direction, 0, apply_mode),
+
+            (FilePatchKind::Delete, PatchDirection::Forward) |
+            (FilePatchKind::Create, PatchDirection::Revert) =>
+                self.apply_delete(modified_file, direction, 0, apply_mode),
+        };
+
+        // Rollback must apply cleanly. If not, we have a bug somewhere.
+        if report.failed() {
+            panic!("Rapidquilt attempted to rollback a patch and that failed. This is a bug. Failure report: {:?}", report);
+        }
+
+        // Determine the new file mode and record the previous one
+        let permissions = &apply_report.previous_permissions;
+        modified_file.permissions = permissions.clone();
+	report.previous_permissions = permissions.clone();
     }
 }
 
