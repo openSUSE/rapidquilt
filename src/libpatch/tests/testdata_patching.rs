@@ -93,6 +93,20 @@ fn all_files() -> Result<()> {
 
             panic!("The patched file does not match the expected output!");
         }
+
+	// Try to rollback
+	file_patch.rollback(&mut modified_file, PatchDirection::Forward, &report);
+	let mut rollback = Vec::<u8>::new();
+	modified_file.write_to(&mut rollback)?;
+	if rollback != file {
+	    let stderr = std::io::stderr();
+	    let mut stderr = stderr.lock();
+	    writeln!(stderr, "*** ORIGINAL ***")?;
+	    stderr.write(&file)?;
+	    writeln!(stderr, "*** ROLLBACK ***")?;
+	    stderr.write(&rollback)?;
+	    panic!("Content after rollback does not match the original input!");
+	}
     }
 
     Ok(())
