@@ -219,24 +219,18 @@ pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
 ///
 /// `hunk`: the `HunkView` to apply
 ///
-/// `my_index`: the index of this hunk in the `FilePatch`
-///
 /// `modified_file`: the application is tried on this file
 ///
 /// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
 ///
 /// `target_line`: line where this hunk would be applied with zero offset
 ///
-/// `last_hunk_offset`: the offset on which the previous hunk applied
-///
 /// `min_modify_line`: first line that can be modified by a new hunk, i.e. first that is not modified by a previous hunk.
 fn try_apply_hunk<'a, 'hunk>(
     hunk_view: &TextHunkView<'a, 'hunk>,
-    my_index: usize,
     modified_file: &ModifiedFile,
     apply_mode: ApplyMode,
     target_line: isize,
-    last_hunk_offset: isize,
     min_modify_line: isize)
     -> HunkApplyReport
 {
@@ -715,7 +709,7 @@ impl<'a> TextFilePatch<'a> {
 
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
-        for (i, hunk) in self.hunks.iter().enumerate() {
+        for hunk in self.hunks.iter() {
             let mut hunk_report = HunkApplyReport::Skipped;
 
             // Consider fuzz 0 up to given maximum fuzz, but no more than what is useable for this hunk
@@ -736,9 +730,9 @@ impl<'a> TextFilePatch<'a> {
 		    HunkPosition::End => modified_file.content.len() as isize - remove_content.len() as isize,
 		};
 
-                hunk_report = try_apply_hunk(hunk_view, i, modified_file,
+                hunk_report = try_apply_hunk(hunk_view, modified_file,
                                              ApplyMode::Normal, target_line,
-					     last_hunk_offset, min_modify_line);
+					     min_modify_line);
 
                 // If it succeeded, we are done with this hunk, remember the last_hunk_offset
                 // and min_modify_line, so we can use them for the next hunk and do not try
@@ -916,9 +910,9 @@ impl<'a> TextFilePatch<'a> {
             // Attempt to apply the hunk at the right fuzz level...
             let hunk_view = &hunk.view(direction, fuzz);
 
-            hunk_report = try_apply_hunk(hunk_view, i, modified_file,
+            hunk_report = try_apply_hunk(hunk_view, modified_file,
                                          ApplyMode::Rollback(apply_report),
-					 rollback_line, 0, 0);
+					 rollback_line, 0);
             report.push_hunk_report(hunk_report);
         }
 
