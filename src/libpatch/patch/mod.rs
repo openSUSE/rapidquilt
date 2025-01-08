@@ -806,21 +806,7 @@ impl<'a> TextFilePatch<'a> {
             return FilePatchApplyReport::single_hunk_skip(direction, 0);
 	}
 
-        // If we are creating it, it must be empty.
-        if !modified_file.content.is_empty() {
-            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::CreatingFileThatExists, direction, 0);
-        }
-
-        let new_content = match direction {
-            PatchDirection::Forward => &self.hunks[0].add.content,
-            PatchDirection::Revert => &self.hunks[0].remove.content,
-        };
-
-        // Just copy in it the content of our single hunk and we are done.
-        modified_file.content = new_content.clone();
-        modified_file.deleted = false;
-
-        FilePatchApplyReport::single_hunk_success(0, 0, new_content.len() as isize, direction, 0)
+	self.apply_create(modified_file, direction, 0)
     }
 
     /// Roll back this `FilePatchKind::Delete` patch on the file.
@@ -836,28 +822,7 @@ impl<'a> TextFilePatch<'a> {
             return FilePatchApplyReport::single_hunk_skip(direction, 0);
         }
 
-        let expected_content = match direction {
-            PatchDirection::Forward => &self.hunks[0].remove.content,
-            PatchDirection::Revert => &self.hunks[0].add.content,
-        };
-
-        // If we are deleting it, it must contain exactly what we want to remove.
-        if expected_content != &modified_file.content {
-            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::DeletingFileThatDoesNotMatch, direction, 0);
-        }
-
-        // Just delete everything and we are done
-        modified_file.content.clear();
-        let target_filename = match direction {
-            PatchDirection::Forward => &self.new_filename,
-            PatchDirection::Revert => &self.old_filename,
-        };
-        match target_filename {
-            None => modified_file.deleted = true,
-            Some(_) => (),
-        };
-
-        FilePatchApplyReport::single_hunk_success(0, 0, -(expected_content.len() as isize), direction, 0)
+	self.apply_delete(modified_file, direction, 0)
     }
 
     /// Roll back this `FilePatchKind::Modify` patch on the file.
