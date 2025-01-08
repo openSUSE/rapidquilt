@@ -221,8 +221,6 @@ pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
 ///
 /// `modified_file`: the application is tried on this file
 ///
-/// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
-///
 /// `target_line`: line where this hunk would be applied with zero offset
 ///
 /// `movable`: can the hunk be applied elsewhere (i.e. with a non-zero offset)?
@@ -231,7 +229,6 @@ pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
 fn try_apply_hunk<'a, 'hunk>(
     hunk_view: &TextHunkView<'a, 'hunk>,
     modified_file: &ModifiedFile,
-    apply_mode: ApplyMode,
     target_line: isize,
     movable: bool,
     min_modify_line: isize)
@@ -568,19 +565,6 @@ impl<'a, Line> FilePatch<'a, Line> {
 
 pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
 
-/// The mode of application. This is different from `PatchDirection`.
-#[derive(Copy, Clone, Debug)]
-enum ApplyMode<'a> {
-    /// In normal mode, the patch is applied (or reverted) the way patch does
-    /// it - first it will try the target line, then various offsets.
-    Normal,
-
-    /// In rollback mode, the patch was already applied (successfully or not)
-    /// and now it has to be rolled back. It will be reverted (or applied) at
-    /// the exact same lines where it was applied (or reverted) before.
-    Rollback(&'a FilePatchApplyReport),
-}
-
 impl<'a> TextFilePatch<'a> {
     /// Apply (or revert - based on `direction`) this patch to the `modified_file` using the given `fuzz`.
     pub fn apply(&self,
@@ -728,7 +712,7 @@ impl<'a> TextFilePatch<'a> {
 		};
 
                 hunk_report = try_apply_hunk(hunk_view, modified_file,
-                                             ApplyMode::Normal, target_line, movable,
+                                             target_line, movable,
 					     min_modify_line);
 
                 // If it succeeded, we are done with this hunk, remember the last_hunk_offset
@@ -908,7 +892,6 @@ impl<'a> TextFilePatch<'a> {
             let hunk_view = &hunk.view(direction, fuzz);
 
             hunk_report = try_apply_hunk(hunk_view, modified_file,
-                                         ApplyMode::Rollback(apply_report),
 					 rollback_line, false, 0);
             report.push_hunk_report(hunk_report);
         }
