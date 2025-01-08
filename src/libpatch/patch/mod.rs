@@ -225,12 +225,15 @@ pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
 ///
 /// `target_line`: line where this hunk would be applied with zero offset
 ///
+/// `movable`: can the hunk be applied elsewhere (i.e. with a non-zero offset)?
+///
 /// `min_modify_line`: first line that can be modified by a new hunk, i.e. first that is not modified by a previous hunk.
 fn try_apply_hunk<'a, 'hunk>(
     hunk_view: &TextHunkView<'a, 'hunk>,
     modified_file: &ModifiedFile,
     apply_mode: ApplyMode,
     target_line: isize,
+    movable: bool,
     min_modify_line: isize)
     -> HunkApplyReport
 {
@@ -268,17 +271,10 @@ fn try_apply_hunk<'a, 'hunk>(
     // backwards for a set of lines matching the context given in the hunk."
     let mut best_target_line: Option<isize> = None;
     let (min_line, max_line) =
-	if let ApplyMode::Rollback(_) = apply_mode {
-            // If we are in rollback mode, the hunk must match with zero offset.
-	    (target_line, target_line)
-	} else if hunk_view.position() != HunkPosition::Middle {
-            // Only hunks that are intended for somewhere in the middle of the code
-            // can be applied somewhere else based on context. I.e. if the hunk is
-            // targeting the start or the end of the file and it did not match, we
-            // can not try to find any better offset.
-	    (target_line, target_line)
-	} else {
+	if movable {
 	    (0, modified_file.content.len() as isize - remove_content.len() as isize)
+	} else {
+	    (target_line, target_line)
 	};
     let backward_targets = (min_line..=target_line).rev();
     let forward_targets = (target_line+1)..=max_line;
@@ -716,20 +712,23 @@ impl<'a> TextFilePatch<'a> {
                 let hunk_view = &hunk.view(direction, current_fuzz);
 
 		let remove_content = hunk_view.remove_content();
-		let target_line = match hunk_view.position() {
-		    HunkPosition::Start => hunk_view.remove_target_line(),
+		let (target_line, movable) = match hunk_view.position() {
+		    HunkPosition::Start =>
+			(hunk_view.remove_target_line(), false),
 
 		    // man patch:
 		    // "As a first guess, [patch] takes the line number
 		    // mentioned for the hunk, plus or minus any offset
 		    // used in applying the previous hunk.."
-		    HunkPosition::Middle => hunk_view.remove_target_line() + last_hunk_offset,
+		    HunkPosition::Middle =>
+			(hunk_view.remove_target_line() + last_hunk_offset, true),
 
-		    HunkPosition::End => modified_file.content.len() as isize - remove_content.len() as isize,
+		    HunkPosition::End =>
+			(modified_file.content.len() as isize - remove_content.len() as isize, false),
 		};
 
                 hunk_report = try_apply_hunk(hunk_view, modified_file,
-                                             ApplyMode::Normal, target_line,
+                                             ApplyMode::Normal, target_line, movable,
 					     min_modify_line);
 
                 // If it succeeded, we are done with this hunk, remember the last_hunk_offset
@@ -910,7 +909,7 @@ impl<'a> TextFilePatch<'a> {
 
             hunk_report = try_apply_hunk(hunk_view, modified_file,
                                          ApplyMode::Rollback(apply_report),
-					 rollback_line, 0);
+					 rollback_line, false, 0);
             report.push_hunk_report(hunk_report);
         }
 
