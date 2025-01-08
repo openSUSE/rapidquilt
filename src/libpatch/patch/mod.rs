@@ -376,6 +376,43 @@ pub enum HunkApplyReport {
     Skipped,
 }
 
+impl HunkApplyReport {
+    // Apply a hunk to a modified_file according to the report
+    // (i.e. commit the changes). Update rollback_line in the
+    // report and return the new line number difference between
+    // the original file and the patched file.
+    //
+    // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
+    //       splices is that they move the tail of the file multiple times. Alternative is to
+    //       generate new Vec and copy every Line at most once, but that seems to be even
+    //       slower. Ideally we would need some in-place modification that moves every Line
+    //       at most once. But I don't think it is possible in general case.
+    pub fn commit<'a>(&mut self,
+		      modified_file: &mut ModifiedFile<'a>,
+		      hunk: &TextHunk<'a>,
+		      direction: PatchDirection,
+		      line_diff: isize)
+		      -> isize
+    {
+	match *self {
+            HunkApplyReport::Applied { line, ref mut rollback_line, fuzz, line_count_diff, .. } => {
+		let hunk_view = hunk.view(direction, fuzz);
+		let target_line = line + line_diff;
+		*rollback_line = target_line;
+		let prefix_len = hunk_view.prefix_context();
+		let suffix_len = hunk_view.suffix_context();
+		let range = (target_line as usize + prefix_len)..(target_line as usize + hunk_view.remove_content().len() - suffix_len);
+		// Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
+		modified_file.content.splice(range, hunk_view.add_content()[prefix_len..(hunk_view.add_content().len() - suffix_len)].iter().cloned());
+		line_diff + line_count_diff
+	    },
+
+	    _ =>
+		line_diff
+	}
+    }
+}
+
 /// The result of applying a `FilePatch`
 #[derive(Debug)]
 pub struct FilePatchApplyReport {
@@ -730,25 +767,10 @@ impl<'a> TextFilePatch<'a> {
         analyses.before_modifications(modified_file, self, direction, &report, fn_analysis_note);
 
         // Now apply all changes on the file.
-        // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
-        //       splices is that they move the tail of the file multiple times. Alternative is to
-        //       generate new Vec and copy every Line at most once, but that seems to be even
-        //       slower. Ideally we would need some in-place modification that moves every Line
-        //       at most once. But I don't think it is possible in general case.
         {
             let mut modification_offset = 0;
             for (hunk, hunk_report) in self.hunks.iter().zip(report.hunk_reports.iter_mut()) {
-                if let HunkApplyReport::Applied { line, ref mut rollback_line, fuzz, line_count_diff, .. } = hunk_report {
-                    let hunk_view = hunk.view(direction, *fuzz);
-                    let target_line = *line + modification_offset;
-                    *rollback_line = target_line;
-		    let prefix_len = hunk_view.prefix_context();
-		    let suffix_len = hunk_view.suffix_context();
-                    let range = (target_line as usize + prefix_len)..(target_line as usize + hunk_view.remove_content().len() - suffix_len);
-                    modified_file.content.splice(range, hunk_view.add_content()[prefix_len..(hunk_view.add_content().len() - suffix_len)].iter().cloned()); // Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
-
-                    modification_offset += *line_count_diff;
-                }
+                modification_offset = hunk_report.commit(modified_file, hunk, direction, modification_offset);
             }
         }
 
@@ -859,25 +881,10 @@ impl<'a> TextFilePatch<'a> {
         }
 
         // Now apply all changes on the file.
-        // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
-        //       splices is that they move the tail of the file multiple times. Alternative is to
-        //       generate new Vec and copy every Line at most once, but that seems to be even
-        //       slower. Ideally we would need some in-place modification that moves every Line
-        //       at most once. But I don't think it is possible in general case.
         {
             let mut modification_offset = 0;
             for (hunk, hunk_report) in self.hunks.iter().zip(report.hunk_reports.iter_mut()) {
-                if let HunkApplyReport::Applied { line, ref mut rollback_line, fuzz, line_count_diff, .. } = hunk_report {
-                    let hunk_view = hunk.view(direction, *fuzz);
-                    let target_line = *line + modification_offset;
-                    *rollback_line = target_line;
-		    let prefix_len = hunk_view.prefix_context();
-		    let suffix_len = hunk_view.suffix_context();
-                    let range = (target_line as usize + prefix_len)..(target_line as usize + hunk_view.remove_content().len() - suffix_len);
-                    modified_file.content.splice(range, hunk_view.add_content()[prefix_len..(hunk_view.add_content().len() - suffix_len)].iter().cloned()); // Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
-
-                    modification_offset += *line_count_diff;
-                }
+		modification_offset = hunk_report.commit(modified_file, hunk, direction, modification_offset);
             }
         }
 
