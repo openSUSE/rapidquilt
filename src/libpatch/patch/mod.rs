@@ -806,7 +806,12 @@ impl<'a> TextFilePatch<'a> {
 
         // Rollback must apply cleanly. If not, we have a bug somewhere.
         if report.failed() {
-            panic!("Rapidquilt attempted to rollback a patch and that failed. This is a bug. Failure report: {:?}", report);
+	    use crate::patch::unified::writer::UnifiedPatchWriter;
+	    let mut content = Vec::<u8>::new();
+	    let _ = modified_file.write_to(&mut content);
+	    let mut patch = Vec::<u8>::new();
+	    let _ = self.write_to(&mut patch);
+            panic!("File {:?}\n{}\n{}\nRapidquilt attempted to rollback a patch and that failed. This is a bug.\nApply report:\n{:?}\nRollback report:\n{:?}", self.new_filename(), String::from_utf8_lossy(&content), String::from_utf8_lossy(&patch), apply_report, report);
         }
 
         // Determine the new file mode and record the previous one
