@@ -871,11 +871,11 @@ impl<'a> TextFilePatch<'a> {
 
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
-        for (i, hunk) in self.hunks.iter().enumerate() {
+        for (hunk, apply_hunk_report) in self.hunks.iter().zip(apply_report.hunk_reports.iter()) {
             let mut hunk_report = HunkApplyReport::Skipped;
 
             let (fuzz, rollback_line) =
-		match apply_report.hunk_reports[i] {
+		match *apply_hunk_report {
                     // If the hunk applied, pick the specific fuzz level
                     HunkApplyReport::Applied { fuzz, rollback_line, .. } => (fuzz, rollback_line),
 
