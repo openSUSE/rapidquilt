@@ -858,7 +858,7 @@ impl<'a> TextFilePatch<'a> {
 
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
-        for (hunk, apply_hunk_report) in self.hunks.iter().zip(apply_report.hunk_reports.iter()) {
+        for (hunk, apply_hunk_report) in self.hunks.iter().zip(apply_report.hunk_reports.iter()).rev() {
             let (fuzz, rollback_line) =
 		match *apply_hunk_report {
                     // If the hunk applied, pick the specific fuzz level
@@ -875,19 +875,13 @@ impl<'a> TextFilePatch<'a> {
             // Attempt to apply the hunk at the right fuzz level...
             let hunk_view = &hunk.view(direction, fuzz);
 
-            let hunk_report = try_apply_hunk(hunk_view, modified_file,
-					     rollback_line, false, 0);
-            report.push_hunk_report(hunk_report);
+            let mut hunk_report = try_apply_hunk(hunk_view, modified_file,
+						 rollback_line, false, 0);
+	    hunk_report.commit(modified_file, hunk, direction, 0);
+	    report.push_hunk_report(hunk_report);
         }
 
-        // Now apply all changes on the file.
-        {
-            let mut modification_offset = 0;
-            for (hunk, hunk_report) in self.hunks.iter().zip(report.hunk_reports.iter_mut()) {
-		modification_offset = hunk_report.commit(modified_file, hunk, direction, modification_offset);
-            }
-        }
-
+	report.hunk_reports.reverse();
         report
     }
 }
