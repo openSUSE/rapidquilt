@@ -398,24 +398,15 @@ impl HunkApplyReport {
     pub fn commit<'a>(&self,
 		      modified_file: &mut ModifiedFile<'a>,
 		      hunk: &TextHunk<'a>,
-		      direction: PatchDirection,
-		      line_diff: isize)
-		      -> isize
+		      direction: PatchDirection)
     {
-	match *self {
-            HunkApplyReport::Applied { line, fuzz, line_count_diff, .. } => {
-		let hunk_view = hunk.view(direction, fuzz);
-		let target_line = line + line_diff;
-		let prefix_len = hunk_view.prefix_context();
-		let suffix_len = hunk_view.suffix_context();
-		let range = (target_line as usize + prefix_len)..(target_line as usize + hunk_view.remove_content().len() - suffix_len);
-		// Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
-		modified_file.content.splice(range, hunk_view.add_content()[prefix_len..(hunk_view.add_content().len() - suffix_len)].iter().cloned());
-		line_diff + line_count_diff
-	    },
-
-	    _ =>
-		line_diff
+	if let HunkApplyReport::Applied { line, fuzz, .. } = *self {
+	    let hunk_view = hunk.view(direction, fuzz);
+	    let prefix_len = hunk_view.prefix_context();
+	    let suffix_len = hunk_view.suffix_context();
+	    let range = (line as usize + prefix_len)..(line as usize + hunk_view.remove_content().len() - suffix_len);
+	    // Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
+	    modified_file.content.splice(range, hunk_view.add_content()[prefix_len..(hunk_view.add_content().len() - suffix_len)].iter().cloned());
 	}
     }
 }
@@ -773,12 +764,9 @@ impl<'a> TextFilePatch<'a> {
 
         analyses.before_modifications(modified_file, self, direction, &report, fn_analysis_note);
 
-        // Now apply all changes on the file.
-        {
-            let mut modification_offset = 0;
-            for (hunk, hunk_report) in self.hunks.iter().zip(report.hunk_reports.iter_mut()) {
-                modification_offset = hunk_report.commit(modified_file, hunk, direction, modification_offset);
-            }
+        // Now commit all changes to the file in reverse order to preserve line numbers.
+        for (hunk, hunk_report) in self.hunks.iter().zip(report.hunk_reports.iter()).rev() {
+            hunk_report.commit(modified_file, hunk, direction);
         }
 
         analyses.after_modifications(modified_file, self, direction, &report, fn_analysis_note);
@@ -889,7 +877,7 @@ impl<'a> TextFilePatch<'a> {
 
             let hunk_report = try_apply_hunk(hunk_view, modified_file,
 					     rollback_line, false, 0);
-	    hunk_report.commit(modified_file, hunk, direction, 0);
+	    hunk_report.commit(modified_file, hunk, direction);
 	    report.push_hunk_report(hunk_report);
         }
 
