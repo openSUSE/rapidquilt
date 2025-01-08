@@ -302,11 +302,9 @@ fn try_apply_hunk<'a, 'hunk>(
         }
     };
 
-    if let ApplyMode::Normal = apply_mode {
-        // Check if we are not modifying frozen content
-        if target_line + (hunk_view.prefix_context() as isize) < min_modify_line {
-            return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
-        }
+    // Check that we are not modifying frozen content
+    if target_line + (hunk_view.prefix_context() as isize) < min_modify_line {
+        return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
     }
 
     assert!(target_line >= 0);
