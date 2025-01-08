@@ -160,6 +160,19 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
         }
     }
 
+    pub fn with_no_suffix(hunk: &'hunk Hunk<'a, Line>, direction: PatchDirection, fuzz: usize) -> Self {
+	let remaining_context = max(hunk.prefix_context, hunk.suffix_context).saturating_sub(fuzz);
+	let prefix_fuzz = hunk.prefix_context.saturating_sub(remaining_context);
+
+	HunkView {
+	    hunk,
+	    fuzz,
+	    prefix_fuzz,
+	    suffix_fuzz: hunk.suffix_context,
+	    direction,
+	}
+    }
+
     fn remove_part(&self) -> &HunkPart<Line> {
         match self.direction {
             PatchDirection::Forward => &self.hunk.remove,
@@ -863,11 +876,11 @@ impl<'a> TextFilePatch<'a> {
 
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
-        for (hunk, apply_hunk_report) in self.hunks.iter().zip(apply_report.hunk_reports.iter()).rev() {
+        for (hunk, apply_hunk_report) in self.hunks.iter().zip(apply_report.hunk_reports.iter()) {
             let (fuzz, rollback_line) =
 		match *apply_hunk_report {
                     // If the hunk applied, pick the specific fuzz level
-                    HunkApplyReport::Applied { fuzz, rollback_line, .. } => (fuzz, rollback_line),
+                    HunkApplyReport::Applied { fuzz, line, .. } => (fuzz, line),
 
                     // If the hunk failed to apply, skip it now.
                     HunkApplyReport::Failed(..) |
@@ -877,8 +890,8 @@ impl<'a> TextFilePatch<'a> {
                     }
 		};
 
-            // Attempt to apply the hunk at the right fuzz level...
-            let hunk_view = &hunk.view(direction, fuzz);
+            // Attempt to apply the hunk ignoring trailing context...
+            let ref hunk_view = HunkView::with_no_suffix(&hunk, direction, fuzz);
 
             let mut hunk_report = try_apply_hunk(hunk_view, modified_file,
 						 rollback_line, false, 0);
@@ -886,7 +899,6 @@ impl<'a> TextFilePatch<'a> {
 	    report.push_hunk_report(hunk_report);
         }
 
-	report.hunk_reports.reverse();
         report
     }
 }

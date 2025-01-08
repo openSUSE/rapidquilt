@@ -11,7 +11,7 @@ index 35d4b398c197..8bd9fd51208c 100644
 @@ -4744,92 +4788,6 @@ static int qeth_query_oat_command(struct qeth_card *card, char __user *udata)
  	return rc;
  }
- 
+ /* end of qeth_query_oat_command() */
 -static int qeth_query_card_info_cb(struct qeth_card *card,
 -				   struct qeth_reply *reply, unsigned long data)
 -{
@@ -97,7 +97,7 @@ index 35d4b398c197..8bd9fd51208c 100644
 -
 -	return qeth_send_ipa_cmd(card, iob, qeth_query_card_info_cb, link_info);
 -}
--
+-/* end of qeth_query_card_info() */
  static void qeth_init_link_info(struct qeth_card *card)
  {
  	card->info.link_info.duplex = DUPLEX_FULL;
@@ -110,7 +110,7 @@ index 35d4b398c197..8bd9fd51208c 100644
  		return -EIO;
  
 @@ -4918,38 +4877,7 @@ static int qeth_init_link_info_oat_cb(struct qeth_card *card,
- 
+ /* end of qeth_query_card_info() */
  static void qeth_init_link_info(struct qeth_card *card)
  {
 -	card->info.link_info.duplex = DUPLEX_FULL;

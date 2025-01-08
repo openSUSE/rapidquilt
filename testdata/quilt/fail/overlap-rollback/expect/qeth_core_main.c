@@ -4848,7 +4848,7 @@ out_free:
 	vfree(priv.buffer);
 	return rc;
 }
-
+/* end of qeth_query_oat_command() */
 static int qeth_query_card_info_cb(struct qeth_card *card,
 				   struct qeth_reply *reply, unsigned long data)
 {
@@ -4934,7 +4934,7 @@ int qeth_query_card_info(struct qeth_card *card,
 
 	return qeth_send_ipa_cmd(card, iob, qeth_query_card_info_cb, link_info);
 }
-
+/* end of qeth_query_card_info() */
 static void qeth_init_link_info(struct qeth_card *card)
 {
 	card->info.link_info.duplex = DUPLEX_FULL;
