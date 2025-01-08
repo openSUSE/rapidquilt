@@ -225,6 +225,8 @@ pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
 ///
 /// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
 ///
+/// `target_line`: line where this hunk would be applied with zero offset
+///
 /// `last_hunk_offset`: the offset on which the previous hunk applied
 ///
 /// `min_modify_line`: first line that can be modified by a new hunk, i.e. first that is not modified by a previous hunk.
@@ -233,6 +235,7 @@ fn try_apply_hunk<'a, 'hunk>(
     my_index: usize,
     modified_file: &ModifiedFile,
     apply_mode: ApplyMode,
+    target_line: isize,
     last_hunk_offset: isize,
     min_modify_line: isize)
     -> HunkApplyReport
@@ -245,32 +248,6 @@ fn try_apply_hunk<'a, 'hunk>(
     // Shortcuts
     let remove_content = hunk_view.remove_content();
     let add_content = hunk_view.add_content();
-
-    // Determine the target line.
-    let target_line = match apply_mode {
-        // In normal mode, pick what is in the hunk
-        ApplyMode::Normal => match hunk_view.position() {
-            HunkPosition::Start => hunk_view.remove_target_line(),
-
-            // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
-            //             when the line numbers mentioned in the patch are incorrect, and attempts to find
-            //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
-            //             line number mentioned for the hunk, plus or minus any offset used in applying the
-            //             previous hunk.."
-            HunkPosition::Middle => hunk_view.remove_target_line() + last_hunk_offset,
-
-            HunkPosition::End => modified_file.content.len() as isize - remove_content.len() as isize,
-        },
-
-        // In rollback mode, take it from the report
-        ApplyMode::Rollback(report) => match report.hunk_reports()[my_index] {
-            // If the hunk was applied at specific line, choose that line now.
-            HunkApplyReport::Applied { rollback_line, .. } => rollback_line,
-
-            // Nothing else should get here
-            _ => unreachable!(),
-        }
-    };
 
     // If the hunk tries to remove more than the file has, reject it now.
     // So in the following code we can assume that it is smaller or equal.
@@ -746,16 +723,29 @@ impl<'a> TextFilePatch<'a> {
                 // Attempt to apply the hunk at the right fuzz level...
                 let hunk_view = &hunk.view(direction, current_fuzz);
 
+		let remove_content = hunk_view.remove_content();
+		let target_line = match hunk_view.position() {
+		    HunkPosition::Start => hunk_view.remove_target_line(),
+
+		    // man patch:
+		    // "As a first guess, [patch] takes the line number
+		    // mentioned for the hunk, plus or minus any offset
+		    // used in applying the previous hunk.."
+		    HunkPosition::Middle => hunk_view.remove_target_line() + last_hunk_offset,
+
+		    HunkPosition::End => modified_file.content.len() as isize - remove_content.len() as isize,
+		};
+
                 hunk_report = try_apply_hunk(hunk_view, i, modified_file,
-                                             ApplyMode::Normal, last_hunk_offset,
-                                             min_modify_line);
+                                             ApplyMode::Normal, target_line,
+					     last_hunk_offset, min_modify_line);
 
                 // If it succeeded, we are done with this hunk, remember the last_hunk_offset
                 // and min_modify_line, so we can use them for the next hunk and do not try
                 // any more fuzz levels.
                 if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
                     last_hunk_offset = offset;
-                    min_modify_line = line + hunk_view.remove_content().len() as isize - hunk_view.suffix_context() as isize;
+                    min_modify_line = line + remove_content.len() as isize - hunk_view.suffix_context() as isize;
                     break;
                 }
             }
@@ -909,10 +899,10 @@ impl<'a> TextFilePatch<'a> {
         for (i, hunk) in self.hunks.iter().enumerate() {
             let mut hunk_report = HunkApplyReport::Skipped;
 
-            let fuzz =
+            let (fuzz, rollback_line) =
 		match apply_report.hunk_reports[i] {
                     // If the hunk applied, pick the specific fuzz level
-                    HunkApplyReport::Applied { fuzz, .. } => fuzz,
+                    HunkApplyReport::Applied { fuzz, rollback_line, .. } => (fuzz, rollback_line),
 
                     // If the hunk failed to apply, skip it now.
                     HunkApplyReport::Failed(..) |
@@ -928,7 +918,7 @@ impl<'a> TextFilePatch<'a> {
 
             hunk_report = try_apply_hunk(hunk_view, i, modified_file,
                                          ApplyMode::Rollback(apply_report),
-					 0, 0);
+					 rollback_line, 0, 0);
             report.push_hunk_report(hunk_report);
         }
 
