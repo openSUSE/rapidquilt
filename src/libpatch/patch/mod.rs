@@ -254,7 +254,6 @@ fn try_apply_hunk<'a, 'hunk>(
 
     // Shortcuts
     let remove_content = hunk_view.remove_content();
-    let add_content = hunk_view.add_content();
 
     // If the hunk tries to remove more than the file has, reject it now.
     // So in the following code we can assume that it is smaller or equal.
@@ -319,7 +318,6 @@ fn try_apply_hunk<'a, 'hunk>(
     HunkApplyReport::Applied {
         line: target_line,
         offset: target_line - hunk_view.remove_target_line(),
-        line_count_diff: add_content.len() as isize - remove_content.len() as isize,
         fuzz: hunk_view.fuzz(),
     }
 }
@@ -369,9 +367,6 @@ pub enum HunkApplyReport {
         /// The offset from the originally intended line to the line where it
         /// was applied.
         offset: isize,
-
-        /// How many lines were added minus how many were removed
-        line_count_diff: isize,
 
         /// Fuzz with which this specific hunk was applied
         fuzz: usize,
@@ -436,14 +431,13 @@ impl FilePatchApplyReport {
     /// Create a report with single hunk that succeeded
     fn single_hunk_success(line: isize,
                            offset: isize,
-                           line_count_diff: isize,
                            direction: PatchDirection,
                            fuzz: usize)
                            -> Self
     {
         FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Applied {
-                line, offset, line_count_diff, fuzz,
+                line, offset, fuzz,
             }],
             any_failed: false,
             direction,
@@ -663,7 +657,7 @@ impl<'a> TextFilePatch<'a> {
         modified_file.content = new_content.clone();
         modified_file.deleted = false;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, new_content.len() as isize, direction, fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, direction, fuzz)
     }
 
     /// Apply this `FilePatchKind::Delete` patch on the file.
@@ -696,7 +690,7 @@ impl<'a> TextFilePatch<'a> {
             Some(_) => (),
         };
 
-        FilePatchApplyReport::single_hunk_success(0, 0, -(expected_content.len() as isize), direction, fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, direction, fuzz)
     }
 
     /// Apply this `FilePatchKind::Modify` patch on the file.
