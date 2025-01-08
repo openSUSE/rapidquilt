@@ -872,8 +872,6 @@ impl<'a> TextFilePatch<'a> {
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
         for (hunk, apply_hunk_report) in self.hunks.iter().zip(apply_report.hunk_reports.iter()) {
-            let mut hunk_report = HunkApplyReport::Skipped;
-
             let (fuzz, rollback_line) =
 		match *apply_hunk_report {
                     // If the hunk applied, pick the specific fuzz level
@@ -882,8 +880,7 @@ impl<'a> TextFilePatch<'a> {
                     // If the hunk failed to apply, skip it now.
                     HunkApplyReport::Failed(..) |
                     HunkApplyReport::Skipped => {
-			// Skip it
-			report.push_hunk_report(hunk_report);
+			report.push_hunk_report(HunkApplyReport::Skipped);
 			continue;
                     }
 		};
@@ -891,8 +888,8 @@ impl<'a> TextFilePatch<'a> {
             // Attempt to apply the hunk at the right fuzz level...
             let hunk_view = &hunk.view(direction, fuzz);
 
-            hunk_report = try_apply_hunk(hunk_view, modified_file,
-					 rollback_line, false, 0);
+            let hunk_report = try_apply_hunk(hunk_view, modified_file,
+					     rollback_line, false, 0);
             report.push_hunk_report(hunk_report);
         }
 
