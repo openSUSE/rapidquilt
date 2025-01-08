@@ -1,0 +1,15 @@
+Move a hunk to the end of the file with a positive offset.
+
+Make sure that the offset bounds are set correctly and allow moving the hunk
+down to the very end of the file.
+--- file4.in    2019-01-29 14:25:32.384682572 +0100
++++ offset_to_end.out   2025-01-07 17:05:09.973739126 +0100
+@@ -40,7 +40,7 @@
+ 2222
+ 3333
+ 4444
+-5555
++www
+ 6666
+ yyy
+ zzz

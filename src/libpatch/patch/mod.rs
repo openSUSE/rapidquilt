@@ -35,7 +35,7 @@ use std::path::Path;
 use derive_builder::Builder;
 use itertools::Itertools;
 
-use crate::analysis::{Analysis, AnalysisSet, Note, fn_analysis_note_noop};
+use crate::analysis::{Analysis, AnalysisSet, Note};
 use crate::modified_file::ModifiedFile;
 
 pub mod unified;
@@ -219,22 +219,19 @@ pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
 ///
 /// `hunk`: the `HunkView` to apply
 ///
-/// `my_index`: the index of this hunk in the `FilePatch`
-///
 /// `modified_file`: the application is tried on this file
 ///
-/// `apply_mode`: whether the patch is being applied or rolled-back . This is different from `direction`. See documentation of `ApplyMode`.
+/// `target_line`: line where this hunk would be applied with zero offset
 ///
-/// `last_hunk_offset`: the offset on which the previous hunk applied
+/// `movable`: can the hunk be applied elsewhere (i.e. with a non-zero offset)?
 ///
-/// `last_frozen_line`: last line that was modified by previous hunk. We must not edit anything before that line.
+/// `min_modify_line`: first line that can be modified by a new hunk, i.e. first that is not modified by a previous hunk.
 fn try_apply_hunk<'a, 'hunk>(
     hunk_view: &TextHunkView<'a, 'hunk>,
-    my_index: usize,
     modified_file: &ModifiedFile,
-    apply_mode: ApplyMode,
-    last_hunk_offset: isize,
-    last_frozen_line: isize)
+    target_line: isize,
+    movable: bool,
+    min_modify_line: isize)
     -> HunkApplyReport
 {
     // If the file doesn't exist, fail immediatelly
@@ -245,32 +242,6 @@ fn try_apply_hunk<'a, 'hunk>(
     // Shortcuts
     let remove_content = hunk_view.remove_content();
     let add_content = hunk_view.add_content();
-
-    // Determine the target line.
-    let mut target_line = match apply_mode {
-        // In normal mode, pick what is in the hunk
-        ApplyMode::Normal => match hunk_view.position() {
-            HunkPosition::Start => hunk_view.remove_target_line(),
-
-            // man patch: "With  context  diffs, and to a lesser extent with normal diffs, patch can detect
-            //             when the line numbers mentioned in the patch are incorrect, and attempts to find
-            //             the correct place to apply each hunk of the patch.  As a first guess, it takes the
-            //             line number mentioned for the hunk, plus or minus any offset used in applying the
-            //             previous hunk.."
-            HunkPosition::Middle => hunk_view.remove_target_line() + last_hunk_offset,
-
-            HunkPosition::End => modified_file.content.len() as isize - remove_content.len() as isize,
-        },
-
-        // In rollback mode, take it from the report
-        ApplyMode::Rollback(report) => match report.hunk_reports()[my_index] {
-            // If the hunk was applied at specific line, choose that line now.
-            HunkApplyReport::Applied { rollback_line, .. } => rollback_line,
-
-            // Nothing else should get here
-            _ => unreachable!(),
-        }
-    };
 
     // If the hunk tries to remove more than the file has, reject it now.
     // So in the following code we can assume that it is smaller or equal.
@@ -292,53 +263,41 @@ fn try_apply_hunk<'a, 'hunk>(
         &haystack[at..(at + needle.len())] == needle
     }
 
-    // Check if the part we want to remove is at the originally intended target_line
-    if !matches(&remove_content, &modified_file.content, target_line) {
-        // It is not on the indended target_line...
+    // man patch (continuation):
+    // "If that is not the correct place, patch scans both forwards and
+    // backwards for a set of lines matching the context given in the hunk."
+    let mut best_target_line: Option<isize> = None;
+    let (min_line, max_line) =
+	if movable {
+	    (0, modified_file.content.len() as isize - remove_content.len() as isize)
+	} else {
+	    (target_line, target_line)
+	};
+    let backward_targets = (min_line..=target_line).rev();
+    let forward_targets = (target_line+1)..=max_line;
 
-        // If we are in rollback mode, we are in big trouble. Fail early.
-        if let ApplyMode::Rollback(_) = apply_mode {
-            return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-        }
-
-        // Only hunks that are intended for somewhere in the middle of the code
-        // can be applied somewhere else based on context. I.e. if the hunk is
-        // targeting the start or the end of the file and it did not match, we
-        // can not try to find any better offset.
-        if hunk_view.position() != HunkPosition::Middle {
-            return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-        }
-
-        // man patch (continuation):
-        // "If that is not the correct place, patch scans both forwards and
-        // backwards for a set of lines matching the context given in the hunk."
-
-        let mut best_target_line: Option<isize> = None;
-        let forward_indexes = (target_line + 1)..=(modified_file.content.len() as isize - remove_content.len() as isize);
-        let backward_indexes = (0..target_line).rev();
-        for possible_target_line in forward_indexes.interleave(backward_indexes) { // It is important that `forward_indexes` go first! E.g. offset +5 should be selected over -5.
-            if matches(&remove_content, &modified_file.content, possible_target_line) {
-                best_target_line = Some(possible_target_line);
-                break;
-            }
-        }
-
-        // Did we find the line or not?
-        match best_target_line {
-            Some(new_target_line) => {
-                target_line = new_target_line;
-            },
-            None => {
-                return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-            }
+    // It is important that `backward_targets` go first!
+    // The intended target line (zero offset) is part of `backward_targets`,
+    // so that a positive offset in `forward_targets` (e.g. +5) is tried
+    // before the corresponding negative offsets (e.g. -5).
+    for possible_target_line in backward_targets.interleave(forward_targets) {
+        if matches(&remove_content, &modified_file.content, possible_target_line) {
+            best_target_line = Some(possible_target_line);
+            break;
         }
     }
 
-    if let ApplyMode::Normal = apply_mode {
-        // Check if we are not modifying frozen content
-        if target_line + hunk_view.prefix_context() as isize <= last_frozen_line {
-            return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
+    // Did we find the line or not?
+    let target_line = match best_target_line {
+        Some(new_target_line) => new_target_line,
+        None => {
+            return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
         }
+    };
+
+    // Check that we are not modifying frozen content
+    if target_line + (hunk_view.prefix_context() as isize) < min_modify_line {
+        return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
     }
 
     assert!(target_line >= 0);
@@ -415,6 +374,43 @@ pub enum HunkApplyReport {
     /// It was skipped. Used when rolling back and skipping hunks that
     /// previously failed.
     Skipped,
+}
+
+impl HunkApplyReport {
+    // Apply a hunk to a modified_file according to the report
+    // (i.e. commit the changes). Update rollback_line in the
+    // report and return the new line number difference between
+    // the original file and the patched file.
+    //
+    // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
+    //       splices is that they move the tail of the file multiple times. Alternative is to
+    //       generate new Vec and copy every Line at most once, but that seems to be even
+    //       slower. Ideally we would need some in-place modification that moves every Line
+    //       at most once. But I don't think it is possible in general case.
+    pub fn commit<'a>(&mut self,
+		      modified_file: &mut ModifiedFile<'a>,
+		      hunk: &TextHunk<'a>,
+		      direction: PatchDirection,
+		      line_diff: isize)
+		      -> isize
+    {
+	match *self {
+            HunkApplyReport::Applied { line, ref mut rollback_line, fuzz, line_count_diff, .. } => {
+		let hunk_view = hunk.view(direction, fuzz);
+		let target_line = line + line_diff;
+		*rollback_line = target_line;
+		let prefix_len = hunk_view.prefix_context();
+		let suffix_len = hunk_view.suffix_context();
+		let range = (target_line as usize + prefix_len)..(target_line as usize + hunk_view.remove_content().len() - suffix_len);
+		// Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
+		modified_file.content.splice(range, hunk_view.add_content()[prefix_len..(hunk_view.add_content().len() - suffix_len)].iter().cloned());
+		line_diff + line_count_diff
+	    },
+
+	    _ =>
+		line_diff
+	}
+    }
 }
 
 /// The result of applying a `FilePatch`
@@ -606,19 +602,6 @@ impl<'a, Line> FilePatch<'a, Line> {
 
 pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
 
-/// The mode of application. This is different from `PatchDirection`.
-#[derive(Copy, Clone, Debug)]
-enum ApplyMode<'a> {
-    /// In normal mode, the patch is applied (or reverted) the way patch does
-    /// it - first it will try the target line, then various offsets.
-    Normal,
-
-    /// In rollback mode, the patch was already applied (successfully or not)
-    /// and now it has to be rolled back. It will be reverted (or applied) at
-    /// the exact same lines where it was applied (or reverted) before.
-    Rollback(&'a FilePatchApplyReport),
-}
-
 impl<'a> TextFilePatch<'a> {
     /// Apply (or revert - based on `direction`) this patch to the `modified_file` using the given `fuzz`.
     pub fn apply(&self,
@@ -629,72 +612,31 @@ impl<'a> TextFilePatch<'a> {
                  fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
                  -> FilePatchApplyReport
     {
-        self.apply_internal(modified_file, direction, fuzz, ApplyMode::Normal, analyses, fn_analysis_note)
-    }
-
-    /// Rollback the application (or the revertion - based on direction) of this patch from the `modified_file`
-    /// using the information from the `apply_report`.
-    pub fn rollback(&self,
-                    modified_file: &mut ModifiedFile<'a>,
-                    direction: PatchDirection,
-                    apply_report: &FilePatchApplyReport)
-    {
-        assert!(self.hunks.len() == apply_report.hunk_reports().len());
-
-        let result = self.apply_internal(modified_file, direction.opposite(), 0, ApplyMode::Rollback(apply_report),
-                                         &AnalysisSet::default(), &fn_analysis_note_noop);
-
-        // Rollback must apply cleanly. If not, we have a bug somewhere.
-        if result.failed() {
-            panic!("Rapidquilt attempted to rollback a patch and that failed. This is a bug. Failure report: {:?}", result);
-        }
-    }
-
-    /// Internal function that does the function of both `apply` and `rollback`.
-    fn apply_internal(&self,
-                      modified_file: &mut ModifiedFile<'a>,
-                      direction: PatchDirection,
-                      fuzz: usize,
-                      apply_mode: ApplyMode,
-                      analyses: &AnalysisSet,
-                      fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
-                      -> FilePatchApplyReport
-    {
         // Call the appropriate specialized function
         let mut report = match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
-                self.apply_modify(modified_file, direction, fuzz, apply_mode, analyses, fn_analysis_note),
+                self.apply_modify(modified_file, direction, fuzz, analyses, fn_analysis_note),
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
-                self.apply_create(modified_file, direction, fuzz, apply_mode),
+                self.apply_create(modified_file, direction, fuzz),
 
             (FilePatchKind::Delete, PatchDirection::Forward) |
             (FilePatchKind::Create, PatchDirection::Revert) =>
-                self.apply_delete(modified_file, direction, fuzz, apply_mode),
+                self.apply_delete(modified_file, direction, fuzz),
         };
 
         // Determine the new file mode and record the previous one
-        report.previous_permissions = match apply_mode {
-            ApplyMode::Rollback(previous_report) => {
-                let permissions = &previous_report.previous_permissions;
-                modified_file.permissions = permissions.clone();
-                permissions.clone()
-            }
+        let change_permissions_to = match direction {
+            PatchDirection::Forward => &self.new_permissions,
+            PatchDirection::Revert => &self.old_permissions,
+        };
+        report.previous_permissions = match change_permissions_to {
+            Some(permissions) =>
+                modified_file.permissions.replace(permissions.clone()),
 
-            ApplyMode::Normal => {
-                let change_permissions_to = match direction {
-                    PatchDirection::Forward => &self.new_permissions,
-                    PatchDirection::Revert => &self.old_permissions,
-                };
-                match change_permissions_to {
-                    Some(permissions) =>
-                        modified_file.permissions.replace(permissions.clone()),
-
-                    None =>
-                        modified_file.permissions.clone(),
-                }
-            }
+            None =>
+                modified_file.permissions.clone(),
         };
 
         report
@@ -704,17 +646,10 @@ impl<'a> TextFilePatch<'a> {
     fn apply_create(&self,
                     modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
-                    fuzz: usize,
-                    apply_mode: ApplyMode)
+                    fuzz: usize)
                     -> FilePatchApplyReport
     {
         assert!(self.hunks.len() == 1);
-
-        if let ApplyMode::Rollback(report) = apply_mode {
-            if let HunkApplyReport::Failed(..) = report.hunk_reports()[0] {
-                return FilePatchApplyReport::single_hunk_skip(direction, fuzz);
-            }
-        }
 
         // If we are creating it, it must be empty.
         if !modified_file.content.is_empty() {
@@ -737,17 +672,10 @@ impl<'a> TextFilePatch<'a> {
     fn apply_delete(&self,
                     modified_file: &mut ModifiedFile,
                     direction: PatchDirection,
-                    fuzz: usize,
-                    apply_mode: ApplyMode)
+                    fuzz: usize)
                     -> FilePatchApplyReport
     {
         assert!(self.hunks.len() == 1);
-
-        if let ApplyMode::Rollback(report) = apply_mode {
-            if let HunkApplyReport::Failed(..) = report.hunk_reports()[0] {
-                return FilePatchApplyReport::single_hunk_skip(direction, fuzz);
-            }
-        }
 
         let expected_content = match direction {
             PatchDirection::Forward => &self.hunks[0].remove.content,
@@ -778,7 +706,6 @@ impl<'a> TextFilePatch<'a> {
                     modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
                     fuzz: usize,
-                    apply_mode: ApplyMode,
                     analyses: &AnalysisSet,
                     fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
                     -> FilePatchApplyReport
@@ -793,49 +720,44 @@ impl<'a> TextFilePatch<'a> {
         // don't accept more patches than patch. After all, if we accept hunks in arbitrary order,
         // it is not well defined if they should match against the file before or after
         // modifications from the previous hunks.
-        let mut last_frozen_line = -1isize;
+        let mut min_modify_line = 0isize;
 
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
-        for (i, hunk) in self.hunks.iter().enumerate() {
+        for hunk in self.hunks.iter() {
             let mut hunk_report = HunkApplyReport::Skipped;
 
-            // Decide which fuzz levels we should try
-            let possible_fuzz_levels = match apply_mode {
-                // In normal mode consider fuzz 0 up to given maximum fuzz, but no more than what is useable for this hunk
-                ApplyMode::Normal =>
-                    0..=min(fuzz, hunk.max_useable_fuzz()),
-
-                // In rollback mode use what worked in normal mode
-                ApplyMode::Rollback(ref previous_report) => match previous_report.hunk_reports[i] {
-                    // If the hunk applied, pick the specific fuzz level
-                    HunkApplyReport::Applied { fuzz, .. } =>
-                        fuzz..=fuzz,
-
-                    // If the hunk failed to apply, skip it now.
-                    HunkApplyReport::Failed(..) |
-                    HunkApplyReport::Skipped => {
-                        // Skip it
-                        report.push_hunk_report(hunk_report);
-                        continue;
-                    }
-                }
-            };
-
-            for current_fuzz in possible_fuzz_levels {
+            // Consider fuzz 0 up to given maximum fuzz, but no more than what is useable for this hunk
+            for current_fuzz in 0..=min(fuzz, hunk.max_useable_fuzz()) {
                 // Attempt to apply the hunk at the right fuzz level...
                 let hunk_view = &hunk.view(direction, current_fuzz);
 
-                hunk_report = try_apply_hunk(hunk_view, i, modified_file,
-                                             apply_mode, last_hunk_offset,
-                                             last_frozen_line);
+		let remove_content = hunk_view.remove_content();
+		let (target_line, movable) = match hunk_view.position() {
+		    HunkPosition::Start =>
+			(hunk_view.remove_target_line(), false),
+
+		    // man patch:
+		    // "As a first guess, [patch] takes the line number
+		    // mentioned for the hunk, plus or minus any offset
+		    // used in applying the previous hunk.."
+		    HunkPosition::Middle =>
+			(hunk_view.remove_target_line() + last_hunk_offset, true),
+
+		    HunkPosition::End =>
+			(modified_file.content.len() as isize - remove_content.len() as isize, false),
+		};
+
+                hunk_report = try_apply_hunk(hunk_view, modified_file,
+                                             target_line, movable,
+					     min_modify_line);
 
                 // If it succeeded, we are done with this hunk, remember the last_hunk_offset
-                // and last_frozen_line, so we can use them for the next hunk and do not try
+                // and min_modify_line, so we can use them for the next hunk and do not try
                 // any more fuzz levels.
                 if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
                     last_hunk_offset = offset;
-                    last_frozen_line = line + hunk_view.remove_content().len() as isize - hunk_view.suffix_context() as isize;
+                    min_modify_line = line + remove_content.len() as isize - hunk_view.suffix_context() as isize;
                     break;
                 }
             }
@@ -845,28 +767,121 @@ impl<'a> TextFilePatch<'a> {
         analyses.before_modifications(modified_file, self, direction, &report, fn_analysis_note);
 
         // Now apply all changes on the file.
-        // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
-        //       splices is that they move the tail of the file multiple times. Alternative is to
-        //       generate new Vec and copy every Line at most once, but that seems to be even
-        //       slower. Ideally we would need some in-place modification that moves every Line
-        //       at most once. But I don't think it is possible in general case.
         {
             let mut modification_offset = 0;
             for (hunk, hunk_report) in self.hunks.iter().zip(report.hunk_reports.iter_mut()) {
-                if let HunkApplyReport::Applied { line, ref mut rollback_line, fuzz, line_count_diff, .. } = hunk_report {
-                    let hunk_view = hunk.view(direction, *fuzz);
-                    let target_line = *line + modification_offset;
-                    *rollback_line = target_line;
-                    let range = (target_line as usize)..(target_line as usize + hunk_view.remove_content().len());
-                    modified_file.content.splice(range.clone(), hunk_view.add_content().iter().cloned()); // Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
-
-                    modification_offset += *line_count_diff;
-                }
+                modification_offset = hunk_report.commit(modified_file, hunk, direction, modification_offset);
             }
         }
 
         analyses.after_modifications(modified_file, self, direction, &report, fn_analysis_note);
 
+        report
+    }
+
+    /// Rollback the application (or the revertion - based on direction) of this patch from the `modified_file`
+    /// using the information from the `apply_report`.
+    pub fn rollback(&self,
+                    modified_file: &mut ModifiedFile<'a>,
+                    direction: PatchDirection,
+                    apply_report: &FilePatchApplyReport)
+    {
+        assert!(self.hunks.len() == apply_report.hunk_reports().len());
+
+	let direction = direction.opposite();
+
+        // Call the appropriate specialized function
+        let mut report = match (self.kind, direction) {
+            (FilePatchKind::Modify, _) =>
+                self.rollback_modify(modified_file, direction, apply_report),
+
+            (FilePatchKind::Create, PatchDirection::Forward) |
+            (FilePatchKind::Delete, PatchDirection::Revert) =>
+                self.rollback_create(modified_file, direction, apply_report),
+
+            (FilePatchKind::Delete, PatchDirection::Forward) |
+            (FilePatchKind::Create, PatchDirection::Revert) =>
+                self.rollback_delete(modified_file, direction, apply_report),
+        };
+
+        // Rollback must apply cleanly. If not, we have a bug somewhere.
+        if report.failed() {
+            panic!("Rapidquilt attempted to rollback a patch and that failed. This is a bug. Failure report: {:?}", report);
+        }
+
+        // Determine the new file mode and record the previous one
+        let permissions = &apply_report.previous_permissions;
+        modified_file.permissions = permissions.clone();
+	report.previous_permissions = permissions.clone();
+    }
+
+    /// Roll back this `FilePatchKind::Create` patch on the file.
+    fn rollback_create(&self,
+                    modified_file: &mut ModifiedFile<'a>,
+                    direction: PatchDirection,
+                    apply_report: &FilePatchApplyReport)
+                    -> FilePatchApplyReport
+    {
+        assert!(self.hunks.len() == 1);
+
+        if let HunkApplyReport::Failed(..) = apply_report.hunk_reports()[0] {
+            return FilePatchApplyReport::single_hunk_skip(direction, 0);
+	}
+
+	self.apply_create(modified_file, direction, 0)
+    }
+
+    /// Roll back this `FilePatchKind::Delete` patch on the file.
+    fn rollback_delete(&self,
+                    modified_file: &mut ModifiedFile,
+                    direction: PatchDirection,
+                    apply_report: &FilePatchApplyReport)
+                    -> FilePatchApplyReport
+    {
+        assert!(self.hunks.len() == 1);
+
+        if let HunkApplyReport::Failed(..) = apply_report.hunk_reports()[0] {
+            return FilePatchApplyReport::single_hunk_skip(direction, 0);
+        }
+
+	self.apply_delete(modified_file, direction, 0)
+    }
+
+    /// Roll back this `FilePatchKind::Modify` patch on the file.
+    fn rollback_modify(&self,
+                    modified_file: &mut ModifiedFile<'a>,
+                    direction: PatchDirection,
+                    apply_report: &FilePatchApplyReport)
+                    -> FilePatchApplyReport
+    {
+        let mut report = FilePatchApplyReport::new_with_capacity(direction, 0, self.hunks.len());
+
+        // This function is applied on every hunk one by one, either from beginning
+        // to end, or the opposite way (depends if we are applying or reverting)
+        for (hunk, apply_hunk_report) in self.hunks.iter().zip(apply_report.hunk_reports.iter()).rev() {
+            let (fuzz, rollback_line) =
+		match *apply_hunk_report {
+                    // If the hunk applied, pick the specific fuzz level
+                    HunkApplyReport::Applied { fuzz, rollback_line, .. } => (fuzz, rollback_line),
+
+                    // If the hunk failed to apply, skip it now.
+                    HunkApplyReport::Failed(..) |
+                    HunkApplyReport::Skipped => {
+			report.push_hunk_report(HunkApplyReport::Skipped);
+			continue;
+                    }
+		};
+
+            // Attempt to apply the hunk at the right fuzz level...
+            let hunk_view = &hunk.view(direction, fuzz);
+
+            let mut hunk_report = try_apply_hunk(hunk_view, modified_file,
+						 rollback_line, false, 0);
+	    hunk_report.commit(modified_file, hunk, direction, 0);
+	    report.push_hunk_report(hunk_report);
+        }
+
+	report.hunk_reports.reverse();
         report
     }
 }

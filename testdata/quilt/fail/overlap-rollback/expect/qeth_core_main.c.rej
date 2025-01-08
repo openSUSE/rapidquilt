@@ -1,0 +1,12 @@
+diff --git qeth_core_main.c qeth_core_main.c
+index 35d4b398c197..8bd9fd51208c
+--- qeth_core_main.c
++++ qeth_core_main.c
+@@ -4839,6 +4797,7 @@ static int qeth_init_link_info_oat_cb(struct qeth_card *card,
+ 	struct qeth_query_oat_physical_if *phys_if;
+ 	struct qeth_query_oat_reply *reply;
+ 
++	QETH_CARD_TEXT(card, 2, "qoatincb");
+ 	if (qeth_setadpparms_inspect_rc(cmd))
+ 		return -EIO;
+ 
