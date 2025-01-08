@@ -318,7 +318,6 @@ fn try_apply_hunk<'a, 'hunk>(
     // Report success
     HunkApplyReport::Applied {
         line: target_line,
-        rollback_line: target_line,
         offset: target_line - hunk_view.remove_target_line(),
         line_count_diff: add_content.len() as isize - remove_content.len() as isize,
         fuzz: hunk_view.fuzz(),
@@ -367,9 +366,6 @@ pub enum HunkApplyReport {
         /// Line on which the hunk was applied (in the original file).
         line: isize,
 
-        /// Line at which the hunk is for rollback (in the modified file).
-        rollback_line: isize,
-
         /// The offset from the originally intended line to the line where it
         /// was applied.
         offset: isize,
@@ -391,16 +387,15 @@ pub enum HunkApplyReport {
 
 impl HunkApplyReport {
     // Apply a hunk to a modified_file according to the report
-    // (i.e. commit the changes). Update rollback_line in the
-    // report and return the new line number difference between
-    // the original file and the patched file.
+    // (i.e. commit the changes). Return the new line number
+    // difference between the original file and the patched file.
     //
     // TODO: Do some more efficient than multiple `Vec::splice`s? The problem with multiple
     //       splices is that they move the tail of the file multiple times. Alternative is to
     //       generate new Vec and copy every Line at most once, but that seems to be even
     //       slower. Ideally we would need some in-place modification that moves every Line
     //       at most once. But I don't think it is possible in general case.
-    pub fn commit<'a>(&mut self,
+    pub fn commit<'a>(&self,
 		      modified_file: &mut ModifiedFile<'a>,
 		      hunk: &TextHunk<'a>,
 		      direction: PatchDirection,
@@ -408,10 +403,9 @@ impl HunkApplyReport {
 		      -> isize
     {
 	match *self {
-            HunkApplyReport::Applied { line, ref mut rollback_line, fuzz, line_count_diff, .. } => {
+            HunkApplyReport::Applied { line, fuzz, line_count_diff, .. } => {
 		let hunk_view = hunk.view(direction, fuzz);
 		let target_line = line + line_diff;
-		*rollback_line = target_line;
 		let prefix_len = hunk_view.prefix_context();
 		let suffix_len = hunk_view.suffix_context();
 		let range = (target_line as usize + prefix_len)..(target_line as usize + hunk_view.remove_content().len() - suffix_len);
@@ -458,7 +452,7 @@ impl FilePatchApplyReport {
     {
         FilePatchApplyReport {
             hunk_reports: vec![HunkApplyReport::Applied {
-                line, rollback_line: line, offset, line_count_diff, fuzz,
+                line, offset, line_count_diff, fuzz,
             }],
             any_failed: false,
             direction,
@@ -893,8 +887,8 @@ impl<'a> TextFilePatch<'a> {
             // Attempt to apply the hunk ignoring trailing context...
             let ref hunk_view = HunkView::with_no_suffix(&hunk, direction, fuzz);
 
-            let mut hunk_report = try_apply_hunk(hunk_view, modified_file,
-						 rollback_line, false, 0);
+            let hunk_report = try_apply_hunk(hunk_view, modified_file,
+					     rollback_line, false, 0);
 	    hunk_report.commit(modified_file, hunk, direction, 0);
 	    report.push_hunk_report(hunk_report);
         }
