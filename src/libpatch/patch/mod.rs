@@ -904,16 +904,6 @@ impl<'a> TextFilePatch<'a> {
     {
         let mut report = FilePatchApplyReport::new_with_capacity(direction, 0, self.hunks.len());
 
-        let mut last_hunk_offset = 0isize;
-
-        // This adds artificial limitation on ordering of hunks to replicate the behavior of patch.
-        // Patch prints the output lines while it is applying hunks, so no hunk can not modify a
-        // line before the previous hunk. We don't have this limitation, but lets emulate it so we
-        // don't accept more patches than patch. After all, if we accept hunks in arbitrary order,
-        // it is not well defined if they should match against the file before or after
-        // modifications from the previous hunks.
-        let mut min_modify_line = 0isize;
-
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
         for (i, hunk) in self.hunks.iter().enumerate() {
@@ -938,15 +928,7 @@ impl<'a> TextFilePatch<'a> {
 
             hunk_report = try_apply_hunk(hunk_view, i, modified_file,
                                          ApplyMode::Rollback(apply_report),
-					 last_hunk_offset, min_modify_line);
-
-            // If it succeeded, we are done with this hunk, remember the last_hunk_offset
-            // and min_modify_line, so we can use them for the next hunk and do not try
-            // any more fuzz levels.
-            if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
-                last_hunk_offset = offset;
-                min_modify_line = line + hunk_view.remove_content().len() as isize - hunk_view.suffix_context() as isize;
-            }
+					 0, 0);
             report.push_hunk_report(hunk_report);
         }
 
