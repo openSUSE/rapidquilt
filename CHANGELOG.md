@@ -1,5 +1,11 @@
 # Unreleased changes
 
+# Version 0.6.7
+
+* Move from `failure` to `thiserror` and `anyhow`.
+* Move from `atty` to `std::io::IsTerminal`
+* Fixed issues: #24, #31, #32
+
 # Version 0.6.6
 
 * Preserve file permissions if no mode is specified in the patch.
