@@ -1121,7 +1121,7 @@ fn test_parse_hunk_line() {
                         ParseError::BadLineInHunk("wtf".to_string()));
 }
 
-fn parse_hunk<'a>(input: &'a [u8]) -> Result<(&[u8], TextHunk<'a>), ErrorBuilder> {
+fn parse_hunk(input: &[u8]) -> Result<(&[u8], TextHunk), ErrorBuilder> {
     let (mut input, mut header) = parse_hunk_header(input)
         .map_err(|err| if err == ErrorBuilder::NoMatch { err } else {
             ErrorBuilder::BadHunkHeader(input)
@@ -1433,8 +1433,8 @@ fn offsetof<T>(container: &[T], slice: &[T]) -> usize
     (slice.as_ptr() as usize) - (container.as_ptr() as usize)
 }
 
-fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
-    -> Result<(&[u8], (&'a [u8], TextFilePatch<'a>)), ErrorBuilder>
+fn parse_filepatch(bytes: &[u8], mut want_header: bool)
+    -> Result<(&[u8], (&[u8], TextFilePatch)), ErrorBuilder>
 {
     let mut input = bytes;
     let mut header = &bytes[..0];
