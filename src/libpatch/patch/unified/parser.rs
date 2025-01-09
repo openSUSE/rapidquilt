@@ -246,6 +246,15 @@ fn take_line_incl(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
     }
 }
 
+/// Takes a line from input including the newline byte if present.
+/// It is OK if there is no newline.
+fn take_line_or_eof(input: &[u8]) -> (&[u8], &[u8]) {
+    match memchr::memchr(b'\n', input) {
+	Some(index) => (&input[index+1..], &input[..index+1]),
+	None => (&b""[..], &input[..]),
+    }
+}
+
 fn map_parsed<I, T1, T2, E, F>(parsed: Result<(I, T1), E>, f: F) -> Result<(I, T2), E>
 where
     F: FnOnce(T1) -> T2,
@@ -809,9 +818,8 @@ enum PatchLine<'a> {
 
 fn parse_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
-        .or_else(|_| map_parsed(take_line_incl(input), PatchLine::Garbage))
-        .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch))
-                 .ok_or(ErrorBuilder::UnexpectedEndOfFile))
+	.or_else(|_| input.is_empty().then(|| Ok((input, PatchLine::EndOfPatch)))
+		 .unwrap_or_else(|| map_parsed(Ok(take_line_or_eof(input)), PatchLine::Garbage)))
 }
 
 #[cfg(test)]
@@ -841,16 +849,15 @@ fn test_parse_patch_line() {
 
     assert_parsed!(parse_patch_line, b"", EndOfPatch);
 
-    assert_parse_error!(parse_patch_line, b"No newline at EOF",
-                        ParseError::UnexpectedEndOfFile);
+    assert_parsed!(parse_patch_line, b"No newline at EOF", Garbage(b"No newline at EOF"));
 }
 
 fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
         .or_else(|_| map_parsed(parse_git_metadata_line(input), PatchLine::GitMetadata))
         .or_else(|_| map_parsed(take_line_incl(input), PatchLine::Garbage))
-        .or_else(|_| input.is_empty().then(|| (input, PatchLine::EndOfPatch))
-                 .ok_or(ErrorBuilder::UnexpectedEndOfFile))
+        .or_else(|_| input.is_empty().then(|| Ok((input, PatchLine::EndOfPatch)))
+		 .unwrap_or_else(|| map_parsed(Ok(take_line_or_eof(input)), PatchLine::Garbage)))
 }
 
 #[cfg(test)]
@@ -880,8 +887,7 @@ fn test_parse_git_patch_line() {
 
     assert_parsed!(parse_git_patch_line, b"", EndOfPatch);
 
-    assert_parse_error!(parse_git_patch_line, b"No newline at EOF",
-                        ParseError::UnexpectedEndOfFile);
+    assert_parsed!(parse_git_patch_line, b"No newline at EOF", Garbage(b"No newline at EOF"));
 }
 
 fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder> {
@@ -1026,6 +1032,11 @@ fn test_parse_hunk_header() {
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @function name\n", h4);
     assert_parsed!(parse_hunk_header, b"@@ -1,2 +3,4 @ function name\n", h4);
 
+    // garbage with EOL
+    assert_eq!(parse_hunk_header(b"\n"), Err(ErrorBuilder::NoMatch));
+    assert_eq!(parse_hunk_header(b"some garbage\n"), Err(ErrorBuilder::NoMatch));
+
+    // garbage without EOL
     assert_eq!(parse_hunk_header(b""), Err(ErrorBuilder::NoMatch));
     assert_eq!(parse_hunk_header(b"some garbage"), Err(ErrorBuilder::NoMatch));
 
