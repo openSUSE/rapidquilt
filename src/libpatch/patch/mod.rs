@@ -825,13 +825,11 @@ Apply report:
                     apply_report: &FilePatchApplyReport)
                     -> FilePatchApplyReport
     {
-        assert!(self.hunks.len() == 1);
-
-        if let HunkApplyReport::Failed(..) = apply_report.hunk_reports()[0] {
-            return FilePatchApplyReport::single_hunk_skip(direction, 0);
+	if apply_report.failed() {
+            FilePatchApplyReport::single_hunk_skip(direction, 0)
+	} else {
+	    self.apply_create(modified_file, direction, 0)
 	}
-
-	self.apply_create(modified_file, direction, 0)
     }
 
     /// Roll back this `FilePatchKind::Create` patch on the file.
@@ -841,13 +839,11 @@ Apply report:
                     apply_report: &FilePatchApplyReport)
                     -> FilePatchApplyReport
     {
-        assert!(self.hunks.len() == 1);
-
-        if let HunkApplyReport::Failed(..) = apply_report.hunk_reports()[0] {
-            return FilePatchApplyReport::single_hunk_skip(direction, 0);
-        }
-
-	self.apply_delete(modified_file, direction, 0)
+	if apply_report.failed() {
+            FilePatchApplyReport::single_hunk_skip(direction, 0)
+        } else {
+	    self.apply_delete(modified_file, direction, 0)
+	}
     }
 
     /// Roll back this `FilePatchKind::Modify` patch on the file.
