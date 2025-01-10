@@ -1,0 +1,49 @@
+Make the file empty, but do not delete it.
+--- file.in
++++ file.out
+@@ -1,45 +0,0 @@
+-aaa
+-bbb
+-ccc
+-ddd
+-eee
+-fff
+-ggg
+-hhh
+-iii
+-jjj
+-kkk
+-lll
+-mmm
+-nnn
+-ooo
+-ppp
+-qqq
+-rrr
+-sss
+-ttt
+-uuu
+-vvv
+-www
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
+-xxx
