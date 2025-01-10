@@ -2011,6 +2011,7 @@ new mode 100755
 
 pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, ParseError> {
     let mut input = bytes;
+    let mut warnings = vec![];
 
     let mut header = &bytes[..0];
     let mut file_patches = Vec::<TextFilePatch>::new();
@@ -2045,6 +2046,7 @@ pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result
     Ok(TextPatch {
         header,
         file_patches,
+	warnings,
     })
 }
 
@@ -2075,6 +2077,8 @@ garbage7
 "#;
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert!(patch.warnings.is_empty());
 
     assert_lines_eq!(patch.header, [
         "garbage1",
@@ -2121,6 +2125,8 @@ rename to filename7
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
 
+    assert!(patch.warnings.is_empty());
+
     assert_lines_eq!(patch.header, [
         "garbage1",
         "garbage2",
@@ -2157,6 +2163,10 @@ rename from old name is just garbage, no git
 "#;
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert!(patch.warnings.is_empty());
+
+    assert!(patch.warnings.is_empty());
 
     assert_lines_eq!(patch.header, [
         "Looks like git diff extended headers:",
@@ -2208,6 +2218,8 @@ index 0123456789ab..cdefedcba987 100644
 "#;
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert!(patch.warnings.is_empty());
 
     assert_eq!(patch.header.iter().filter(|&&c| c == b'\n').count(), 14);
 }

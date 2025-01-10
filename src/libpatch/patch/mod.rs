@@ -865,6 +865,9 @@ pub struct Patch<'a, Line> {
 
     /// All FilePatches included in the patch file
     pub file_patches: Vec<FilePatch<'a, Line>>,
+
+    /// Warnings from parser
+    pub warnings: Vec<String>,
 }
 
 pub type TextPatch<'a> = Patch<'a, &'a [u8]>;
