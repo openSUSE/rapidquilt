@@ -699,8 +699,6 @@ impl<'a> TextFilePatch<'a> {
         // modifications from the previous hunks.
         let mut min_modify_line = 0isize;
 
-        // This function is applied on every hunk one by one, either from beginning
-        // to end, or the opposite way (depends if we are applying or reverting)
         for hunk in self.hunks.iter() {
             let mut hunk_report: Option<HunkApplyReport> = None;
 
@@ -833,8 +831,6 @@ Apply report:
     {
 	let mut ok = true;
 
-        // This function is applied on every hunk one by one, either from beginning
-        // to end, or the opposite way (depends if we are applying or reverting)
         for (hunk, apply_hunk_report) in self.hunks.iter().zip(apply_report.hunk_reports.iter()) {
             let (fuzz, rollback_line) =
 		match *apply_hunk_report {
