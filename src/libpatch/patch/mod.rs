@@ -411,18 +411,18 @@ pub struct FilePatchApplyReport {
     any_failed: bool,
     hunk_reports: Vec<HunkApplyReport>,
     direction: PatchDirection,
-    fuzz: usize,
+    max_fuzz: usize,
     previous_permissions: Option<fs::Permissions>,
 }
 
 impl FilePatchApplyReport {
     /// Create a report for given amount of hunks
-    fn new_with_capacity(direction: PatchDirection, fuzz: usize, capacity: usize) -> Self {
+    fn new_with_capacity(direction: PatchDirection, max_fuzz: usize, capacity: usize) -> Self {
         Self {
             hunk_reports: Vec::with_capacity(capacity),
             any_failed: false,
             direction,
-            fuzz,
+            max_fuzz,
             previous_permissions: None,
         }
     }
@@ -431,38 +431,38 @@ impl FilePatchApplyReport {
     fn single_hunk_success(line: isize,
                            offset: isize,
                            direction: PatchDirection,
-                           fuzz: usize)
+                           max_fuzz: usize)
                            -> Self
     {
         Self {
             hunk_reports: vec![HunkApplyReport::Applied {
-                line, offset, fuzz,
+                line, offset, fuzz: max_fuzz,
             }],
             any_failed: false,
             direction,
-            fuzz,
+            max_fuzz,
             previous_permissions: None,
         }
     }
 
     /// Create a report with single hunk that failed
-    fn single_hunk_failure(reason: HunkApplyFailureReason, direction: PatchDirection, fuzz: usize) -> Self {
+    fn single_hunk_failure(reason: HunkApplyFailureReason, direction: PatchDirection, max_fuzz: usize) -> Self {
         Self {
             hunk_reports: vec![HunkApplyReport::Failed(reason)],
             any_failed: true,
             direction,
-            fuzz,
+            max_fuzz,
             previous_permissions: None,
         }
     }
 
     /// Create a report with single hunk that was skipped
-    fn single_hunk_skip(direction: PatchDirection, fuzz: usize) -> Self {
+    fn single_hunk_skip(direction: PatchDirection, max_fuzz: usize) -> Self {
         Self {
             hunk_reports: vec![HunkApplyReport::Skipped],
             any_failed: false,
             direction,
-            fuzz,
+            max_fuzz,
             previous_permissions: None,
         }
     }
@@ -489,8 +489,8 @@ impl FilePatchApplyReport {
         self.direction
     }
 
-    /// Fuzz level used during the applying.
-    pub fn fuzz(&self) -> usize { self.fuzz }
+    /// Maximum allowed fuzz level used during the applying.
+    pub fn max_fuzz(&self) -> usize { self.max_fuzz }
 }
 
 pub type HunksVec<'a, Line> = Vec<Hunk<'a, Line>>;
@@ -594,11 +594,11 @@ impl<'a, Line> FilePatch<'a, Line> {
 pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
 
 impl<'a> TextFilePatch<'a> {
-    /// Apply (or revert - based on `direction`) this patch to the `modified_file` using the given `fuzz`.
+    /// Apply (or revert - based on `direction`) this patch to the `modified_file` using the given `max_fuzz`.
     pub fn apply(&self,
                  modified_file: &mut ModifiedFile<'a>,
                  direction: PatchDirection,
-                 fuzz: usize,
+                 max_fuzz: usize,
                  analyses: &AnalysisSet,
                  fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
                  -> FilePatchApplyReport
@@ -606,15 +606,15 @@ impl<'a> TextFilePatch<'a> {
         // Call the appropriate specialized function
         let mut report = match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
-                self.apply_modify(modified_file, direction, fuzz, analyses, fn_analysis_note),
+                self.apply_modify(modified_file, direction, max_fuzz, analyses, fn_analysis_note),
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
-                self.apply_create(modified_file, direction, fuzz),
+                self.apply_create(modified_file, direction, max_fuzz),
 
             (FilePatchKind::Delete, PatchDirection::Forward) |
             (FilePatchKind::Create, PatchDirection::Revert) =>
-                self.apply_delete(modified_file, direction, fuzz),
+                self.apply_delete(modified_file, direction, max_fuzz),
         };
 
         // Determine the new file mode and record the previous one
@@ -637,14 +637,14 @@ impl<'a> TextFilePatch<'a> {
     fn apply_create(&self,
                     modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
-                    fuzz: usize)
+                    max_fuzz: usize)
                     -> FilePatchApplyReport
     {
         assert!(self.hunks.len() == 1);
 
         // If we are creating it, it must be empty.
         if !modified_file.content.is_empty() {
-            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::CreatingFileThatExists, direction, fuzz);
+            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::CreatingFileThatExists, direction, max_fuzz);
         }
 
         let new_content = match direction {
@@ -656,14 +656,14 @@ impl<'a> TextFilePatch<'a> {
         modified_file.content = new_content.clone();
         modified_file.deleted = false;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, direction, fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, direction, max_fuzz)
     }
 
     /// Apply this `FilePatchKind::Delete` patch on the file.
     fn apply_delete(&self,
                     modified_file: &mut ModifiedFile,
                     direction: PatchDirection,
-                    fuzz: usize)
+                    max_fuzz: usize)
                     -> FilePatchApplyReport
     {
         assert!(self.hunks.len() == 1);
@@ -675,7 +675,7 @@ impl<'a> TextFilePatch<'a> {
 
         // If we are deleting it, it must contain exactly what we want to remove.
         if expected_content != &modified_file.content {
-            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::DeletingFileThatDoesNotMatch, direction, fuzz);
+            return FilePatchApplyReport::single_hunk_failure(HunkApplyFailureReason::DeletingFileThatDoesNotMatch, direction, max_fuzz);
         }
 
         // Just delete everything and we are done
@@ -689,19 +689,19 @@ impl<'a> TextFilePatch<'a> {
             Some(_) => (),
         };
 
-        FilePatchApplyReport::single_hunk_success(0, 0, direction, fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, direction, max_fuzz)
     }
 
     /// Apply this `FilePatchKind::Modify` patch on the file.
     fn apply_modify(&self,
                     modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
-                    fuzz: usize,
+                    max_fuzz: usize,
                     analyses: &AnalysisSet,
                     fn_analysis_note: &dyn Fn(&dyn Note, &TextFilePatch))
                     -> FilePatchApplyReport
     {
-        let mut report = FilePatchApplyReport::new_with_capacity(direction, fuzz, self.hunks.len());
+        let mut report = FilePatchApplyReport::new_with_capacity(direction, max_fuzz, self.hunks.len());
 
         let mut last_hunk_offset = 0isize;
 
@@ -719,7 +719,7 @@ impl<'a> TextFilePatch<'a> {
             let mut hunk_report = HunkApplyReport::Skipped;
 
             // Consider fuzz 0 up to given maximum fuzz, but no more than what is useable for this hunk
-            for current_fuzz in 0..=min(fuzz, hunk.max_useable_fuzz()) {
+            for current_fuzz in 0..=min(max_fuzz, hunk.max_useable_fuzz()) {
                 // Attempt to apply the hunk at the right fuzz level...
                 let hunk_view = &hunk.view(direction, current_fuzz);
 
