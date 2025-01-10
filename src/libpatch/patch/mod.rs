@@ -430,13 +430,14 @@ impl FilePatchApplyReport {
     /// Create a report with single hunk that succeeded
     fn single_hunk_success(line: isize,
                            offset: isize,
+			   fuzz: usize,
                            direction: PatchDirection,
                            max_fuzz: usize)
                            -> Self
     {
         Self {
             hunk_reports: vec![HunkApplyReport::Applied {
-                line, offset, fuzz: max_fuzz,
+                line, offset, fuzz,
             }],
             any_failed: false,
             direction,
@@ -656,7 +657,7 @@ impl<'a> TextFilePatch<'a> {
         modified_file.content = new_content.clone();
         modified_file.deleted = false;
 
-        FilePatchApplyReport::single_hunk_success(0, 0, direction, max_fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, 0, direction, max_fuzz)
     }
 
     /// Apply this `FilePatchKind::Delete` patch on the file.
@@ -689,7 +690,7 @@ impl<'a> TextFilePatch<'a> {
             Some(_) => (),
         };
 
-        FilePatchApplyReport::single_hunk_success(0, 0, direction, max_fuzz)
+        FilePatchApplyReport::single_hunk_success(0, 0, 0, direction, max_fuzz)
     }
 
     /// Apply this `FilePatchKind::Modify` patch on the file.
