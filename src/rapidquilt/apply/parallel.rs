@@ -94,7 +94,7 @@ pub struct FilenameDistributor<T: Hash + Eq> {
 impl<T: Hash + Eq> FilenameDistributor<T> {
     /// Create new distributor that distributes into `thread_count`-amount of threads
     pub fn new(thread_count: usize) -> Self {
-        FilenameDistributor {
+        Self {
             thread_count,
             filename_to_index: HashMap::with_hasher(BuildHasherDefault::<seahash::SeaHasher>::default()),
             connected_components: Vec::new(),

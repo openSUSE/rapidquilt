@@ -24,7 +24,7 @@ where T: Clone + Eq + Hash + PartialEq {
             filter.insert(item.clone());
         }
 
-        Searcher {
+        Self {
             needle,
             filter
         }

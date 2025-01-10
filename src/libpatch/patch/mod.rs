@@ -90,7 +90,7 @@ pub struct Hunk<'a, Line> {
 impl<'a, Line> Hunk<'a, Line> {
     /// Create new hunk for given parameters.
     pub fn new(remove_line: isize, add_line: isize, function: &'a [u8]) -> Self {
-        Hunk {
+        Self {
             remove: HunkPart {
                 content: ContentVec::new(),
                 target_line: remove_line,
@@ -151,7 +151,7 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
         let prefix_fuzz = hunk.prefix_context.saturating_sub(remaining_context);
         let suffix_fuzz = hunk.suffix_context.saturating_sub(remaining_context);
 
-        HunkView {
+        Self {
             hunk,
             fuzz,
             prefix_fuzz,
@@ -164,7 +164,7 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
 	let remaining_context = max(hunk.prefix_context, hunk.suffix_context).saturating_sub(fuzz);
 	let prefix_fuzz = hunk.prefix_context.saturating_sub(remaining_context);
 
-	HunkView {
+	Self {
 	    hunk,
 	    fuzz,
 	    prefix_fuzz,
@@ -338,10 +338,10 @@ pub enum PatchDirection {
 }
 
 impl PatchDirection {
-    pub fn opposite(self) -> PatchDirection {
+    pub fn opposite(self) -> Self {
         match self {
-            PatchDirection::Forward => PatchDirection::Revert,
-            PatchDirection::Revert => PatchDirection::Forward,
+            Self::Forward => Self::Revert,
+            Self::Revert => Self::Forward,
         }
     }
 }
@@ -419,7 +419,7 @@ pub struct FilePatchApplyReport {
 impl FilePatchApplyReport {
     /// Create a report for given amount of hunks
     fn new_with_capacity(direction: PatchDirection, fuzz: usize, capacity: usize) -> Self {
-        FilePatchApplyReport {
+        Self {
             hunk_reports: Vec::with_capacity(capacity),
             any_failed: false,
             direction,
@@ -435,7 +435,7 @@ impl FilePatchApplyReport {
                            fuzz: usize)
                            -> Self
     {
-        FilePatchApplyReport {
+        Self {
             hunk_reports: vec![HunkApplyReport::Applied {
                 line, offset, fuzz,
             }],
@@ -448,7 +448,7 @@ impl FilePatchApplyReport {
 
     /// Create a report with single hunk that failed
     fn single_hunk_failure(reason: HunkApplyFailureReason, direction: PatchDirection, fuzz: usize) -> Self {
-        FilePatchApplyReport {
+        Self {
             hunk_reports: vec![HunkApplyReport::Failed(reason)],
             any_failed: true,
             direction,
@@ -459,7 +459,7 @@ impl FilePatchApplyReport {
 
     /// Create a report with single hunk that was skipped
     fn single_hunk_skip(direction: PatchDirection, fuzz: usize) -> Self {
-        FilePatchApplyReport {
+        Self {
             hunk_reports: vec![HunkApplyReport::Skipped],
             any_failed: false,
             direction,
