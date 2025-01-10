@@ -1466,10 +1466,12 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool, warnings: &mut Ve
         }
 
         match patch_line {
-            Garbage(_) => {
+            Garbage(line) => {
                 if want_header {
                     header = &bytes[..offsetof(bytes, input_)];
-                }
+                } else if memchr::memchr(b'\n', line) == None {
+		    warnings.push("Patch unexpectedly ends in the middle of a line.".to_string());
+		}
             }
 
             EndOfPatch => {
@@ -2254,6 +2256,21 @@ index 0123456789ab..cdefedcba987 100644
     assert!(patch.warnings.is_empty());
 
     assert_eq!(patch.header.iter().filter(|&&c| c == b'\n').count(), 14);
+
+    // Trailing garbage with no newline at EOF
+    let filepatch_txt = br#"garbage1
+--- file.in
++++ file.out
+@@ -200,3 +210,3 @@ place2
+ mmm
+-nnn
++ooo
+ ppp
+garbage with no EOL"#;
+
+    let patch = parse_patch(filepatch_txt, 0, true).unwrap();
+    assert!(patch.warnings.iter().fold(false, |found, item|
+				       found || item.contains("unexpectedly ends")));
 }
 
 #[cfg(test)]
