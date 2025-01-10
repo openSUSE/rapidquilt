@@ -785,11 +785,11 @@ impl<'a> TextFilePatch<'a> {
 
             (FilePatchKind::Create, PatchDirection::Forward) |
             (FilePatchKind::Delete, PatchDirection::Revert) =>
-                self.rollback_create(modified_file, direction, apply_report),
+                self.rollback_delete(modified_file, direction, apply_report),
 
             (FilePatchKind::Delete, PatchDirection::Forward) |
             (FilePatchKind::Create, PatchDirection::Revert) =>
-                self.rollback_delete(modified_file, direction, apply_report),
+                self.rollback_create(modified_file, direction, apply_report),
         };
 
         // Rollback must apply cleanly. If not, we have a bug somewhere.
@@ -818,8 +818,8 @@ Apply report:
         modified_file.permissions = apply_report.previous_permissions.clone();
     }
 
-    /// Roll back this `FilePatchKind::Create` patch on the file.
-    fn rollback_create(&self,
+    /// Roll back this `FilePatchKind::Delete` patch on the file.
+    fn rollback_delete(&self,
                     modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
                     apply_report: &FilePatchApplyReport)
@@ -834,8 +834,8 @@ Apply report:
 	self.apply_create(modified_file, direction, 0)
     }
 
-    /// Roll back this `FilePatchKind::Delete` patch on the file.
-    fn rollback_delete(&self,
+    /// Roll back this `FilePatchKind::Create` patch on the file.
+    fn rollback_create(&self,
                     modified_file: &mut ModifiedFile,
                     direction: PatchDirection,
                     apply_report: &FilePatchApplyReport)
