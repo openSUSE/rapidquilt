@@ -39,7 +39,7 @@ impl<'arena> ModifiedFile<'arena> {
             split_lines_with_endings(bytes)
         );
 
-        ModifiedFile {
+        Self {
             content,
             deleted: false,
             existed,
@@ -49,7 +49,7 @@ impl<'arena> ModifiedFile<'arena> {
 
     /// Create new empty `ModifiedFile`
     pub fn new_non_existent() -> Self {
-        ModifiedFile {
+        Self {
             content: Vec::new(),
             deleted: true,
             existed: false,
@@ -67,7 +67,7 @@ impl<'arena> ModifiedFile<'arena> {
         self.deleted = true;
         // self.existed remains as it was
 
-        ModifiedFile {
+        Self {
             content: out_content,
             deleted: false,
             existed: false,

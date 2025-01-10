@@ -2,7 +2,7 @@ use std::fs;
 use std::io::Write;
 use std::vec::Vec;
 
-use anyhow::Result;
+use anyhow::{bail, Context, Result};
 
 use crate::analysis::{AnalysisSet, fn_analysis_note_noop};
 use crate::modified_file::ModifiedFile;
@@ -50,7 +50,11 @@ fn all_files() -> Result<()> {
         // Load the target file
         // Note: In this case we always expect the old_filename to exist, so we
         //       select it directly.
-        let file = fs::read(path.with_file_name(file_patch.old_filename().expect("old_filename missing!").as_ref()))?;
+        let file = if let Some(old_filename) = file_patch.old_filename() {
+	    fs::read(path.with_file_name(old_filename.as_ref()))?
+	} else {
+	    vec![]
+	};
         let mut modified_file = ModifiedFile::new(&file, true, None);
 
         // Patch it
@@ -76,7 +80,15 @@ fn all_files() -> Result<()> {
         modified_file.write_to(&mut output)?;
 
         // Compare with the expected output
-        let expected_output = fs::read(path.with_extension("out"))?;
+	let expected_file = path.with_extension("out");
+	let expected_output = if modified_file.deleted {
+	    if expected_file.try_exists()? {
+		bail!("{} exists, but the patch was interpreted as delete!", expected_file.display());
+	    }
+	    vec![]
+	} else {
+            fs::read(&expected_file).with_context(|| format!("Failed to open {}", expected_file.display()))?
+	};
 
         if output != expected_output {
             let stderr = std::io::stderr();

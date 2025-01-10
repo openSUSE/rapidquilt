@@ -48,7 +48,7 @@ pub fn test_apply_with_fuzzes<'arena, H: BuildHasher>(
     // Rollback the failed application
     patch_status.file_patch.rollback(&mut file, PatchDirection::Forward, &patch_status.report);
 
-    let current_fuzz = patch_status.report.fuzz();
+    let current_fuzz = patch_status.report.max_fuzz();
     let max_fuzz = patch_status.file_patch.max_useable_fuzz();
 
     if current_fuzz >= max_fuzz {
@@ -84,14 +84,14 @@ pub fn test_apply_after_reverting_other<'arena, H: BuildHasher>(
     failed_patch_status.file_patch.rollback(&mut file, PatchDirection::Forward, &failed_patch_status.report);
 
     // Revert the suspect
-    let revert_report = suspect_patch_status.file_patch.apply(&mut file, PatchDirection::Revert, suspect_patch_status.report.fuzz(), &AnalysisSet::default(), &fn_analysis_note_noop);
+    let revert_report = suspect_patch_status.file_patch.apply(&mut file, PatchDirection::Revert, suspect_patch_status.report.max_fuzz(), &AnalysisSet::default(), &fn_analysis_note_noop);
     if revert_report.failed() {
         // If we couldn't even revert the suspect, we can't test anything
         return false;
     }
 
     // Try to apply our failed patch again
-    let apply_report = failed_patch_status.file_patch.apply(&mut file, PatchDirection::Forward, failed_patch_status.report.fuzz(), &AnalysisSet::default(), &fn_analysis_note_noop);
+    let apply_report = failed_patch_status.file_patch.apply(&mut file, PatchDirection::Forward, failed_patch_status.report.max_fuzz(), &AnalysisSet::default(), &fn_analysis_note_noop);
 
     // Report whether it would apply ok now
     apply_report.ok()
@@ -158,10 +158,6 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
                         if let Some(reason_str) = reason_str {
                             write!(writer, "{}", reason_str.bright_red())?;
                         }
-                    }
-
-                    HunkApplyReport::Skipped => {
-                        unreachable!(); // This should never happen here. Hunk can be skipped only during rollback.
                     }
                 }
 
@@ -283,8 +279,9 @@ pub fn print_difference_to_closest_match<W: Write>(
     prefix: &str)
     -> Result<()>
 {
-    // Get a HunkView that will be the same as the one used during patching
-    let hunk_view = hunk.view(report.direction(), report.fuzz());
+    // Get a HunkView with the same direction as used during patching,
+    // but with maximum available context.
+    let hunk_view = hunk.view(report.direction(), 0);
     let hunk_len = hunk_view.remove_content().len();
     let file_len = modified_file.content.len();
 

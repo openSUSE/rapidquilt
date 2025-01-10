@@ -156,6 +156,13 @@ macro_rules! assert_parsed {
 }
 
 #[cfg(test)]
+macro_rules! assert_garbage {
+    ( $parse_func:ident, $input:expr) => {
+	assert_parsed!($parse_func, $input, Garbage($input))
+    };
+}
+
+#[cfg(test)]
 macro_rules! assert_parse_error {
     ( $parse_func:ident, $input:expr, $error:expr ) => {
         {
@@ -832,24 +839,24 @@ fn test_parse_patch_line() {
     assert_parsed!(parse_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
     assert_parsed!(parse_patch_line, b"+++ bbb\n", Metadata(PlusFilename(Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
 
-    assert_parsed!(parse_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
+    assert_garbage!(parse_patch_line, b"Bla ble bli.\n");
 
-    assert_parsed!(parse_patch_line, b"index 0123456789a..fedcba98765 100644\n", Garbage(b"index 0123456789a..fedcba98765 100644\n"));
+    assert_garbage!(parse_patch_line, b"index 0123456789a..fedcba98765 100644\n");
 
-    assert_parsed!(parse_patch_line, b"old mode 100644\n", Garbage(b"old mode 100644\n"));
-    assert_parsed!(parse_patch_line, b"new mode 100755\n", Garbage(b"new mode 100755\n"));
-    assert_parsed!(parse_patch_line, b"deleted file mode 100644\n", Garbage(b"deleted file mode 100644\n"));
-    assert_parsed!(parse_patch_line, b"new file mode 100644\n", Garbage(b"new file mode 100644\n"));
+    assert_garbage!(parse_patch_line, b"old mode 100644\n");
+    assert_garbage!(parse_patch_line, b"new mode 100755\n");
+    assert_garbage!(parse_patch_line, b"deleted file mode 100644\n");
+    assert_garbage!(parse_patch_line, b"new file mode 100644\n");
 
-    assert_parsed!(parse_patch_line, b"rename from oldname\n", Garbage(b"rename from oldname\n"));
-    assert_parsed!(parse_patch_line, b"rename to newname\n", Garbage(b"rename to newname\n"));
-    assert_parsed!(parse_patch_line, b"copy from oldname\n", Garbage(b"copy from oldname\n"));
-    assert_parsed!(parse_patch_line, b"copy to newname\n", Garbage(b"copy to newname\n"));
-    assert_parsed!(parse_patch_line, b"GIT binary patch\n", Garbage(b"GIT binary patch\n"));
+    assert_garbage!(parse_patch_line, b"rename from oldname\n");
+    assert_garbage!(parse_patch_line, b"rename to newname\n");
+    assert_garbage!(parse_patch_line, b"copy from oldname\n");
+    assert_garbage!(parse_patch_line, b"copy to newname\n");
+    assert_garbage!(parse_patch_line, b"GIT binary patch\n");
 
     assert_parsed!(parse_patch_line, b"", EndOfPatch);
 
-    assert_parsed!(parse_patch_line, b"No newline at EOF", Garbage(b"No newline at EOF"));
+    assert_garbage!(parse_patch_line, b"No newline at EOF");
 }
 
 fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
@@ -870,7 +877,7 @@ fn test_parse_git_patch_line() {
     assert_parsed!(parse_git_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
     assert_parsed!(parse_git_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
 
-    assert_parsed!(parse_git_patch_line, b"Bla ble bli.\n", Garbage(b"Bla ble bli.\n"));
+    assert_garbage!(parse_git_patch_line, b"Bla ble bli.\n");
 
     assert_parsed!(parse_git_patch_line, b"index 0123456789a..fedcba98765 100644\n", GitMetadata(Index(b"0123456789a", b"fedcba98765", Some(0o100644))));
 
@@ -887,7 +894,7 @@ fn test_parse_git_patch_line() {
 
     assert_parsed!(parse_git_patch_line, b"", EndOfPatch);
 
-    assert_parsed!(parse_git_patch_line, b"No newline at EOF", Garbage(b"No newline at EOF"));
+    assert_garbage!(parse_git_patch_line, b"No newline at EOF");
 }
 
 fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder> {
@@ -1121,7 +1128,7 @@ fn test_parse_hunk_line() {
                         ParseError::BadLineInHunk("wtf".to_string()));
 }
 
-fn parse_hunk<'a>(input: &'a [u8]) -> Result<(&[u8], TextHunk<'a>), ErrorBuilder> {
+fn parse_hunk(input: &[u8]) -> Result<(&[u8], TextHunk), ErrorBuilder> {
     let (mut input, mut header) = parse_hunk_header(input)
         .map_err(|err| if err == ErrorBuilder::NoMatch { err } else {
             ErrorBuilder::BadHunkHeader(input)
@@ -1433,8 +1440,8 @@ fn offsetof<T>(container: &[T], slice: &[T]) -> usize
     (slice.as_ptr() as usize) - (container.as_ptr() as usize)
 }
 
-fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool)
-    -> Result<(&[u8], (&'a [u8], TextFilePatch<'a>)), ErrorBuilder>
+fn parse_filepatch(bytes: &[u8], mut want_header: bool)
+    -> Result<(&[u8], (&[u8], TextFilePatch)), ErrorBuilder>
 {
     let mut input = bytes;
     let mut header = &bytes[..0];
