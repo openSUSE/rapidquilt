@@ -277,10 +277,6 @@ pub enum HunkApplyReport {
 
     /// It failed to apply.
     Failed(HunkApplyFailureReason),
-
-    /// It was skipped. Used when rolling back and skipping hunks that
-    /// previously failed.
-    Skipped,
 }
 
 /// Try to apply given `HunkView` onto the `ModifiedFile`.
@@ -451,17 +447,6 @@ impl FilePatchApplyReport {
         Self {
             hunk_reports: vec![HunkApplyReport::Failed(reason)],
             any_failed: true,
-            direction,
-            max_fuzz,
-            previous_permissions: None,
-        }
-    }
-
-    /// Create a report with single hunk that was skipped
-    fn single_hunk_skip(direction: PatchDirection, max_fuzz: usize) -> Self {
-        Self {
-            hunk_reports: vec![HunkApplyReport::Skipped],
-            any_failed: false,
             direction,
             max_fuzz,
             previous_permissions: None,
@@ -717,7 +702,7 @@ impl<'a> TextFilePatch<'a> {
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
         for hunk in self.hunks.iter() {
-            let mut hunk_report = HunkApplyReport::Skipped;
+            let mut hunk_report: Option<HunkApplyReport> = None;
 
             // Consider fuzz 0 up to given maximum fuzz, but no more than what is useable for this hunk
             for current_fuzz in 0..=min(max_fuzz, hunk.max_useable_fuzz()) {
@@ -740,20 +725,20 @@ impl<'a> TextFilePatch<'a> {
 			(modified_file.content.len() as isize - remove_content.len() as isize, false),
 		};
 
-                hunk_report = try_apply_hunk(hunk_view, modified_file,
-                                             target_line, movable,
-					     min_modify_line);
+                hunk_report = Some(try_apply_hunk(hunk_view, modified_file,
+						  target_line, movable,
+						  min_modify_line));
 
                 // If it succeeded, we are done with this hunk, remember the last_hunk_offset
                 // and min_modify_line, so we can use them for the next hunk and do not try
                 // any more fuzz levels.
-                if let HunkApplyReport::Applied { line, offset, .. } = hunk_report {
+                if let Some(HunkApplyReport::Applied { line, offset, .. }) = hunk_report {
                     last_hunk_offset = offset;
                     min_modify_line = line + remove_content.len() as isize - hunk_view.suffix_context() as isize;
                     break;
                 }
             }
-            report.push_hunk_report(hunk_report);
+            report.push_hunk_report(hunk_report.expect("No fuzz has been considered!"));
         }
 
         analyses.before_modifications(modified_file, self, direction, &report, fn_analysis_note);
@@ -857,11 +842,7 @@ Apply report:
                     HunkApplyReport::Applied { fuzz, line, .. } => (fuzz, line),
 
                     // If the hunk failed to apply, skip it now.
-                    HunkApplyReport::Failed(..) |
-                    HunkApplyReport::Skipped => {
-			report.push_hunk_report(HunkApplyReport::Skipped);
-			continue;
-                    }
+                    HunkApplyReport::Failed(..) => continue,
 		};
 
             // Attempt to apply the hunk ignoring trailing context...

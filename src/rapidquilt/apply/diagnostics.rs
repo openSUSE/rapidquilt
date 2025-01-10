@@ -159,10 +159,6 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
                             write!(writer, "{}", reason_str.bright_red())?;
                         }
                     }
-
-                    HunkApplyReport::Skipped => {
-                        unreachable!(); // This should never happen here. Hunk can be skipped only during rollback.
-                    }
                 }
 
                 let mut buf = Vec::<u8>::new();
