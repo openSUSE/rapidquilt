@@ -800,7 +800,19 @@ impl<'a> TextFilePatch<'a> {
 	    let _ = modified_file.write_to(&mut content);
 	    let mut patch = Vec::<u8>::new();
 	    let _ = self.write_to(&mut patch);
-            panic!("File {:?}\n{}\n{}\nRapidquilt attempted to rollback a patch and that failed. This is a bug.\nApply report:\n{:?}\nRollback report:\n{:?}", self.new_filename(), String::from_utf8_lossy(&content), String::from_utf8_lossy(&patch), apply_report, report);
+            panic!(r#"
+File {:?}
+{}
+{}
+Rapidquilt attempted to rollback a patch and that failed. This is a bug.
+Apply report:
+{:?}Rollback report:
+{:?}"#,
+		   self.new_filename(),
+		   String::from_utf8_lossy(&content),
+		   String::from_utf8_lossy(&patch),
+		   apply_report,
+		   report);
         }
 
         // Determine the new file mode and record the previous one
