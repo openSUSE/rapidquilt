@@ -283,8 +283,9 @@ pub fn print_difference_to_closest_match<W: Write>(
     prefix: &str)
     -> Result<()>
 {
-    // Get a HunkView that will be the same as the one used during patching
-    let hunk_view = hunk.view(report.direction(), report.max_fuzz());
+    // Get a HunkView with the same direction as used during patching,
+    // but with maximum available context.
+    let hunk_view = hunk.view(report.direction(), 0);
     let hunk_len = hunk_view.remove_content().len();
     let file_len = modified_file.content.len();
 
