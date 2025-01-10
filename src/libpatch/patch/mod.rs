@@ -831,7 +831,7 @@ Apply report:
                     apply_report: &FilePatchApplyReport)
                     -> bool
     {
-        let mut report = FilePatchApplyReport::new_with_capacity(direction, 0, self.hunks.len());
+	let mut ok = true;
 
         // This function is applied on every hunk one by one, either from beginning
         // to end, or the opposite way (depends if we are applying or reverting)
@@ -850,11 +850,13 @@ Apply report:
 
             let hunk_report = try_apply_hunk(hunk_view, modified_file,
 					     rollback_line, false, 0);
-	    hunk_report.commit(modified_file, hunk, direction);
-	    report.push_hunk_report(hunk_report);
+	    match hunk_report {
+		HunkApplyReport::Failed(..) => ok = false,
+		_ => hunk_report.commit(modified_file, hunk, direction),
+	    }
         }
 
-        report.ok()
+        ok
     }
 }
 
