@@ -780,7 +780,7 @@ impl<'a> TextFilePatch<'a> {
 	let direction = direction.opposite();
 
         // Call the appropriate specialized function
-        let report = match (self.kind, direction) {
+        let ok = match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
                 self.rollback_modify(modified_file, direction, apply_report),
 
@@ -794,7 +794,7 @@ impl<'a> TextFilePatch<'a> {
         };
 
         // Rollback must apply cleanly. If not, we have a bug somewhere.
-        if report.failed() {
+        if !ok {
 	    use crate::patch::unified::writer::UnifiedPatchWriter;
 	    let mut content = Vec::<u8>::new();
 	    let _ = modified_file.write_to(&mut content);
@@ -806,13 +806,11 @@ File {:?}
 {}
 Rapidquilt attempted to rollback a patch and that failed. This is a bug.
 Apply report:
-{:?}Rollback report:
 {:?}"#,
 		   self.new_filename(),
 		   String::from_utf8_lossy(&content),
 		   String::from_utf8_lossy(&patch),
-		   apply_report,
-		   report);
+		   apply_report);
         }
 
         // Restore the original file mode
@@ -824,13 +822,10 @@ Apply report:
                     modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
                     apply_report: &FilePatchApplyReport)
-                    -> FilePatchApplyReport
+                    -> bool
     {
-	if apply_report.failed() {
-            FilePatchApplyReport::single_hunk_skip(direction, 0)
-	} else {
-	    self.apply_create(modified_file, direction, 0)
-	}
+	apply_report.failed() ||
+	    self.apply_create(modified_file, direction, 0).ok()
     }
 
     /// Roll back this `FilePatchKind::Create` patch on the file.
@@ -838,13 +833,10 @@ Apply report:
                     modified_file: &mut ModifiedFile,
                     direction: PatchDirection,
                     apply_report: &FilePatchApplyReport)
-                    -> FilePatchApplyReport
+                    -> bool
     {
-	if apply_report.failed() {
-            FilePatchApplyReport::single_hunk_skip(direction, 0)
-        } else {
-	    self.apply_delete(modified_file, direction, 0)
-	}
+	apply_report.failed() ||
+	    self.apply_delete(modified_file, direction, 0).ok()
     }
 
     /// Roll back this `FilePatchKind::Modify` patch on the file.
@@ -852,7 +844,7 @@ Apply report:
                     modified_file: &mut ModifiedFile<'a>,
                     direction: PatchDirection,
                     apply_report: &FilePatchApplyReport)
-                    -> FilePatchApplyReport
+                    -> bool
     {
         let mut report = FilePatchApplyReport::new_with_capacity(direction, 0, self.hunks.len());
 
@@ -881,7 +873,7 @@ Apply report:
 	    report.push_hunk_report(hunk_report);
         }
 
-        report
+        report.ok()
     }
 }
 
