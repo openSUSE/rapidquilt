@@ -1469,8 +1469,13 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool, warnings: &mut Ve
             Garbage(line) => {
                 if want_header {
                     header = &bytes[..offsetof(bytes, input_)];
-                } else if memchr::memchr(b'\n', line) == None {
-		    warnings.push("Patch unexpectedly ends in the middle of a line.".to_string());
+		} else {
+		    if let Ok((_, HunkHeader { .. })) = parse_hunk_header(line) {
+			warnings.push(format!("Possibly ignored hunk: {}", String::from_utf8_lossy(line.strip_suffix(b"\n").unwrap_or(line))));
+		    }
+                    if memchr::memchr(b'\n', line) == None {
+			warnings.push("Patch unexpectedly ends in the middle of a line.".to_string());
+		    }
 		}
             }
 
@@ -2271,6 +2276,28 @@ garbage with no EOL"#;
     let patch = parse_patch(filepatch_txt, 0, true).unwrap();
     assert!(patch.warnings.iter().fold(false, |found, item|
 				       found || item.contains("unexpectedly ends")));
+
+    // An extra line with a single space between hunks terminates the patch.
+    // See issue #25
+    let filepatch_txt = br#"garbage1
+--- file.in
++++ file.out
+@@ -100,3 +100,3 @@ place1
+ bbb
+-ccc
++ddd
+ eee
+ 
+@@ -200,3 +200,3 @@ place1
+ mmm
+-nnn
++ooo
+ ppp
+"#;
+
+    let patch = parse_patch(filepatch_txt, 0, true).unwrap();
+    assert!(patch.warnings.iter().fold(false, |found, item|
+				       found || item.contains("ignored hunk")));
 }
 
 #[cfg(test)]
