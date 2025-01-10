@@ -225,6 +225,63 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
 
 pub type TextHunkView<'a, 'hunk> = HunkView<'a, 'hunk, &'a [u8]>;
 
+/// Whether the `FilePatch` is creating, deleting or modifying existing file.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum FilePatchKind {
+    Modify,
+    Create,
+    Delete,
+}
+
+/// Is the patch being applied forward = normally, or reverted.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum PatchDirection {
+    Forward,
+    Revert
+}
+
+impl PatchDirection {
+    pub fn opposite(self) -> Self {
+        match self {
+            Self::Forward => Self::Revert,
+            Self::Revert => Self::Forward,
+        }
+    }
+}
+
+/// The reason for hunk failure
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum HunkApplyFailureReason {
+    NoMatchingLines,
+    FileDoesNotExist,
+    CreatingFileThatExists,
+    DeletingFileThatDoesNotMatch,
+    MisorderedHunks,
+}
+
+/// The result of applying a `Hunk`.
+#[derive(Debug)]
+pub enum HunkApplyReport {
+    /// It was applied on given line, with given offset.
+    Applied {
+        /// Line on which the hunk was applied (in the original file).
+        line: isize,
+
+        /// The offset from the originally intended line to the line where it
+        /// was applied.
+        offset: isize,
+
+        /// Fuzz with which this specific hunk was applied
+        fuzz: usize,
+    },
+
+    /// It failed to apply.
+    Failed(HunkApplyFailureReason),
+
+    /// It was skipped. Used when rolling back and skipping hunks that
+    /// previously failed.
+    Skipped,
+}
 
 /// Try to apply given `HunkView` onto the `ModifiedFile`.
 /// This function does not really modify the modified_file, only returns report
@@ -320,64 +377,6 @@ fn try_apply_hunk<'a, 'hunk>(
         offset: target_line - hunk_view.remove_target_line(),
         fuzz: hunk_view.fuzz(),
     }
-}
-
-/// Whether the `FilePatch` is creating, deleting or modifying existing file.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum FilePatchKind {
-    Modify,
-    Create,
-    Delete,
-}
-
-/// Is the patch being applied forward = normally, or reverted.
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum PatchDirection {
-    Forward,
-    Revert
-}
-
-impl PatchDirection {
-    pub fn opposite(self) -> Self {
-        match self {
-            Self::Forward => Self::Revert,
-            Self::Revert => Self::Forward,
-        }
-    }
-}
-
-/// The reason for hunk failure
-#[derive(Copy, Clone, Debug, PartialEq)]
-pub enum HunkApplyFailureReason {
-    NoMatchingLines,
-    FileDoesNotExist,
-    CreatingFileThatExists,
-    DeletingFileThatDoesNotMatch,
-    MisorderedHunks,
-}
-
-/// The result of applying a `Hunk`.
-#[derive(Debug)]
-pub enum HunkApplyReport {
-    /// It was applied on given line, with given offset.
-    Applied {
-        /// Line on which the hunk was applied (in the original file).
-        line: isize,
-
-        /// The offset from the originally intended line to the line where it
-        /// was applied.
-        offset: isize,
-
-        /// Fuzz with which this specific hunk was applied
-        fuzz: usize,
-    },
-
-    /// It failed to apply.
-    Failed(HunkApplyFailureReason),
-
-    /// It was skipped. Used when rolling back and skipping hunks that
-    /// previously failed.
-    Skipped,
 }
 
 impl HunkApplyReport {
