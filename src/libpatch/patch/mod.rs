@@ -780,7 +780,7 @@ impl<'a> TextFilePatch<'a> {
 	let direction = direction.opposite();
 
         // Call the appropriate specialized function
-        let mut report = match (self.kind, direction) {
+        let report = match (self.kind, direction) {
             (FilePatchKind::Modify, _) =>
                 self.rollback_modify(modified_file, direction, apply_report),
 
@@ -815,10 +815,8 @@ Apply report:
 		   report);
         }
 
-        // Determine the new file mode and record the previous one
-        let permissions = &apply_report.previous_permissions;
-        modified_file.permissions = permissions.clone();
-	report.previous_permissions = permissions.clone();
+        // Restore the original file mode
+        modified_file.permissions = apply_report.previous_permissions.clone();
     }
 
     /// Roll back this `FilePatchKind::Create` patch on the file.
