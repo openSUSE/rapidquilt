@@ -43,6 +43,8 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 		      .map_err(|err| Error::from(err)))
             .with_context(|| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
+	print_parser_warnings(config, &series_patch.filename, &patch);
+
         let mut any_report_failed = false;
 
         for text_file_patch in patch.file_patches {

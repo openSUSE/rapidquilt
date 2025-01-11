@@ -366,6 +366,8 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     for (index, text_patch) in text_patches.drain(..).enumerate() {
         let mut text_patch = text_patch.with_context(|| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
+	print_parser_warnings(config, &config.series_patches[index].filename, &text_patch);
+
         for text_file_patch in text_patch.file_patches.drain(..) {
             // Note that we can dispatch by `old_filename` or `new_filename`, we
             // made sure that both will be assigned to the same `thread_id`.

@@ -1,5 +1,7 @@
 # Unreleased changes
 
+* Print a warning when suspicious patch content is found.
+
 # Version 0.6.7
 
 * Move from `failure` to `thiserror` and `anyhow`.

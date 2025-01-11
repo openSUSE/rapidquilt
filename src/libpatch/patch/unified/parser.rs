@@ -1440,8 +1440,8 @@ fn offsetof<T>(container: &[T], slice: &[T]) -> usize
     (slice.as_ptr() as usize) - (container.as_ptr() as usize)
 }
 
-fn parse_filepatch(bytes: &[u8], mut want_header: bool)
-    -> Result<(&[u8], (&[u8], TextFilePatch)), ErrorBuilder>
+fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool, warnings: &mut Vec<String>)
+    -> Result<(&'a [u8], (&'a [u8], TextFilePatch<'a>)), ErrorBuilder<'a>>
 {
     let mut input = bytes;
     let mut header = &bytes[..0];
@@ -1466,10 +1466,17 @@ fn parse_filepatch(bytes: &[u8], mut want_header: bool)
         }
 
         match patch_line {
-            Garbage(_) => {
+            Garbage(line) => {
                 if want_header {
                     header = &bytes[..offsetof(bytes, input_)];
-                }
+		} else {
+		    if let Ok((_, HunkHeader { .. })) = parse_hunk_header(line) {
+			warnings.push(format!("Possibly ignored hunk: {}", String::from_utf8_lossy(line.strip_suffix(b"\n").unwrap_or(line))));
+		    }
+                    if memchr::memchr(b'\n', line) == None {
+			warnings.push("Patch unexpectedly ends in the middle of a line.".to_string());
+		    }
+		}
             }
 
             EndOfPatch => {
@@ -1578,7 +1585,9 @@ Some other line...
 Other content.
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1608,7 +1617,9 @@ Some other line...
 Other content.
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1635,7 +1646,9 @@ garbage3
 +ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1663,7 +1676,9 @@ garbage3
 +ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1691,7 +1706,9 @@ garbage3
 -ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1719,7 +1736,9 @@ garbage3
 -ccc
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1756,7 +1775,9 @@ Some other line...
 Other content.
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1782,7 +1803,9 @@ rename to filename2
 +++ filename2
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1811,7 +1834,9 @@ rename to filename2
  ddd
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1839,7 +1864,9 @@ garbage3
  ppp
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1869,7 +1896,9 @@ diff --git filename1 filename1
  ppp
 "#;
 
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true).unwrap().1;
+    let mut warnings = vec![];
+    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
         "garbage1",
@@ -1894,7 +1923,9 @@ GIT binary patch
 ???
 "#;
 
-    let ret = parse_filepatch(filepatch_txt, false);
+    let mut warnings = vec![];
+    let ret = parse_filepatch(filepatch_txt, false, &mut warnings);
+    assert!(warnings.is_empty());
     match ret {
         Err(error) => {
             assert_eq!(ParseError::from(error),
@@ -1921,7 +1952,9 @@ garbage3
  ppp
 "#;
 
-    let ret = parse_filepatch(filepatch_txt, false);
+    let mut warnings = vec![];
+    let ret = parse_filepatch(filepatch_txt, false, &mut warnings);
+    assert!(warnings.is_empty());
     match ret {
         Err(error) => {
             assert_eq!(ParseError::from(error),
@@ -1956,7 +1989,9 @@ new mode 100755
  ddd
 "#;
 
-    let (_header, file_patch) = parse_filepatch(filepatch_txt, false).unwrap().1;
+    let mut warnings = vec![];
+    let (_header, file_patch) = parse_filepatch(filepatch_txt, false, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -1982,7 +2017,9 @@ diff --git filename2 filename2
  ddd
 "#;
 
-    let (_header, file_patch) = parse_filepatch(filepatch_txt, false).unwrap().1;
+    let mut warnings = vec![];
+    let (_header, file_patch) = parse_filepatch(filepatch_txt, false, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -2000,7 +2037,9 @@ old mode 100644
 new mode 100755
 "#;
 
-    let (_header, file_patch) = parse_filepatch(filepatch_txt, false).unwrap().1;
+    let mut warnings = vec![];
+    let (_header, file_patch) = parse_filepatch(filepatch_txt, false, &mut warnings).unwrap().1;
+    assert!(warnings.is_empty());
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
     assert_eq!(file_patch.new_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -2011,13 +2050,14 @@ new mode 100755
 
 pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, ParseError> {
     let mut input = bytes;
+    let mut warnings = vec![];
 
     let mut header = &bytes[..0];
     let mut file_patches = Vec::<TextFilePatch>::new();
 
     loop {
         // Parse one filepatch at time. If it is the first one, ask it to give us its header as well.
-        let (_input, (filepatch_header, mut filepatch)) = match parse_filepatch(input, wants_header) {
+        let (_input, (filepatch_header, mut filepatch)) = match parse_filepatch(input, wants_header, &mut warnings) {
             // We got one
             Ok(header_and_filepatch) => header_and_filepatch,
 
@@ -2045,6 +2085,7 @@ pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result
     Ok(TextPatch {
         header,
         file_patches,
+	warnings,
     })
 }
 
@@ -2075,6 +2116,8 @@ garbage7
 "#;
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert!(patch.warnings.is_empty());
 
     assert_lines_eq!(patch.header, [
         "garbage1",
@@ -2121,6 +2164,8 @@ rename to filename7
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
 
+    assert!(patch.warnings.is_empty());
+
     assert_lines_eq!(patch.header, [
         "garbage1",
         "garbage2",
@@ -2157,6 +2202,10 @@ rename from old name is just garbage, no git
 "#;
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
+
+    assert!(patch.warnings.is_empty());
+
+    assert!(patch.warnings.is_empty());
 
     assert_lines_eq!(patch.header, [
         "Looks like git diff extended headers:",
@@ -2209,7 +2258,46 @@ index 0123456789ab..cdefedcba987 100644
 
     let patch = parse_patch(patch_txt, 0, true).unwrap();
 
+    assert!(patch.warnings.is_empty());
+
     assert_eq!(patch.header.iter().filter(|&&c| c == b'\n').count(), 14);
+
+    // Trailing garbage with no newline at EOF
+    let filepatch_txt = br#"garbage1
+--- file.in
++++ file.out
+@@ -200,3 +210,3 @@ place2
+ mmm
+-nnn
++ooo
+ ppp
+garbage with no EOL"#;
+
+    let patch = parse_patch(filepatch_txt, 0, true).unwrap();
+    assert!(patch.warnings.iter().fold(false, |found, item|
+				       found || item.contains("unexpectedly ends")));
+
+    // An extra line with a single space between hunks terminates the patch.
+    // See issue #25
+    let filepatch_txt = br#"garbage1
+--- file.in
++++ file.out
+@@ -100,3 +100,3 @@ place1
+ bbb
+-ccc
++ddd
+ eee
+ 
+@@ -200,3 +200,3 @@ place1
+ mmm
+-nnn
++ooo
+ ppp
+"#;
+
+    let patch = parse_patch(filepatch_txt, 0, true).unwrap();
+    assert!(patch.warnings.iter().fold(false, |found, item|
+				       found || item.contains("ignored hunk")));
 }
 
 #[cfg(test)]

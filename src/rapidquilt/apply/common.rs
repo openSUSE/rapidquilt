@@ -12,17 +12,32 @@ use std::hash::BuildHasher;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
+use colored::*;
 use anyhow::{Context, Result};
 use seahash;
 
 use libpatch::analysis::{AnalysisSet, Note};
 use libpatch::modified_file::ModifiedFile;
-use libpatch::patch::{FilePatchApplyReport, PatchDirection, TextFilePatch};
+use libpatch::patch::{FilePatchApplyReport, PatchDirection, TextFilePatch, TextPatch};
 use libpatch::patch::unified::writer::UnifiedPatchRejWriter;
 
 use crate::apply::*;
 use crate::arena::Arena;
 
+
+pub fn print_parser_warnings(
+    config: &ApplyConfig,
+    filename: &PathBuf,
+    patch: &TextPatch)
+{
+    // Print parser warnings if not silent
+    if config.verbosity >= Verbosity::Normal &&	!patch.warnings.is_empty() {
+	eprintln!("{} {}:", "warning:".bright_yellow().bold(), filename.display());
+	for warning in &patch.warnings {
+	    eprintln!("         {}",  warning);
+	}
+    }
+}
 
 /// Build a ".rej" filename for given path.
 pub fn make_rej_filename<P: AsRef<Path>>(path: P) -> PathBuf {
