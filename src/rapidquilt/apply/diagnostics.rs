@@ -374,14 +374,14 @@ pub fn print_difference_to_closest_match<W: Write>(
 
     let write_line = |writer: &mut W, line_type: WriteLineType, line_str: &str, line_num: Option<usize>| -> Result<()> {
         let line_num_str = match line_num {
-            Some(line_num) => Cow::Owned(format!("{:5}:", line_num + 1)),
-            None                 => Cow::Borrowed("     :"), // 5 characters for number + 1 for ':'
+            Some(line_num) => Cow::Owned(format!("{:5}", line_num + 1)),
+            None                 => Cow::Borrowed("     "), // 5 characters for number + 1 for ':'
         };
 
         match line_type {
-            WriteLineType::Matching => write!(writer, "{}{}", prefix, format!("{} {}", line_num_str, line_str).bright_black())?,
-            WriteLineType::InFile   => write!(writer, "{}{}", prefix, format!("{} {}", line_num_str, line_str).bright_cyan())?,
-            WriteLineType::InHunk   => write!(writer, "{}{}", prefix, format!("{} {}", line_num_str, line_str).bright_magenta())?,
+            WriteLineType::Matching => write!(writer, "{}{}", prefix, format!("{}: {}", line_num_str, line_str).bright_black())?,
+            WriteLineType::InFile   => write!(writer, "{}{}", prefix, format!("{}< {}", line_num_str, line_str).bright_cyan())?,
+            WriteLineType::InHunk   => write!(writer, "{}{}", prefix, format!("{}> {}", line_num_str, line_str).bright_magenta())?,
         }
 
         if !line_str.ends_with('\n') {
@@ -397,7 +397,7 @@ pub fn print_difference_to_closest_match<W: Write>(
 
     if let Some((best_path, _)) = best_path {
         writeln!(writer)?;
-        writeln!(writer, "{}{} Comparison of the content of the {} and the content expected by the {}:", prefix, "hint:".purple(), "file".bright_cyan(), "hunk".bright_magenta())?;
+        writeln!(writer, "{}{} Comparison of the content of the {} and the content expected by the {}:", prefix, "hint:".purple(), "<file<".bright_cyan(), ">hunk>".bright_magenta())?;
         writeln!(writer)?;
 
         // NOTE: There must be at least two nodes in the path: the artificial
