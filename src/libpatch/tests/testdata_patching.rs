@@ -27,7 +27,7 @@ fn all_files() -> Result<()> {
         // Load and parse the patch
         let patch_data = fs::read(&path)?;
         let strip = 0;
-        let patch = parse_patch(&patch_data, strip, true)?;
+        let patch = parse_patch(&patch_data, strip)?;
 
         // Parse our special headers
         let mut fuzz = 0;

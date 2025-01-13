@@ -314,7 +314,7 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
             println!("Parsing patch: {:?}", series_patch.filename);
         }
         let raw_patch_data = arena.load_file(&config.patches_path.join(&series_patch.filename))?;
-        let text_patch = parse_patch(raw_patch_data, series_patch.strip, false)?;
+        let text_patch = parse_patch(raw_patch_data, series_patch.strip)?;
         Ok(text_patch)
     }).collect();
 

@@ -2048,10 +2048,11 @@ new mode 100755
     assert_eq!(file_patch.hunks.len(), 0);
 }
 
-pub fn parse_patch(bytes: &[u8], strip: usize, mut wants_header: bool) -> Result<TextPatch, ParseError> {
+pub fn parse_patch(bytes: &[u8], strip: usize) -> Result<TextPatch, ParseError> {
     let mut input = bytes;
     let mut warnings = vec![];
 
+    let mut wants_header = true;
     let mut header = &bytes[..0];
     let mut file_patches = Vec::<TextFilePatch>::new();
 
@@ -2115,7 +2116,7 @@ garbage6
 garbage7
 "#;
 
-    let patch = parse_patch(patch_txt, 0, true).unwrap();
+    let patch = parse_patch(patch_txt, 0).unwrap();
 
     assert!(patch.warnings.is_empty());
 
@@ -2162,7 +2163,7 @@ rename from filename7
 rename to filename7
 "#;
 
-    let patch = parse_patch(patch_txt, 0, true).unwrap();
+    let patch = parse_patch(patch_txt, 0).unwrap();
 
     assert!(patch.warnings.is_empty());
 
@@ -2201,7 +2202,7 @@ rename from old name is just garbage, no git
  ccc
 "#;
 
-    let patch = parse_patch(patch_txt, 0, true).unwrap();
+    let patch = parse_patch(patch_txt, 0).unwrap();
 
     assert!(patch.warnings.is_empty());
 
@@ -2256,7 +2257,7 @@ index 0123456789ab..cdefedcba987 100644
  }
 "#;
 
-    let patch = parse_patch(patch_txt, 0, true).unwrap();
+    let patch = parse_patch(patch_txt, 0).unwrap();
 
     assert!(patch.warnings.is_empty());
 
@@ -2273,7 +2274,7 @@ index 0123456789ab..cdefedcba987 100644
  ppp
 garbage with no EOL"#;
 
-    let patch = parse_patch(filepatch_txt, 0, true).unwrap();
+    let patch = parse_patch(filepatch_txt, 0).unwrap();
     assert!(patch.warnings.iter().fold(false, |found, item|
 				       found || item.contains("unexpectedly ends")));
 
@@ -2295,7 +2296,7 @@ garbage with no EOL"#;
  ppp
 "#;
 
-    let patch = parse_patch(filepatch_txt, 0, true).unwrap();
+    let patch = parse_patch(filepatch_txt, 0).unwrap();
     assert!(patch.warnings.iter().fold(false, |found, item|
 				       found || item.contains("ignored hunk")));
 }
@@ -2311,7 +2312,7 @@ mod tests {
         let data = include_bytes!("../../../../testdata/big.patch");
 
         b.iter(|| {
-            black_box(parse_patch(data, 1, false).unwrap());
+            black_box(parse_patch(data, 1).unwrap());
         });
     }
 }

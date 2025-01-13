@@ -39,7 +39,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
         let patch = arena.load_file(&config.patches_path.join(&series_patch.filename))
             .map_err(|err| Error::from(err))
-            .and_then(|data| parse_patch(&data, series_patch.strip, false)
+            .and_then(|data| parse_patch(&data, series_patch.strip)
 		      .map_err(|err| Error::from(err)))
             .with_context(|| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 

@@ -71,7 +71,7 @@ fn all_files() -> Result<()> {
         let patch_data = fs::read(&path)?;
 
         let strip = 0;
-        match parse_patch(&patch_data, strip, true) {
+        match parse_patch(&patch_data, strip) {
             Ok(patch) => { compare_output(&path, patch)?; }
             Err(error) => { compare_error(&path, error)?; }
         };
