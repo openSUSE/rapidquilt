@@ -235,10 +235,11 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
     Ok(())
 }
 
-/// Tests if `c` is a space or TAB.
+/// Tests if `c` is a space, TAB or newline
 fn is_space(c: u8) -> bool {
     c == b' ' ||
-    c == b'\t'
+    c == b'\t' ||
+    c == b'\n'
 }
 
 fn compare_ignore_space(a: &[u8], b: &[u8]) -> bool
@@ -260,7 +261,7 @@ fn compare_ignore_space(a: &[u8], b: &[u8]) -> bool
             }
         }
     }
-    b_iter.next().is_none()
+    !b_iter.any(|&b_byte| !is_space(b_byte))
 }
 
 /// Cost of one line of difference. The value of 256 allows up to 16M lines
