@@ -235,10 +235,16 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
     Ok(())
 }
 
-/// Tests if `c` is a space or TAB.
+/// Tests if `c` is a space, TAB or newline
 fn is_space(c: u8) -> bool {
     c == b' ' ||
-    c == b'\t'
+    c == b'\t' ||
+    c == b'\n'
+}
+
+fn contains_only_space(line: &[u8]) -> bool
+{
+    !line.iter().any(|&byte| !is_space(byte))
 }
 
 fn compare_ignore_space(a: &[u8], b: &[u8]) -> bool
@@ -260,7 +266,7 @@ fn compare_ignore_space(a: &[u8], b: &[u8]) -> bool
             }
         }
     }
-    b_iter.next().is_none()
+    !b_iter.any(|&b_byte| !is_space(b_byte))
 }
 
 /// Cost of one line of difference. The value of 256 allows up to 16M lines
@@ -297,9 +303,11 @@ pub fn print_difference_to_closest_match<W: Write>(
     let mut matches_count = 0;
     for hunk_line in hunk_view.remove_content() {
         let mut line_matches = Vec::new();
-        for (line_number, file_line) in modified_file.content.iter().enumerate() {
-            if compare_ignore_space(file_line, hunk_line) {
-                line_matches.push(line_number);
+	if !contains_only_space(hunk_line) {
+            for (line_number, file_line) in modified_file.content.iter().enumerate() {
+		if compare_ignore_space(file_line, hunk_line) {
+                    line_matches.push(line_number);
+		}
             }
         }
         matches_count += line_matches.len();
@@ -399,6 +407,15 @@ pub fn print_difference_to_closest_match<W: Write>(
         file_line -= min(file_line, start_line);
         let mut hunk_line = 0;
         for &(next_hunk_line, match_index) in &best_path[1..] {
+	    while hunk_line < next_hunk_line {
+		let content = &hunk_view.remove_content()[hunk_line];
+		if modified_file.content.get(file_line) != Some(content) {
+		    break;
+		}
+                write_line(writer, WriteLineType::Matching, &String::from_utf8_lossy(content), Some(file_line))?;
+                file_line += 1;
+                hunk_line += 1;
+	    }
             let next_file_line = match matches.get(next_hunk_line) {
                 Some(line_matches) => line_matches[match_index],
                 None => min(file_len, file_line + (next_hunk_line - hunk_line)),
