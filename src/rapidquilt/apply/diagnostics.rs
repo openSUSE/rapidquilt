@@ -276,6 +276,133 @@ fn compare_ignore_space(a: &[u8], b: &[u8]) -> bool
 /// on platforms where that would be more efficient.
 const SCORE_SCALE: usize = 256;
 
+type Matches = Vec<Vec<usize>>;
+
+type MatchPos = (usize, usize);
+
+/// Matches for the first step (fan out to the first matched line)
+struct FirstStepMatches<'a> {
+    matches: &'a Matches,
+    line_index: usize,
+    match_index: usize,
+    target_line: usize,
+    file_length: usize,
+}
+
+impl<'a> FirstStepMatches<'a> {
+    pub fn new(
+	matches: &'a Matches,
+	target_line: usize,
+	file_length: usize)
+	-> Self
+    {
+	Self {
+	    matches,
+	    target_line,
+	    file_length,
+	    line_index: 0,
+	    match_index: 0,
+	}
+    }
+
+    pub fn next(&mut self)
+	-> Option<(MatchPos, usize)>
+    {
+	while let Some(line_matches) = &self.matches.get(self.line_index) {
+	    if let Some(&file_line) = &line_matches.get(self.match_index) {
+		let match_index = self.match_index;
+		self.match_index += 1;
+
+		let line_diff = if file_line < self.target_line {
+		    self.target_line - file_line
+		} else {
+		    file_line - self.target_line
+		};
+		let cost =
+		    // skipped lines at hunk beginning
+		    SCORE_SCALE * self.line_index +
+		    // hunk offset within the target file
+		    SCORE_SCALE * line_diff / self.file_length;
+		return Some(((self.line_index, match_index), cost));
+	    }
+	    self.line_index += 1;
+	    self.match_index = 0;
+	}
+	None
+    }
+}
+
+/// Matches for the next steps (after the first matched hunk line)
+struct NextStepMatches<'a> {
+    matches: &'a Matches,
+    line_index: usize,
+    match_index: usize,
+    target_line: usize,
+    first_index: usize,
+}
+
+impl<'a> NextStepMatches<'a> {
+    pub fn new(
+	matches: &'a Matches,
+	target_line: usize,
+	first_index: usize)
+	-> Self
+    {
+	Self {
+	    matches,
+	    target_line,
+	    first_index,
+	    line_index: first_index,
+	    match_index: 0,
+	}
+    }
+
+    pub fn next(&mut self)
+		-> Option<(MatchPos, usize)>
+    {
+	while let Some(line_matches) = &self.matches.get(self.line_index) {
+	    while let Some(&file_line) = &line_matches.get(self.match_index) {
+		let match_index = self.match_index;
+		self.match_index += 1;
+
+		if file_line >= self.target_line {
+		    let inserted = file_line - self.target_line;
+		    let deleted = self.line_index - self.first_index;
+		    let cost = SCORE_SCALE * max(inserted, deleted);
+		    return Some(((self.line_index, match_index), cost));
+		}
+	    }
+	    self.line_index += 1;
+	    self.match_index = 0;
+	}
+
+	let num_lines = self.matches.len();
+	if self.line_index == num_lines {
+	    self.line_index += 1;
+	    Some(((num_lines, 0), SCORE_SCALE * (num_lines - self.first_index)))
+	} else {
+	    None
+	}
+    }
+}
+
+enum MatchIterator<'a> {
+    FirstStep(FirstStepMatches<'a>),
+    NextStep(NextStepMatches<'a>),
+}
+
+impl<'a> Iterator for MatchIterator<'a> {
+    type Item = (MatchPos, usize);
+
+    fn next(&mut self) -> Option<Self::Item> {
+	use MatchIterator::*;
+	match self {
+	    FirstStep(iter) => iter.next(),
+	    NextStep(iter) => iter.next(),
+	}
+    }
+}
+
 /// Figure out where the hunk was supposed to apply and print it out with highlighted differences.
 pub fn print_difference_to_closest_match<W: Write>(
     report: &FilePatchApplyReport,
@@ -300,7 +427,6 @@ pub fn print_difference_to_closest_match<W: Write>(
 
     // First, find all matching lines.
     let mut matches = Vec::with_capacity(hunk_len);
-    let mut matches_count = 0;
     for hunk_line in hunk_view.remove_content() {
         let mut line_matches = Vec::new();
 	if !contains_only_space(hunk_line) {
@@ -310,7 +436,6 @@ pub fn print_difference_to_closest_match<W: Write>(
 		}
             }
         }
-        matches_count += line_matches.len();
         matches.push(line_matches);
     }
 
@@ -330,38 +455,15 @@ pub fn print_difference_to_closest_match<W: Write>(
         // Function that for given node (x, y) returns iterable with its successors and cost to walk
         // to them.
         |&(line, index)| {
-            let mut result = Vec::with_capacity(matches_count + 1);
-
             // If this is the artificial starting node, we can make step to
             // every other node (with an appropriate cost).
             // This basically gives us multiple starting points.
             if line == std::usize::MAX {
-                for line in 0..matches.len() {
-                    for (index, &file_line) in matches[line].iter().enumerate() {
-                        let line_diff = if file_line < target_line {
-                            target_line - file_line
-                        } else {
-                            file_line - target_line
-                        };
-                        result.push(((line, index), SCORE_SCALE * line + SCORE_SCALE * line_diff / file_len));
-                    }
-                }
-                return result;
-            }
-
-            let file_line = matches[line][index] + 1;
-            let line = line + 1;
-            for next_line in line..matches.len() {
-                let next_matches = &matches[next_line];
-                for (next_index, next_file_line) in next_matches.iter().enumerate().filter(|(_, &n)| n >= file_line) {
-		    let inserted = next_file_line - file_line;
-		    let deleted = next_line - line;
-                    result.push(((next_line, next_index), SCORE_SCALE * max(inserted, deleted)));
-                }
-            }
-            result.push(((matches.len(), 0), SCORE_SCALE * (matches.len() - line)));
-
-            result
+		MatchIterator::FirstStep(FirstStepMatches::new(&matches, target_line, file_len))
+	    } else {
+		let file_line = matches[line][index] + 1;
+		MatchIterator::NextStep(NextStepMatches::new(&matches, file_line, line + 1))
+	    }
         },
 
         // Success condition.
