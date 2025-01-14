@@ -468,7 +468,39 @@ pub fn print_difference_to_closest_match<W: Write>(
 
         // Success condition.
         |&(line, _)| line == matches.len()
-    );
+    ).map(|(path, _)| {
+	// Now add back any empty lines which were treated as no match
+	let mut full_path = Vec::with_capacity(hunk_len + 2);
+
+        let mut hunk_line = 0;
+        let mut file_line = {
+            // NOTE: There must be at least two nodes in the path:
+            // the artificial start node and the target node.
+            let (start_line, start_index) = path[1];
+	    matches[start_line][start_index].saturating_sub(start_line)
+	};
+        for &(next_hunk_line, match_index) in &path[1..] {
+            let next_file_line = match matches.get(next_hunk_line) {
+                Some(line_matches) => line_matches[match_index],
+                None => min(file_len, file_line + (next_hunk_line - hunk_line)),
+            };
+            while file_line < next_file_line {
+		let file_content = &modified_file.content[file_line];
+		for (off, hunk_content) in hunk_view.remove_content()[hunk_line..next_hunk_line].iter().enumerate() {
+		    if compare_ignore_space(file_content, hunk_content) {
+			full_path.push((hunk_line + off, file_line));
+			hunk_line += off + 1;
+			break;
+		    }
+		}
+                file_line += 1;
+	    }
+	    full_path.push((next_hunk_line, next_file_line));
+	    hunk_line = next_hunk_line + 1;
+	    file_line = next_file_line + 1;
+	}
+	full_path
+    });
 
     enum WriteLineType {
         Matching,
@@ -499,31 +531,16 @@ pub fn print_difference_to_closest_match<W: Write>(
         Ok(())
     };
 
-    if let Some((best_path, _)) = best_path {
+    if let Some(best_path) = best_path {
         writeln!(writer)?;
         writeln!(writer, "{}{} Comparison of the content of the {} and the content expected by the {}:", prefix, "hint:".purple(), "<file<".bright_cyan(), ">hunk>".bright_magenta())?;
         writeln!(writer)?;
 
-        // NOTE: There must be at least two nodes in the path: the artificial
-        // start node and the target node.
-        let (start_line, start_index) = best_path[1];
-        let mut file_line = matches[start_line][start_index];
+        // NOTE: There must be at least one node in the path: the target node.
+        let (start_line, mut file_line) = best_path[0];
         file_line -= min(file_line, start_line);
         let mut hunk_line = 0;
-        for &(next_hunk_line, match_index) in &best_path[1..] {
-	    while hunk_line < next_hunk_line {
-		let content = &hunk_view.remove_content()[hunk_line];
-		if modified_file.content.get(file_line) != Some(content) {
-		    break;
-		}
-                write_line(writer, WriteLineType::Matching, &String::from_utf8_lossy(content), Some(file_line))?;
-                file_line += 1;
-                hunk_line += 1;
-	    }
-            let next_file_line = match matches.get(next_hunk_line) {
-                Some(line_matches) => line_matches[match_index],
-                None => min(file_len, file_line + (next_hunk_line - hunk_line)),
-            };
+        for &(next_hunk_line, next_file_line) in &best_path {
             while file_line < next_file_line {
                 write_line(writer, WriteLineType::InFile, &String::from_utf8_lossy(modified_file.content[file_line]), Some(file_line))?;
                 file_line += 1;
