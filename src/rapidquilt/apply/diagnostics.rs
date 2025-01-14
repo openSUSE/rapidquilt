@@ -6,7 +6,7 @@
 //! to provide user-friendly report.
 
 use std::borrow::Cow;
-use std::cmp::min;
+use std::cmp::{min, max};
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::hash::BuildHasher;
@@ -354,7 +354,9 @@ pub fn print_difference_to_closest_match<W: Write>(
             for next_line in line..matches.len() {
                 let next_matches = &matches[next_line];
                 for (next_index, next_file_line) in next_matches.iter().enumerate().filter(|(_, &n)| n >= file_line) {
-                    result.push(((next_line, next_index), SCORE_SCALE * (next_line - line + next_file_line - file_line)));
+		    let inserted = next_file_line - file_line;
+		    let deleted = next_line - line;
+                    result.push(((next_line, next_index), SCORE_SCALE * max(inserted, deleted)));
                 }
             }
             result.push(((matches.len(), 0), SCORE_SCALE * (matches.len() - line)));
