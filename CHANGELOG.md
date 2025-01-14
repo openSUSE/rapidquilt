@@ -1,6 +1,11 @@
 # Unreleased changes
 
+# Version 0.6.8
+
 * Print a warning when suspicious patch content is found.
+* Speed up patch failure analysis.
+* Improve analysis output for colour-blind people.
+* A lot of cleanup.
 
 # Version 0.6.7
 
