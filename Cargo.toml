@@ -22,18 +22,18 @@ name = "rapidquilt"
 path = "src/rapidquilt/main.rs"
 
 [dependencies]
-colored = "1.7.0"
-derive_builder = "0.7.1"
+colored = "3"
+derive_builder = "0.20"
 thiserror = "2"
 anyhow = "1.0"
-getopts = "0.2.18"
-itertools = "0.8.0"
-jemallocator = "0.1.9"
-libc = "0.2.50"
-memchr = { version = "2.2.0", features = ["libc"] }
-pathfinding = "1.1.12"
-rayon = "1.0.3"
-seahash = "3.0.6"
+getopts = "0.2"
+itertools = "0.14"
+jemallocator = "0.5"
+libc = "0.2"
+memchr = { version = "2.7", features = ["libc"] }
+pathfinding = "4"
+rayon = "1"
+seahash = "4"
 tempfile = "3"
 
 [features]
