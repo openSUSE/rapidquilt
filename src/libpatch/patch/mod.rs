@@ -310,9 +310,10 @@ fn try_apply_hunk(
 
     // If the hunk tries to remove more than the file has, reject it now.
     // So in the following code we can assume that it is smaller or equal.
-    if remove_content.len() > modified_file.content.len() {
-        return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-    }
+    let Some(max_target) = modified_file.content.len().checked_sub(remove_content.len())
+	else {
+            return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
+	};
 
     // Helper function to decide if the needle matches haystack at give offset.
     fn matches(needle: &[&[u8]], haystack: &[&[u8]], at: usize) -> bool {
@@ -328,11 +329,11 @@ fn try_apply_hunk(
     // backwards for a set of lines matching the context given in the hunk."
     let (min_line, max_line) =
 	if movable {
-	    (0, modified_file.content.len() - remove_content.len())
+	    (0, max_target)
 	} else {
 	    (target_line, target_line)
 	};
-    let backward_targets = (min_line..=target_line).rev();
+    let backward_targets = (min_line..=min(target_line, max_target)).rev();
     let forward_targets = (target_line+1)..=max_line;
 
     // It is important that `backward_targets` go first!

@@ -1,0 +1,12 @@
+The specified target line is beyond EOF.
+--- file.in	2019-01-16 15:02:37.016021405 +0100
++++ offset_out_of_bounds.patch	2019-01-16 15:03:08.724512747 +0100
+@@ -9999,7 +9999,7 @@
+ bbb
+ ccc
+ ddd
+-eee
++eee modified
+ fff
+ ggg
+ hhh
