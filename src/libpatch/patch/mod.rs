@@ -315,15 +315,6 @@ fn try_apply_hunk(
             return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
 	};
 
-    // Helper function to decide if the needle matches haystack at give offset.
-    fn matches(needle: &[&[u8]], haystack: &[&[u8]], at: usize) -> bool {
-        if needle.len() + at > haystack.len() {
-            return false;
-        }
-
-        &haystack[at..(at + needle.len())] == needle
-    }
-
     // man patch (continuation):
     // "If that is not the correct place, patch scans both forwards and
     // backwards for a set of lines matching the context given in the hunk."
@@ -341,7 +332,7 @@ fn try_apply_hunk(
     // so that a positive offset in `forward_targets` (e.g. +5) is tried
     // before the corresponding negative offsets (e.g. -5).
     let Some(target_line) = backward_targets.interleave(forward_targets)
-	.find(|&line| matches(remove_content, &modified_file.content, line))
+	.find(|&line| &modified_file.content[line..(line + remove_content.len())] == remove_content)
 	else {
             return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
         };
