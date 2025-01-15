@@ -326,7 +326,6 @@ fn try_apply_hunk(
     // man patch (continuation):
     // "If that is not the correct place, patch scans both forwards and
     // backwards for a set of lines matching the context given in the hunk."
-    let mut best_target_line: Option<usize> = None;
     let (min_line, max_line) =
 	if movable {
 	    (0, modified_file.content.len() - remove_content.len())
@@ -340,20 +339,11 @@ fn try_apply_hunk(
     // The intended target line (zero offset) is part of `backward_targets`,
     // so that a positive offset in `forward_targets` (e.g. +5) is tried
     // before the corresponding negative offsets (e.g. -5).
-    for possible_target_line in backward_targets.interleave(forward_targets) {
-        if matches(remove_content, &modified_file.content, possible_target_line) {
-            best_target_line = Some(possible_target_line);
-            break;
-        }
-    }
-
-    // Did we find the line or not?
-    let target_line = match best_target_line {
-        Some(new_target_line) => new_target_line,
-        None => {
+    let Some(target_line) = backward_targets.interleave(forward_targets)
+	.find(|&line| matches(remove_content, &modified_file.content, line))
+	else {
             return HunkApplyReport::Failed(HunkApplyFailureReason::NoMatchingLines);
-        }
-    };
+        };
 
     // Check that we are not modifying frozen content
     if target_line.saturating_add(hunk_view.prefix_context()) < min_modify_line {
