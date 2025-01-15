@@ -31,7 +31,7 @@ itertools = "0.14"
 jemallocator = "0.5"
 libc = "0.2"
 memchr = { version = "2.7", features = ["libc"] }
-pathfinding = "4"
+pathfinding = "3"
 rayon = "1"
 seahash = "4"
 tempfile = "3"
