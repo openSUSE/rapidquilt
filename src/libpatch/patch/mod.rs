@@ -49,9 +49,8 @@ type ContentVec<Line> = Vec<Line>;
 pub struct HunkPart<Line> {
     pub content: ContentVec<Line>,
 
-    /// Numbered from zero. Could be usize, but this makes calculating
-    /// offsets easier.
-    pub target_line: isize,
+    /// Numbered from zero.
+    pub target_line: usize,
 }
 
 /// Represents the expected relative placement of the hunk.
@@ -89,7 +88,7 @@ pub struct Hunk<'a, Line> {
 
 impl<'a, Line> Hunk<'a, Line> {
     /// Create new hunk for given parameters.
-    pub fn new(remove_line: isize, add_line: isize, function: &'a [u8]) -> Self {
+    pub fn new(remove_line: usize, add_line: usize, function: &'a [u8]) -> Self {
         Self {
             remove: HunkPart {
                 content: ContentVec::new(),
@@ -190,12 +189,12 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
     pub fn remove_content(&self) -> &[Line] {
         &self.remove_part().content[self.prefix_fuzz..(self.remove_part().content.len() - self.suffix_fuzz)]
     }
-    pub fn remove_target_line(&self) -> isize { self.remove_part().target_line }
+    pub fn remove_target_line(&self) -> usize { self.remove_part().target_line }
 
     pub fn add_content(&self) -> &[Line] {
         &self.add_part().content[self.prefix_fuzz..(self.add_part().content.len() - self.suffix_fuzz)]
     }
-    pub fn add_target_line(&self) -> isize { self.add_part().target_line }
+    pub fn add_target_line(&self) -> usize { self.add_part().target_line }
 
     pub fn prefix_context(&self) -> usize { self.hunk.prefix_context - self.prefix_fuzz }
     pub fn suffix_context(&self) -> usize { self.hunk.suffix_context - self.suffix_fuzz }
@@ -265,7 +264,7 @@ pub enum HunkApplyReport {
     /// It was applied on given line, with given offset.
     Applied {
         /// Line on which the hunk was applied (in the original file).
-        line: isize,
+        line: usize,
 
         /// The offset from the originally intended line to the line where it
         /// was applied.
@@ -295,9 +294,9 @@ pub enum HunkApplyReport {
 fn try_apply_hunk(
     hunk_view: &TextHunkView,
     modified_file: &ModifiedFile,
-    target_line: isize,
+    target_line: usize,
     movable: bool,
-    min_modify_line: isize)
+    min_modify_line: usize)
     -> HunkApplyReport
 {
     // If the file doesn't exist, fail immediatelly
@@ -315,12 +314,7 @@ fn try_apply_hunk(
     }
 
     // Helper function to decide if the needle matches haystack at give offset.
-    fn matches(needle: &[&[u8]], haystack: &[&[u8]], at: isize) -> bool {
-        if at < 0 {
-            return false;
-        }
-
-        let at = at as usize;
+    fn matches(needle: &[&[u8]], haystack: &[&[u8]], at: usize) -> bool {
         if needle.len() + at > haystack.len() {
             return false;
         }
@@ -331,10 +325,10 @@ fn try_apply_hunk(
     // man patch (continuation):
     // "If that is not the correct place, patch scans both forwards and
     // backwards for a set of lines matching the context given in the hunk."
-    let mut best_target_line: Option<isize> = None;
+    let mut best_target_line: Option<usize> = None;
     let (min_line, max_line) =
 	if movable {
-	    (0, modified_file.content.len() as isize - remove_content.len() as isize)
+	    (0, modified_file.content.len() - remove_content.len())
 	} else {
 	    (target_line, target_line)
 	};
@@ -361,16 +355,23 @@ fn try_apply_hunk(
     };
 
     // Check that we are not modifying frozen content
-    if target_line + (hunk_view.prefix_context() as isize) < min_modify_line {
+    if target_line.saturating_add(hunk_view.prefix_context()) < min_modify_line {
         return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
     }
 
-    assert!(target_line >= 0);
+    // We do not allow an offset of isize::MIN. It could be implemented,
+    // but it's not worth the hassle.
+    let orig_line = hunk_view.remove_target_line();
+    let offset = if target_line >= orig_line {
+	0isize.saturating_add_unsigned(target_line - orig_line)
+    } else {
+	0isize.saturating_sub_unsigned(orig_line - target_line)
+    };
 
     // Report success
     HunkApplyReport::Applied {
         line: target_line,
-        offset: target_line - hunk_view.remove_target_line(),
+        offset,
         fuzz: hunk_view.fuzz(),
     }
 }
@@ -394,7 +395,7 @@ impl HunkApplyReport {
 	    let hunk_view = hunk.view(direction, fuzz);
 	    let prefix_len = hunk_view.prefix_context();
 	    let suffix_len = hunk_view.suffix_context();
-	    let range = (line as usize + prefix_len)..(line as usize + hunk_view.remove_content().len() - suffix_len);
+	    let range = (line + prefix_len)..(line + hunk_view.remove_content().len() - suffix_len);
 	    // Note: cloned just makes `&[u8]` out of `&&[u8]`, no real cloning here.
 	    modified_file.content.splice(range, hunk_view.add_content()[prefix_len..(hunk_view.add_content().len() - suffix_len)].iter().cloned());
 	}
@@ -424,7 +425,7 @@ impl FilePatchApplyReport {
     }
 
     /// Create a report with single hunk that succeeded
-    fn single_hunk_success(line: isize,
+    fn single_hunk_success(line: usize,
                            offset: isize,
 			   fuzz: usize,
                            direction: PatchDirection,
@@ -696,7 +697,7 @@ impl<'a> TextFilePatch<'a> {
         // don't accept more patches than patch. After all, if we accept hunks in arbitrary order,
         // it is not well defined if they should match against the file before or after
         // modifications from the previous hunks.
-        let mut min_modify_line = 0isize;
+        let mut min_modify_line = 0;
 
         for hunk in self.hunks.iter() {
             let mut hunk_report: Option<HunkApplyReport> = None;
@@ -716,10 +717,10 @@ impl<'a> TextFilePatch<'a> {
 		    // mentioned for the hunk, plus or minus any offset
 		    // used in applying the previous hunk.."
 		    HunkPosition::Middle =>
-			(hunk_view.remove_target_line() + last_hunk_offset, true),
+			(hunk_view.remove_target_line().saturating_add_signed(last_hunk_offset), true),
 
 		    HunkPosition::End =>
-			(modified_file.content.len() as isize - remove_content.len() as isize, false),
+			(modified_file.content.len() - remove_content.len(), false),
 		};
 
                 hunk_report = Some(try_apply_hunk(hunk_view, modified_file,
@@ -731,7 +732,7 @@ impl<'a> TextFilePatch<'a> {
                 // any more fuzz levels.
                 if let Some(HunkApplyReport::Applied { line, offset, .. }) = hunk_report {
                     last_hunk_offset = offset;
-                    min_modify_line = line + remove_content.len() as isize - hunk_view.suffix_context() as isize;
+                    min_modify_line = line + remove_content.len() - hunk_view.suffix_context();
                     break;
                 }
             }

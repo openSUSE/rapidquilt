@@ -17,9 +17,9 @@ use crate::util::Searcher;
 #[derive(Clone, Debug)]
 struct MultiApplyNote {
     hunk: usize,
-    line: isize,
+    line: usize,
     offset: isize,
-    places: Vec<Range<isize>>,
+    places: Vec<Range<usize>>,
 }
 
 impl Note for MultiApplyNote {
@@ -78,15 +78,15 @@ impl Analysis for MultiApplyAnalysis {
 
             // Check if there are any more places where the hunk could apply,
             // we must exclude places where some hunk already applied.
-            let places: Vec<Range<isize>> = Searcher::new(remove_content) // TODO: We no longer use Searcher in patch::try_apply_hunk and we could stop using it here and remove it completely...
+            let places: Vec<Range<usize>> = Searcher::new(remove_content) // TODO: We no longer use Searcher in patch::try_apply_hunk and we could stop using it here and remove it completely...
                 .search_in(&modified_file.content)
-                .map(|line| (line as isize)..((line + remove_content.len()) as isize))
+                .map(|line| line..(line + remove_content.len()))
                 .filter(|range| {
                     for (other_hunk, other_hunk_report) in file_patch.hunks().iter().zip(report.hunk_reports()) {
                         if let HunkApplyReport::Applied { line, fuzz, .. } = other_hunk_report {
                             let other_hunk_view = other_hunk.view(direction, *fuzz);
                             let other_remove_content = other_hunk_view.remove_content();
-                            let other_range = (*line)..(*line + other_remove_content.len() as isize);
+                            let other_range = (*line)..(*line + other_remove_content.len());
 
                             if range.end > other_range.start && other_range.end > range.start {
                                 // Overlap, kill it

@@ -445,7 +445,7 @@ pub fn print_difference_to_closest_match<W: Write>(
     // all the way out of the right side of the matrix.
     let target_line = match hunk_view.position() {
         HunkPosition::Start |
-        HunkPosition::Middle => hunk_view.remove_target_line() as usize,
+        HunkPosition::Middle => hunk_view.remove_target_line(),
         HunkPosition::End => file_len - hunk_len,
     };
     let best_path = pathfinding::directed::dijkstra::dijkstra(

@@ -1123,8 +1123,8 @@ fn parse_hunk(input: &[u8]) -> Result<(&[u8], TextHunk), ErrorBuilder> {
         })?;
 
     let mut hunk = Hunk::new(
-        std::cmp::max(header.remove_line as isize - 1, 0),
-        std::cmp::max(header.add_line as isize - 1, 0),
+        header.remove_line.saturating_sub(1),
+        header.add_line.saturating_sub(1),
         header.function
     );
 
