@@ -700,7 +700,7 @@ impl<'a> TextFilePatch<'a> {
 		let remove_content = hunk_view.remove_content();
 		let (target_line, movable) = match hunk_view.position() {
 		    HunkPosition::Start =>
-			(hunk_view.remove_target_line(), false),
+			(0, false),
 
 		    // man patch:
 		    // "As a first guess, [patch] takes the line number
