@@ -267,7 +267,8 @@ pub enum HunkApplyReport {
         line: usize,
 
         /// The offset from the originally intended line to the line where it
-        /// was applied.
+        /// was applied. This value is informative, because the actual
+	/// difference may not be representable as an isize.
         offset: isize,
 
         /// Fuzz with which this specific hunk was applied
@@ -359,8 +360,7 @@ fn try_apply_hunk(
         return HunkApplyReport::Failed(HunkApplyFailureReason::MisorderedHunks);
     }
 
-    // We do not allow an offset of isize::MIN. It could be implemented,
-    // but it's not worth the hassle.
+    // Offsets that cannot be represented as an isize are capped
     let orig_line = hunk_view.remove_target_line();
     let offset = if target_line >= orig_line {
 	0isize.saturating_add_unsigned(target_line - orig_line)
