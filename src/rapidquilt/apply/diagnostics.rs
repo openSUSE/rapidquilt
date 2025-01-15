@@ -35,9 +35,9 @@ use crate::apply::Verbosity;
 
 
 /// Try if the patch would apply with some fuzz. It doesn't do any permanent changes.
-pub fn test_apply_with_fuzzes<'arena, H: BuildHasher>(
+pub fn test_apply_with_fuzzes<H: BuildHasher>(
     patch_status: &PatchStatus,
-    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
+    modified_files: &HashMap<Cow<Path>, ModifiedFile, H>)
     -> Option<usize>
 {
     let file = modified_files.get(&patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
@@ -69,10 +69,10 @@ pub fn test_apply_with_fuzzes<'arena, H: BuildHasher>(
     None
 }
 
-pub fn test_apply_after_reverting_other<'arena, H: BuildHasher>(
+pub fn test_apply_after_reverting_other<H: BuildHasher>(
     failed_patch_status: &PatchStatus,
     suspect_patch_status: &PatchStatus,
-    modified_files: &HashMap<Cow<'arena, Path>, ModifiedFile, H>)
+    modified_files: &HashMap<Cow<Path>, ModifiedFile, H>)
     -> bool
 {
     let file = modified_files.get(&failed_patch_status.final_filename).unwrap(); // NOTE(unwrap): It must be there, otherwise we got bad modified_files, which would be bug.
@@ -391,7 +391,7 @@ enum MatchIterator<'a> {
     NextStep(NextStepMatches<'a>),
 }
 
-impl<'a> Iterator for MatchIterator<'a> {
+impl Iterator for MatchIterator<'_> {
     type Item = (MatchPos, usize);
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -450,7 +450,7 @@ pub fn print_difference_to_closest_match<W: Write>(
     };
     let best_path = pathfinding::directed::dijkstra::dijkstra(
         // Starting point - the artificial point out of the matrix.
-        &(std::usize::MAX, std::usize::MAX),
+        &(usize::MAX, usize::MAX),
 
         // Function that for given node (x, y) returns iterable with its successors and cost to walk
         // to them.
@@ -458,7 +458,7 @@ pub fn print_difference_to_closest_match<W: Write>(
             // If this is the artificial starting node, we can make step to
             // every other node (with an appropriate cost).
             // This basically gives us multiple starting points.
-            if line == std::usize::MAX {
+            if line == usize::MAX {
 		MatchIterator::FirstStep(FirstStepMatches::new(&matches, target_line, file_len))
 	    } else {
 		let file_line = matches[line][index] + 1;

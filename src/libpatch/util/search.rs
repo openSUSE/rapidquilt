@@ -46,7 +46,7 @@ where T: Clone + Eq + Hash + PartialEq {
     haystack: &'haystack [T],
 }
 
-impl<'needle, 'haystack, 'searcher, T> Iterator for SearcherIterator<'needle, 'haystack, 'searcher, T>
+impl<T> Iterator for SearcherIterator<'_, '_, '_, T>
 where T: Clone + Eq + Hash + PartialEq {
     type Item = usize;
 

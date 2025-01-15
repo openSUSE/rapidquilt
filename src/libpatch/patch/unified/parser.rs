@@ -42,9 +42,9 @@ fn error_line(input: &[u8]) -> String {
 
 fn error_word(input: &[u8]) -> String {
     delimited_error(input, |c|
-                    !(b'0'..=b'9').contains(c) &&
-                    !(b'A'..=b'Z').contains(c) &&
-                    !(b'a'..=b'z').contains(c))
+                    !c.is_ascii_digit() &&
+                    !c.is_ascii_uppercase() &&
+                    !c.is_ascii_lowercase())
 }
 
 fn error_sequence(input: &[u8]) -> String {
@@ -57,7 +57,7 @@ fn error_sequence(input: &[u8]) -> String {
             }
         }
     };
-    String::from_utf8_lossy(input.get(..index).unwrap_or(&input[..])).into()
+    String::from_utf8_lossy(input.get(..index).unwrap_or(input)).into()
 }
 
 #[derive(Debug, Error, PartialEq)]
@@ -96,7 +96,7 @@ pub enum ParseError {
     BadHash(String),
 }
 
-impl<'a> From<ErrorBuilder<'a>> for ParseError {
+impl From<ErrorBuilder<'_>> for ParseError {
     fn from(err: ErrorBuilder) -> Self {
         use ErrorBuilder::*;
         match err {
@@ -211,26 +211,14 @@ fn is_whitespace(c: u8) -> bool {
     c == 0xb
 }
 
-/// Tests if `c` is an ASCII decimal digit.
-fn is_digit(c: u8) -> bool {
-    c >= b'0' && c <= b'9'
-}
-
 /// Tests if `c` is an ASCII octal digit.
 fn is_oct_digit(c: u8) -> bool {
-    c >= b'0' && c <= b'7'
-}
-
-/// Tests if `c` is an ASCII hexadecimal digit.
-fn is_hex_digit(c: u8) -> bool {
-    (c >= b'0' && c <= b'9') ||
-    (c >= b'a' && c <= b'f') ||
-    (c >= b'A' && c <= b'F')
+    (b'0'..= b'7').contains(&c)
 }
 
 fn newline(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
     match input.first() {
-        Some(&c) if c == b'\n' => Ok((&input[1..], &input[0..1])),
+        Some(&b'\n') => Ok((&input[1..], &input[0..1])),
         Some(_) => Err(ErrorBuilder::NoMatch),
         None => Err(ErrorBuilder::UnexpectedEndOfFile),
     }
@@ -258,7 +246,7 @@ fn take_line_incl(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
 fn take_line_or_eof(input: &[u8]) -> (&[u8], &[u8]) {
     match memchr::memchr(b'\n', input) {
 	Some(index) => (&input[index+1..], &input[..index+1]),
-	None => (&b""[..], &input[..]),
+	None => (&b""[..], input),
     }
 }
 
@@ -279,7 +267,7 @@ where
 /// slice will be empty, and the second slice is equal to `input`.
 /// If `pred` is `false` for all elements of `input`, the second slice
 /// will be empty, and the first slice is equal to `input`.
-fn split_at_cond<'a, T, P>(input: &'a [T], pred: P) -> (&'a [T], &'a [T])
+fn split_at_cond<T, P>(input: &[T], pred: P) -> (&[T], &[T])
 where
     T: Copy,
     P: Fn(T) -> bool,
@@ -291,7 +279,7 @@ where
 // of the path as-is in the input data.
 fn parse_filename_direct(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
     match split_at_cond(input, is_whitespace) {
-        (name, _) if name.is_empty()
+        ([], _)
             => Err(ErrorBuilder::NoMatch),
         (name, rest)
             => Ok((rest, name)),
@@ -448,7 +436,7 @@ fn parse_filename(input: &[u8]) -> Result<(&[u8], Filename), ErrorBuilder> {
     // First attempt to parse it as quoted filename. This will reject it
     // quickly if it does not start with a '"' character.
     if let Ok((remain, filename_vec)) = parse_c_string(input) {
-        if &filename_vec[..] == NULL_FILENAME {
+        if filename_vec == NULL_FILENAME {
             Ok((remain, Filename::DevNull))
         } else {
             let pathbuf = match () {
@@ -481,7 +469,7 @@ fn parse_filename(input: &[u8]) -> Result<(&[u8], Filename), ErrorBuilder> {
     } else {
         // Then attempt to parse it as direct filename (without quotes, spaces or escapes)
         let (remain, filename) = parse_filename_direct(input)?;
-        if &filename[..] == NULL_FILENAME {
+        if filename == NULL_FILENAME {
             Ok((remain, Filename::DevNull))
         } else {
             let path = match () {
@@ -558,7 +546,7 @@ fn parse_mode(input: &[u8]) -> Result<(&[u8], u32), ErrorBuilder> {
         return Err(ErrorBuilder::BadMode(input));
     }
 
-    let mode_str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
+    let mode_str = std::str::from_utf8(digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
     match u32::from_str_radix(mode_str, 8) {
         Ok(number) => Ok((input_, number)),
         Err(_) => Err(ErrorBuilder::BadMode(input)),
@@ -664,8 +652,8 @@ fn test_parse_metadata_line() {
 /// Rationale: If git switches to a different hash algorithm, there is
 /// some chance that our code will not have to change.
 fn parse_git_hash(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
-    match split_at_cond(input, |c| !is_hex_digit(c)) {
-        (name, _) if name.is_empty()
+    match split_at_cond(input, |c| !c.is_ascii_hexdigit()) {
+        ([], _)
             => Err(ErrorBuilder::BadHash(input)),
         (name, rest)
             => Ok((rest, name)),
@@ -825,7 +813,7 @@ enum PatchLine<'a> {
 
 fn parse_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
-	.or_else(|_| input.is_empty().then(|| Ok((input, PatchLine::EndOfPatch)))
+	.or_else(|_| input.is_empty().then_some(Ok((input, PatchLine::EndOfPatch)))
 		 .unwrap_or_else(|| map_parsed(Ok(take_line_or_eof(input)), PatchLine::Garbage)))
 }
 
@@ -863,7 +851,7 @@ fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
         .or_else(|_| map_parsed(parse_git_metadata_line(input), PatchLine::GitMetadata))
         .or_else(|_| map_parsed(take_line_incl(input), PatchLine::Garbage))
-        .or_else(|_| input.is_empty().then(|| Ok((input, PatchLine::EndOfPatch)))
+        .or_else(|_| input.is_empty().then_some(Ok((input, PatchLine::EndOfPatch)))
 		 .unwrap_or_else(|| map_parsed(Ok(take_line_or_eof(input)), PatchLine::Garbage)))
 }
 
@@ -898,11 +886,11 @@ fn test_parse_git_patch_line() {
 }
 
 fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder> {
-    let (digits, input_) = split_at_cond(input, |c| !is_digit(c));
+    let (digits, input_) = split_at_cond(input, |c| !c.is_ascii_digit());
     if digits.is_empty() {
         return Err(ErrorBuilder::BadNumber(input));
     }
-    let str = std::str::from_utf8(&digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
+    let str = std::str::from_utf8(digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
     match usize::from_str(str) {
         Ok(number) => Ok((input_, number)),
         Err(_) => Err(ErrorBuilder::NumberTooBig(digits)),
@@ -967,11 +955,11 @@ fn parse_hunk_header(input: &[u8]) -> Result<(&[u8], HunkHeader), ErrorBuilder> 
     let (input, (remove_line, remove_count)) = parse_hunk_line_and_count(input)
         .map_err(|_| ErrorBuilder::BadHunkHeader(input))?;
     let input = input.strip_prefix(b" +")
-        .ok_or_else(|| ErrorBuilder::BadHunkHeader(input))?;
+        .ok_or(ErrorBuilder::BadHunkHeader(input))?;
     let (input, (add_line, add_count)) = parse_hunk_line_and_count(input)
         .map_err(|_| ErrorBuilder::BadHunkHeader(input))?;
     let input = input.strip_prefix(b" @")
-        .ok_or_else(|| ErrorBuilder::BadHunkHeader(input))?;
+        .ok_or(ErrorBuilder::BadHunkHeader(input))?;
 
     // Parse function if it is separated by " @@ "
     let (input, function) = match input.strip_prefix(b"@ ") {
@@ -1352,14 +1340,8 @@ impl<'a> FilePatchMetadata<'a> {
         let builder = builder.kind(self.recognize_kind(&hunks));
 
         // Set the filenames
-        let has_old_filename = match self.old_filename {
-            Some(Filename::Real(_)) => true,
-            _ => false,
-        };
-        let has_new_filename = match self.new_filename {
-            Some(Filename::Real(_)) => true,
-            _ => false,
-        };
+        let has_old_filename = matches!(self.old_filename, Some(Filename::Real(_)));
+        let has_new_filename = matches!(self.new_filename, Some(Filename::Real(_)));
 
         let builder = if self.rename_from && self.rename_to {
             // If it is renaming patch, we must have both filenames
@@ -1473,7 +1455,7 @@ fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool, warnings: &mut Ve
 		    if let Ok((_, HunkHeader { .. })) = parse_hunk_header(line) {
 			warnings.push(format!("Possibly ignored hunk: {}", String::from_utf8_lossy(line.strip_suffix(b"\n").unwrap_or(line))));
 		    }
-                    if memchr::memchr(b'\n', line) == None {
+                    if memchr::memchr(b'\n', line).is_none() {
 			warnings.push("Patch unexpectedly ends in the middle of a line.".to_string());
 		    }
 		}

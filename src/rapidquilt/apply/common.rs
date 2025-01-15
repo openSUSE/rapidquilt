@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use colored::*;
 use anyhow::{Context, Result};
-use seahash;
+use seahash::SeaHasher;
 
 use libpatch::analysis::{AnalysisSet, Note};
 use libpatch::modified_file::ModifiedFile;
@@ -27,7 +27,7 @@ use crate::arena::Arena;
 
 pub fn print_parser_warnings(
     config: &ApplyConfig,
-    filename: &PathBuf,
+    filename: &Path,
     patch: &TextPatch)
 {
     // Print parser warnings if not silent
@@ -66,7 +66,7 @@ where P: AsRef<Path>,
         // the working directory)
         let mut directory = directory.as_ref();
         loop {
-            let dir_path = base_dir.as_ref().join(&directory);
+            let dir_path = base_dir.as_ref().join(directory);
             // Check if there is at least one file in the directory
             match fs::read_dir(&dir_path).map(|mut d| d.next()) {
                 Err(ref error) if error.kind() == io::ErrorKind::NotFound => {
@@ -93,13 +93,10 @@ where P: AsRef<Path>,
                 }
             }
 
-            match fs::remove_dir(dir_path) {
-                Err(error) => {
-                    if error.kind() != io::ErrorKind::NotFound {
-                        return Err(error);
-                    }
+            if let Err(error) = fs::remove_dir(dir_path) {
+                if error.kind() != io::ErrorKind::NotFound {
+                    return Err(error);
                 }
-                _ => {}
             }
 
             if let Some(parent) = directory.parent() {
@@ -126,7 +123,7 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
         println!("Saving modified file: {:?}: existed: {:?} deleted: {:?} len: {}", filename.as_ref(), file.existed, file.deleted, file.content.len());
     }
 
-    let file_path = config.base_dir.join(&filename);
+    let file_path = config.base_dir.join(filename);
     if file.existed {
         // If the file file existed, delete it. Whether we want to overwrite it
         // or really delete it - the file may be a hard link and we must replace
@@ -186,16 +183,16 @@ pub fn save_modified_file<'arena, H: BuildHasher>(
 #[derive(Debug)]
 pub struct ModifiedFiles<'arena, 'config> {
     config: &'config ApplyConfig<'config>,
-    inner: HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>,
+    inner: HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<SeaHasher>>,
 }
 
-impl<'arena, 'config> Deref for ModifiedFiles<'arena, 'config> {
-    type Target = HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<seahash::SeaHasher>>;
+impl<'arena> Deref for ModifiedFiles<'arena, '_> {
+    type Target = HashMap<Cow<'arena, Path>, ModifiedFile<'arena>, BuildHasherDefault<SeaHasher>>;
     #[inline]
     fn deref(&self) -> &Self::Target { &self.inner }
 }
 
-impl<'arena, 'config> DerefMut for ModifiedFiles<'arena, 'config> {
+impl DerefMut for ModifiedFiles<'_, '_> {
     #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target { &mut self.inner }
 }
@@ -242,7 +239,7 @@ impl<'arena, 'config> ModifiedFiles<'arena, 'config> {
                 match arena.load_file(&real_path) {
                     Ok(data) => {
                         let meta = std::fs::metadata(real_path)?;
-                        entry.insert(ModifiedFile::new(&data, true, Some(meta.permissions())))
+                        entry.insert(ModifiedFile::new(data, true, Some(meta.permissions())))
                     }
 
                     // If the file doesn't exist, make empty one.
@@ -264,9 +261,9 @@ impl<'arena, 'config> ModifiedFiles<'arena, 'config> {
         -> &ModifiedFile<'arena>
     {
         // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-        let mut file = self.get_mut(&applied_patch.final_filename).unwrap();
+        let file = self.get_mut(&applied_patch.final_filename).unwrap();
 
-        applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+        applied_patch.file_patch.rollback(file, PatchDirection::Forward, &applied_patch.report);
 
 
         if applied_patch.file_patch.is_rename() {
@@ -289,7 +286,7 @@ impl<'arena, 'config> ModifiedFiles<'arena, 'config> {
 }
 
 /// Create a file with given permissions, removing existing file if necessary
-pub fn create_file(filename: &PathBuf, permissions: &Option<fs::Permissions>)
+pub fn create_file(filename: &Path, permissions: &Option<fs::Permissions>)
 		   -> Result<File, io::Error>
 {
     let f = match File::create(filename) {
@@ -471,7 +468,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
             .with_context(|| ApplyError::LoadFileToPatch { filename: target_filename.to_path_buf() })?;
 
         // If the patch renames the file. do it now...
-        let (mut file, final_filename) = if file_patch.is_rename() {
+        let (file, final_filename) = if file_patch.is_rename() {
             let new_filename = file_patch.new_filename().unwrap(); // NOTE(unwrap): It must be there for renaming patches.
 
             if *new_filename == target_filename {
@@ -526,7 +523,7 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
         };
 
         // Apply the `FilePatch` on it.
-        let report = file_patch.apply(&mut file, direction, config.fuzz, analyses, fn_analysis_note);
+        let report = file_patch.apply(file, direction, config.fuzz, analyses, fn_analysis_note);
 
         let report_ok = report.ok();
 
@@ -615,14 +612,14 @@ impl<'arena, 'config> AppliedState<'arena, 'config> {
 
             let file = self.modified_files.rollback(applied_patch);
 
-            save_backup_file(config, &applied_patch.patch_filename, &applied_patch.target_filename, &file)?;
+            save_backup_file(config, applied_patch.patch_filename, &applied_patch.target_filename, file)?;
 
             if applied_patch.file_patch.is_rename() {
                 // If it was a rename, we also have to backup the new file (it will be empty file).
                 let new_filename = applied_patch.file_patch.new_filename().unwrap();
                 // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-                let new_file = self.modified_files.get_mut(new_filename).unwrap();
-                save_backup_file(config, applied_patch.patch_filename, new_filename, &new_file)?;
+                let new_file = self.modified_files.get(new_filename).unwrap();
+                save_backup_file(config, applied_patch.patch_filename, new_filename, new_file)?;
             }
         }
 

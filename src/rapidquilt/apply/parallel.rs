@@ -18,10 +18,10 @@
 //! The affected files are assigned to threads. The assignment ensures that:
 //! 1) The files are roughly equally distributed.
 //! 2) If a filename A was ever renamed to filename B, both of them must be
-//! processed by the same thread.
+//!    processed by the same thread.
 //! 3) Similarly, if a patch contains two different filenames A and B, even that
-//! it is not renaming, both A and B are assigned to the same thread (because
-//! whether A or B will be used is unknown at this moment).
+//!    it is not renaming, both A and B are assigned to the same thread (because
+//!    whether A or B will be used is unknown at this moment).
 //!
 //! The `FilePatch`es are distributed to the threads based on the filenames
 //! assigned to them.
@@ -185,7 +185,7 @@ fn apply_worker<'arena, 'config>(
         match state.apply_one_file_patch(index,
                                          text_file_patch,
                                          arena,
-                                         &analyses,
+                                         analyses,
                                          &fn_analysis_note) {
             Ok(false) => {
                 // Patch failed to apply...
@@ -230,7 +230,7 @@ struct WorkerReport {
 /// `thread_file_patches`: The `FilePatch`es for this thread and the indexes of the original patch files they came from.
 /// `final_patch`: Index of the earliest patch that failed to apply.
 /// `analyses`: Set of analyses to run.
-fn save_files_worker<'arena> (
+fn save_files_worker(
     config: &ApplyConfig,
     shared: &SharedState,
     mut state: AppliedState,
@@ -244,8 +244,8 @@ fn save_files_worker<'arena> (
         }
 
         // NOTE(unwrap): It must be there, we must have loaded it when applying the patch.
-        let mut file = state.modified_files.get_mut(applied_patch.final_filename.as_ref()).unwrap();
-        applied_patch.file_patch.rollback(&mut file, PatchDirection::Forward, &applied_patch.report);
+        let file = state.modified_files.get_mut(applied_patch.final_filename.as_ref()).unwrap();
+        applied_patch.file_patch.rollback(file, PatchDirection::Forward, &applied_patch.report);
 
         state.applied_patches.pop();
     };
@@ -281,7 +281,7 @@ fn save_files_worker<'arena> (
 
             let down_to_index = match config.backup_count {
                 ApplyConfigBackupCount::All => 0,
-                ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+                ApplyConfigBackupCount::Last(n) => final_patch.saturating_sub(n),
             };
 
             state.rollback_and_save_backup_files(down_to_index)?;
@@ -294,7 +294,7 @@ fn save_files_worker<'arena> (
 }
 
 /// Apply all patches from the `config` in parallel
-pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
+pub fn apply_patches(config: &ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
     -> Result<ApplyResult>
 {
     let threads = rayon::current_num_threads();
@@ -323,36 +323,34 @@ pub fn apply_patches<'config, 'arena>(config: &'config ApplyConfig, arena: &'are
     }
 
     // Distribute the patches to queues for worker threads
+    // Error checking later, here we'll look at the ok ones
     let mut filename_distributor = FilenameDistributor::<Cow<Path>>::new(threads);
-    for text_patch in &text_patches {
-        // Error checking later, here we'll look at the ok ones
-        if let Ok(text_patch) = text_patch {
-            for text_file_patch in &text_patch.file_patches {
-                // This sucks, but the `FilePatch` may have different `old_filename` and `new_filename`
-                // and we don't know which one will be used. It is decided based on which files
-                // exist at the moment when the `FilePatch` will be applied. So for scheduling
-                // purposes we act like if any `FilePatch` that has `old_filename != new_filename`
-                // is renaming, so that both of them will be scheduled to the same thread.
+    for text_patch in text_patches.iter().flatten() {
+        for text_file_patch in &text_patch.file_patches {
+            // This sucks, but the `FilePatch` may have different `old_filename` and `new_filename`
+            // and we don't know which one will be used. It is decided based on which files
+            // exist at the moment when the `FilePatch` will be applied. So for scheduling
+            // purposes we act like if any `FilePatch` that has `old_filename != new_filename`
+            // is renaming, so that both of them will be scheduled to the same thread.
 
-                let (filename, rename_to_filename) = match (text_file_patch.old_filename(), text_file_patch.new_filename()) {
-                    // Only `old_filename` => use that.
-                    (Some(old_filename), None) => (old_filename, None),
+            let (filename, rename_to_filename) = match (text_file_patch.old_filename(), text_file_patch.new_filename()) {
+                // Only `old_filename` => use that.
+                (Some(old_filename), None) => (old_filename, None),
 
-                    // Only `new_filename` => use that.
-                    (None, Some(new_filename)) => (new_filename, None),
+                // Only `new_filename` => use that.
+                (None, Some(new_filename)) => (new_filename, None),
 
-                    // `old_filename` and `new_filename` that are the same => use that.
-                    (Some(old_filename), Some(new_filename)) if old_filename == new_filename => (old_filename, None),
+                // `old_filename` and `new_filename` that are the same => use that.
+                (Some(old_filename), Some(new_filename)) if old_filename == new_filename => (old_filename, None),
 
-                    // `old_filename` and `new_filename` => consider it a rename!
-                    (Some(old_filename), Some(new_filename)) => (old_filename, Some(new_filename)),
+                // `old_filename` and `new_filename` => consider it a rename!
+                (Some(old_filename), Some(new_filename)) => (old_filename, Some(new_filename)),
 
-                    // Neither!? Such patch should not come from parser.
-                    (None, None) => unreachable!(),
-                };
+                // Neither!? Such patch should not come from parser.
+                (None, None) => unreachable!(),
+            };
 
-                filename_distributor.add(filename.clone(), rename_to_filename.cloned()); // Note: clone/cloned is used on Cow, so most of the time it will be just copy of reference
-            }
+            filename_distributor.add(filename.clone(), rename_to_filename.cloned()); // Note: clone/cloned is used on Cow, so most of the time it will be just copy of reference
         }
     }
 

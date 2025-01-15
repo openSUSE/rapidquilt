@@ -19,7 +19,7 @@ pub struct FileArena<'a> {
     _phantom: PhantomData<&'a [u8]>,
 }
 
-impl<'a> FileArena<'a> {
+impl FileArena<'_> {
     pub fn new() -> Self {
         Self {
             files: Mutex::new(Vec::new()),

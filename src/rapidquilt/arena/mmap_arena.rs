@@ -32,9 +32,9 @@ pub struct MmapArena<'a> {
 
 // We have `*mut libc::c_void` in there, but we don't use it to mutate anything
 // concurently. So no worries...
-unsafe impl<'a> Sync for MmapArena<'a> {}
+unsafe impl Sync for MmapArena<'_> {}
 
-impl<'a> MmapArena<'a> {
+impl MmapArena<'_> {
     pub fn new() -> Self {
         Self {
             mappings: Mutex::new(Vec::new()),
@@ -92,7 +92,7 @@ impl<'a> Arena for MmapArena<'a> {
     }
 }
 
-impl<'a> Drop for MmapArena<'a> {
+impl Drop for MmapArena<'_> {
     fn drop(&mut self) {
         if let Ok(mappings) = self.mappings.lock() {
             for mapping in mappings.iter() {

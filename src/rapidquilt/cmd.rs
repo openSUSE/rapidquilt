@@ -84,7 +84,6 @@ fn read_series_file<P: AsRef<Path>>(series_path: P) -> Result<Vec<SeriesPatch>> 
                             //There are some options, so parse them
                             Some(_) => patch_opts.parse(parts)
                                 .with_context(|| format!("Parsing patch options for \"{}\"", filename.display()))
-                                .map_err(|err| err.into())
                                 .map(|matches| {
                                     let strip = matches.opt_str("strip")
                                         .and_then(|n| n.parse::<usize>().ok()).unwrap_or(DEFAULT_PATCH_STRIP);
@@ -230,7 +229,7 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
 
     let num_threads = matches.opt_str("threads")
         .or_else(|| env::var("RAPIDQUILT_THREADS").ok())
-        .and_then(|value_txt| Some(value_txt.parse::<usize>()))
+        .map(|value_txt| value_txt.parse::<usize>())
         .transpose().context("Parsing number of threads")?
         .unwrap_or_else(rayon::current_num_threads);
 

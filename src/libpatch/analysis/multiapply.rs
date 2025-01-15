@@ -78,7 +78,7 @@ impl Analysis for MultiApplyAnalysis {
 
             // Check if there are any more places where the hunk could apply,
             // we must exclude places where some hunk already applied.
-            let places: Vec<Range<isize>> = Searcher::new(&remove_content) // TODO: We no longer use Searcher in patch::try_apply_hunk and we could stop using it here and remove it completely...
+            let places: Vec<Range<isize>> = Searcher::new(remove_content) // TODO: We no longer use Searcher in patch::try_apply_hunk and we could stop using it here and remove it completely...
                 .search_in(&modified_file.content)
                 .map(|line| (line as isize)..((line + remove_content.len()) as isize))
                 .filter(|range| {
@@ -86,7 +86,7 @@ impl Analysis for MultiApplyAnalysis {
                         if let HunkApplyReport::Applied { line, fuzz, .. } = other_hunk_report {
                             let other_hunk_view = other_hunk.view(direction, *fuzz);
                             let other_remove_content = other_hunk_view.remove_content();
-                            let other_range = (*line as isize)..(*line + other_remove_content.len() as isize);
+                            let other_range = (*line)..(*line + other_remove_content.len() as isize);
 
                             if range.end > other_range.start && other_range.end > range.start {
                                 // Overlap, kill it

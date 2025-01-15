@@ -20,7 +20,7 @@ use libpatch::analysis::{AnalysisSet, Note};
 use libpatch::patch::TextFilePatch;
 use libpatch::patch::unified::parser::parse_patch;
 
-pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Arena, analyses: &AnalysisSet)
+pub fn apply_patches(config: &ApplyConfig, arena: &dyn Arena, analyses: &AnalysisSet)
     -> Result<ApplyResult> {
     let mut state = AppliedState::new(config, config.series_patches.len());
 
@@ -38,9 +38,9 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
         }
 
         let patch = arena.load_file(&config.patches_path.join(&series_patch.filename))
-            .map_err(|err| Error::from(err))
-            .and_then(|data| parse_patch(&data, series_patch.strip)
-		      .map_err(|err| Error::from(err)))
+            .map_err(Error::from)
+            .and_then(|data| parse_patch(data, series_patch.strip)
+		      .map_err(Error::from))
             .with_context(|| ApplyError::PatchLoad { patch_filename: config.series_patches[index].filename.clone() })?;
 
 	print_parser_warnings(config, &series_patch.filename, &patch);
@@ -58,7 +58,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
             if !state.apply_one_file_patch(index,
                                            text_file_patch,
                                            arena,
-                                           &analyses,
+                                           analyses,
                                            &fn_analysis_note)?
             {
                 any_report_failed = true;
@@ -98,7 +98,7 @@ pub fn apply_patches<'a, 'arena>(config: &'a ApplyConfig, arena: &'arena dyn Are
 
             let down_to_index = match config.backup_count {
                 ApplyConfigBackupCount::All => 0,
-                ApplyConfigBackupCount::Last(n) => if final_patch > n { final_patch - n } else { 0 },
+                ApplyConfigBackupCount::Last(n) => final_patch.saturating_sub(n),
             };
 
             state.rollback_and_save_backup_files(down_to_index)?;

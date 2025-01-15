@@ -22,7 +22,7 @@ pub trait UnifiedPatchRejWriter {
     fn write_rej_to<W: Write>(&self, writer: &mut W, report: &FilePatchApplyReport) -> Result<(), io::Error>;
 }
 
-impl<'a, Line> UnifiedPatchHunkHeaderWriter for Hunk<'a, Line> {
+impl<Line> UnifiedPatchHunkHeaderWriter for Hunk<'_, Line> {
     fn write_header_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
         let add_count = self.add.content.len();
         let remove_count = self.remove.content.len();
@@ -161,7 +161,7 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, &'a [u8]>,
     // Print --- line
     if filepatch.kind() == FilePatchKind::Create {
         writer.write_all(b"--- ")?;
-        writer.write_all(&NULL_FILENAME)?;
+        writer.write_all(NULL_FILENAME)?;
         writer.write_all(b"\n")?;
     } else {
         writeln!(writer, "--- {}", old_filename.display())?;
@@ -170,7 +170,7 @@ fn write_file_patch_header_to<'a, W: Write>(filepatch: &FilePatch<'a, &'a [u8]>,
     // Print +++ line
     if filepatch.kind() == FilePatchKind::Delete {
         writer.write_all(b"+++ ")?;
-        writer.write_all(&NULL_FILENAME)?;
+        writer.write_all(NULL_FILENAME)?;
         writer.write_all(b"\n")?;
     } else {
         writeln!(writer, "+++ {}", new_filename.display())?;
@@ -211,7 +211,7 @@ impl<'a> UnifiedPatchRejWriter for FilePatch<'a, &'a [u8]> {
 
 impl<'a> UnifiedPatchWriter for Patch<'a, &'a [u8]> {
     fn write_to<W: Write>(&self, writer: &mut W) -> Result<(), io::Error> {
-        writer.write_all(&self.header)?;
+        writer.write_all(self.header)?;
 
         for file_patch in &self.file_patches {
             file_patch.write_to(writer)?;

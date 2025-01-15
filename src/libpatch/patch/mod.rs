@@ -292,8 +292,8 @@ pub enum HunkApplyReport {
 /// `movable`: can the hunk be applied elsewhere (i.e. with a non-zero offset)?
 ///
 /// `min_modify_line`: first line that can be modified by a new hunk, i.e. first that is not modified by a previous hunk.
-fn try_apply_hunk<'a, 'hunk>(
-    hunk_view: &TextHunkView<'a, 'hunk>,
+fn try_apply_hunk(
+    hunk_view: &TextHunkView,
     modified_file: &ModifiedFile,
     target_line: isize,
     movable: bool,
@@ -346,7 +346,7 @@ fn try_apply_hunk<'a, 'hunk>(
     // so that a positive offset in `forward_targets` (e.g. +5) is tried
     // before the corresponding negative offsets (e.g. -5).
     for possible_target_line in backward_targets.interleave(forward_targets) {
-        if matches(&remove_content, &modified_file.content, possible_target_line) {
+        if matches(remove_content, &modified_file.content, possible_target_line) {
             best_target_line = Some(possible_target_line);
             break;
         }
@@ -670,10 +670,9 @@ impl<'a> TextFilePatch<'a> {
             PatchDirection::Forward => &self.new_filename,
             PatchDirection::Revert => &self.old_filename,
         };
-        match target_filename {
-            None => modified_file.deleted = true,
-            Some(_) => (),
-        };
+        if target_filename.is_none() {
+            modified_file.deleted = true;
+        }
 
         FilePatchApplyReport::single_hunk_success(0, 0, 0, direction, max_fuzz)
     }
@@ -842,9 +841,9 @@ Apply report:
 		};
 
             // Attempt to apply the hunk ignoring trailing context...
-            let ref hunk_view = HunkView::with_no_suffix(&hunk, direction, fuzz);
+            let hunk_view = HunkView::with_no_suffix(hunk, direction, fuzz);
 
-            let hunk_report = try_apply_hunk(hunk_view, modified_file,
+            let hunk_report = try_apply_hunk(&hunk_view, modified_file,
 					     rollback_line, false, 0);
 	    match hunk_report {
 		HunkApplyReport::Failed(..) => ok = false,
