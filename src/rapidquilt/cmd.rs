@@ -185,8 +185,8 @@ fn cmd_push<'a, F: Iterator<Item = &'a String>>(matches: &Matches, mut free_args
     if first_patch == series_patches.len() {
         if verbosity >= Verbosity::Normal {
             println!("All patches applied. Nothing to do.");
-            return Ok(true);
         }
+        return Ok(true);
     }
 
     let last_patch = match goal {
