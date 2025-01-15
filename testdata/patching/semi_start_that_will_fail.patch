@@ -1,0 +1,18 @@
+The hunk has less prefix context than suffix context and it is targetting
+line 1, therefore it must be applied only at the beginning of the file.
+
+However, the context lines do not match what is at the beginning. They would
+match to a place later in the file, but applying with an offset is not allowed
+in this case.
+
+Here, the hunk specifies line 1 for the old file and line 3 for the new file,
+which is interpreted as "beginning of file" by GNU patch, so the patch fails.
+--- file.in	2019-01-16 15:02:37.016021405 +0100
++++ semi_start.out	2019-01-16 15:04:12.877071765 +0100
+@@ -1,5 +3,5 @@
+ ccc
+-ddd
++ddd modified
+ eee
+ fff
+ ggg

@@ -205,7 +205,7 @@ impl<'a, 'hunk, Line> HunkView<'a, 'hunk, Line> {
         //             context (after applying fuzz) must apply at the end of the file."
 
         if self.prefix_context() < self.suffix_context() &&
-           self.add_target_line() == 0 // Note that we are numbering lines from 0, so this is the "line number 1" the manual talks about.
+           self.remove_target_line() == 0 // Note that we are numbering lines from 0, so this is the "line number 1" the manual talks about.
         {
             return HunkPosition::Start;
         }
