@@ -850,7 +850,6 @@ fn test_parse_patch_line() {
 fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
     map_parsed(parse_metadata_line(input), PatchLine::Metadata)
         .or_else(|_| map_parsed(parse_git_metadata_line(input), PatchLine::GitMetadata))
-        .or_else(|_| map_parsed(take_line_incl(input), PatchLine::Garbage))
         .or_else(|_| input.is_empty().then_some(Ok((input, PatchLine::EndOfPatch)))
 		 .unwrap_or_else(|| map_parsed(Ok(take_line_or_eof(input)), PatchLine::Garbage)))
 }
