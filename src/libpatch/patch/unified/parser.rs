@@ -1333,7 +1333,7 @@ impl<'a> FilePatchMetadata<'a> {
 
     /// This function will return `None` if some necessary metadata is missing
     pub fn build_filepatch(self, hunks: HunksVec<'a, &'a [u8]>) -> Option<TextFilePatch<'a>> {
-        let builder = FilePatchBuilder::<&[u8]>::default();
+        let builder = TextFilePatchBuilder::default();
 
         // Set the kind
         let builder = builder.kind(self.recognize_kind(&hunks));

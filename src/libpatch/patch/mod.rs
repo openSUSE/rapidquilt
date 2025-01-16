@@ -561,6 +561,7 @@ impl<'a, Line> FilePatch<'a, Line> {
 }
 
 pub type TextFilePatch<'a> = FilePatch<'a, &'a [u8]>;
+pub type TextFilePatchBuilder<'a> = FilePatchBuilder<'a, &'a [u8]>;
 
 impl<'a> TextFilePatch<'a> {
     /// Apply (or revert - based on `direction`) this patch to the `modified_file` using the given `max_fuzz`.
