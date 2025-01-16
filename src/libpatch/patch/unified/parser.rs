@@ -28,6 +28,8 @@ enum ErrorBuilder<'a> {
     BadHash(&'a [u8]),
 }
 
+use ErrorBuilder::*;
+
 fn delimited_error<F>(input: &[u8], delim: F) -> String
 where
     F: FnMut(&u8) -> bool,
@@ -98,7 +100,6 @@ pub enum ParseError {
 
 impl From<ErrorBuilder<'_>> for ParseError {
     fn from(err: ErrorBuilder) -> Self {
-        use ErrorBuilder::*;
         match err {
             NoMatch =>
                 unreachable!("NoMatch must be handled by the parser itself"),
@@ -137,6 +138,144 @@ impl From<ErrorBuilder<'_>> for ParseError {
                 Self::BadHash(error_word(input)),
         }
     }
+}
+
+/// Tests if `c` is an ASCII space or TAB.
+fn is_space(c: u8) -> bool {
+    c == b' ' ||
+    c == b'\t'
+}
+
+/// Tests if `c` is a POSIX white-space character.
+fn is_whitespace(c: u8) -> bool {
+    c == b' ' ||
+    c == 0xc ||
+    c == b'\n' ||
+    c == b'\r' ||
+    c == b'\t' ||
+    c == 0xb
+}
+
+/// Tests if `c` is an ASCII octal digit.
+fn is_oct_digit(c: u8) -> bool {
+    (b'0'..= b'7').contains(&c)
+}
+
+/// Parses an octal triplet. Returns the parsed number as an option
+/// and the number of bytes that could be successfully parsed
+/// from `input`.
+///
+/// Requires exactly three octal digits that represent a number between
+/// 0 and 0o377. On failure, `None` is returned together with the number
+/// of bytes required to demonstrate the error.
+fn parse_oct3(input: &[u8]) -> Option<u8> {
+    if input.len() >= 3 &&
+        (b'0'..=b'3').contains(&input[0]) &&
+        (b'0'..=b'7').contains(&input[1]) &&
+        (b'0'..=b'7').contains(&input[2])
+    {
+        Some(((input[0] - b'0') << 6) |
+             ((input[1] - b'0') << 3) |
+             ((input[2] - b'0')))
+    } else { None }
+}
+
+#[cfg(test)]
+#[test]
+fn test_parse_oct3() {
+    // Valid numbers
+    assert_eq!(parse_oct3(b"123"), Some(0o123));
+    assert_eq!(parse_oct3(b"3456"), Some(0o345));
+
+    // Various invalid sequences
+    assert_eq!(parse_oct3(b""), None);
+    assert_eq!(parse_oct3(b"4"), None);
+    assert_eq!(parse_oct3(b"x"), None);
+    assert_eq!(parse_oct3(b"1"), None);
+    assert_eq!(parse_oct3(b"18"), None);
+    assert_eq!(parse_oct3(b"1x"), None);
+    assert_eq!(parse_oct3(b"12"), None);
+    assert_eq!(parse_oct3(b"128"), None);
+    assert_eq!(parse_oct3(b"12x"), None);
+}
+
+#[cfg(unix)]
+fn permissions_from_mode(mode: u32) -> Option<Permissions> {
+    use std::os::unix::fs::PermissionsExt;
+    Some(Permissions::from_mode(mode))
+}
+
+#[cfg(not(unix))]
+fn permissions_from_mode(mode: u32) -> Option<Permissions> {
+    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
+
+    WARN_ONCE.call_once(|| {
+        eprintln!("Permissions are ignored on non-unix systems!");
+    });
+
+    None
+}
+
+#[derive(Debug, PartialEq)]
+enum Filename<'a> {
+    /// Actual filename, either as byte slice of the patch file or owned buffer.
+    Real(Cow<'a, Path>),
+
+    /// The special "/dev/null" filename.
+    DevNull,
+}
+
+#[derive(Debug, PartialEq)]
+enum MetadataLine<'a> {
+    GitDiffSeparator(Filename<'a>, Filename<'a>),
+
+    MinusFilename(Filename<'a>),
+    PlusFilename(Filename<'a>),
+
+    // ...?
+}
+
+#[derive(Debug, PartialEq)]
+enum GitMetadataLine<'a> {
+    Index(&'a [u8], &'a[u8], Option<u32>),
+
+    OldMode(u32),
+    NewMode(u32),
+    DeletedFileMode(u32),
+    NewFileMode(u32),
+
+    RenameFrom,
+    RenameTo,
+
+    CopyFrom,
+    CopyTo,
+
+    GitBinaryPatch,
+}
+
+#[derive(Debug, PartialEq)]
+enum PatchLine<'a> {
+    Garbage(&'a [u8]),
+    Metadata(MetadataLine<'a>),
+    GitMetadata(GitMetadataLine<'a>),
+    EndOfPatch,
+}
+
+#[derive(Debug, PartialEq)]
+struct HunkHeader<'a> {
+    pub add_line: usize,
+    pub add_count: usize,
+    pub remove_line: usize,
+    pub remove_count: usize,
+
+    pub function: &'a [u8],
+}
+
+#[derive(Debug, PartialEq)]
+enum HunkLineType {
+    Add,
+    Remove,
+    Context,
 }
 
 #[cfg(test)]
@@ -195,183 +334,699 @@ macro_rules! assert_lines_eq {
 #[cfg(test)]
 macro_rules! s { ( $byte_string:expr ) => { &$byte_string[..] } }
 
-/// Tests if `c` is an ASCII space or TAB.
-fn is_space(c: u8) -> bool {
-    c == b' ' ||
-    c == b'\t'
+struct InputParser<'a> {
+    input: &'a [u8],
+    pos: usize,
+    warnings: Vec<String>,
 }
 
-/// Tests if `c` is a POSIX white-space character.
-fn is_whitespace(c: u8) -> bool {
-    c == b' ' ||
-    c == 0xc ||
-    c == b'\n' ||
-    c == b'\r' ||
-    c == b'\t' ||
-    c == 0xb
-}
-
-/// Tests if `c` is an ASCII octal digit.
-fn is_oct_digit(c: u8) -> bool {
-    (b'0'..= b'7').contains(&c)
-}
-
-fn newline(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
-    match input.first() {
-        Some(&b'\n') => Ok((&input[1..], &input[0..1])),
-        Some(_) => Err(ErrorBuilder::NoMatch),
-        None => Err(ErrorBuilder::UnexpectedEndOfFile),
+impl<'a> InputParser<'a> {
+    pub fn new(input: &'a [u8]) -> Self {
+        Self {
+            input,
+            pos: 0,
+	    warnings: vec![],
+        }
     }
-}
 
-/// Takes a line from input. The newline byte is skipped but is not part
-/// of the parsed line.
-fn take_line_skip(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
-    match memchr::memchr(b'\n', input) {
-        Some(index) => Ok((&input[index+1..], &input[..index])),
-        None => Err(ErrorBuilder::UnexpectedEndOfFile),
+    pub fn remain(&self) -> &'a [u8] { &self.input[self.pos..] }
+    pub fn eof(&self) -> bool { self.pos == self.input.len() }
+
+    pub fn peek_byte(&self) -> Option<&'a u8> { self.input.get(self.pos) }
+
+    fn advance(&mut self, n: usize) -> &mut Self { self.pos += n; self }
+    fn rewind(&mut self, pos: usize) -> &mut Self { self.pos = pos; self }
+
+    fn take_byte(&mut self) -> Option<&'a u8> {
+        let byte = self.peek_byte();
+        self.advance(1);
+        byte
     }
-}
 
-/// Takes a line from input including the newline byte.
-fn take_line_incl(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
-    match memchr::memchr(b'\n', input) {
-        Some(index) => Ok((&input[index+1..], &input[..index+1])),
-        None => Err(ErrorBuilder::UnexpectedEndOfFile),
+    fn take_n(&mut self, n: usize) -> &'a [u8] {
+        let startpos = self.pos;
+        &self.advance(n).input[startpos..self.pos]
     }
-}
 
-/// Takes a line from input including the newline byte if present.
-/// It is OK if there is no newline.
-fn take_line_or_eof(input: &[u8]) -> (&[u8], &[u8]) {
-    match memchr::memchr(b'\n', input) {
-	Some(index) => (&input[index+1..], &input[..index+1]),
-	None => (&b""[..], input),
+    fn strip_prefix(&mut self, prefix: &[u8]) -> Option<&'a [u8]> {
+        self.remain().starts_with(prefix).then(|| self.take_n(prefix.len()))
     }
-}
 
-fn map_parsed<I, T1, T2, E, F>(parsed: Result<(I, T1), E>, f: F) -> Result<(I, T2), E>
-where
-    F: FnOnce(T1) -> T2,
-{
-    parsed.map(|(remain, value)| (remain, f(value)))
-}
-
-/// Divides a slice into two at first element that matches `pred`.
-///
-/// The first slice will contain the initial part of `input` where `pred`
-/// returns `false`. The second part is the rest of the slice starting
-/// with the first element for which `pred` returns `true`.
-///
-/// If `pred` is `true` for the first element of `input`, the first
-/// slice will be empty, and the second slice is equal to `input`.
-/// If `pred` is `false` for all elements of `input`, the second slice
-/// will be empty, and the first slice is equal to `input`.
-fn split_at_cond<T, P>(input: &[T], pred: P) -> (&[T], &[T])
-where
-    T: Copy,
-    P: Fn(T) -> bool,
-{
-    input.split_at(input.iter().position(|c| pred(*c)).unwrap_or(input.len()))
-}
-
-// Parses filename as-is included in the patch, delimited by first whitespace. Returns byte slice
-// of the path as-is in the input data.
-fn parse_filename_direct(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
-    match split_at_cond(input, is_whitespace) {
-        ([], _)
-            => Err(ErrorBuilder::NoMatch),
-        (name, rest)
-            => Ok((rest, name)),
+    pub fn newline(&mut self) -> Result<&'a [u8], ErrorBuilder<'a>> {
+        match self.peek_byte() {
+            Some(&b'\n') => Ok(self.take_n(1)),
+            Some(_) => Err(NoMatch),
+            None => Err(UnexpectedEndOfFile),
+        }
     }
-}
 
-/// Parses an octal triplet. Returns the parsed number as an option
-/// and the number of bytes that could be successfully parsed
-/// from `input`.
-///
-/// Requires exactly three octal digits that represent a number between
-/// 0 and 0o377. On failure, `None` is returned together with the number
-/// of bytes required to demonstrate the error.
-fn parse_oct3(input: &[u8]) -> Option<u8> {
-    if input.len() >= 3 &&
-        (b'0'..=b'3').contains(&input[0]) &&
-        (b'0'..=b'7').contains(&input[1]) &&
-        (b'0'..=b'7').contains(&input[2])
+    /// Takes a line from input. The newline byte is skipped but is not part
+    /// of the parsed line.
+    pub fn take_line_skip(&mut self) -> Result<&'a [u8], ErrorBuilder<'a>> {
+        match memchr::memchr(b'\n', self.remain()) {
+            Some(index) => Ok(&self.take_n(index+1)[..index]),
+            None => Err(UnexpectedEndOfFile),
+        }
+    }
+
+    /// Takes a line from input including the newline byte.
+    pub fn take_line_incl(&mut self) -> Result<&'a [u8], ErrorBuilder<'a>> {
+        match memchr::memchr(b'\n', self.remain()) {
+            Some(index) => Ok(self.take_n(index+1)),
+            None => Err(UnexpectedEndOfFile),
+        }
+    }
+
+    /// Takes a line from input including the newline byte if present.
+    /// It is OK if there is no newline.
+    pub fn take_line_or_eof(&mut self) -> &'a [u8] {
+        self.take_n(match memchr::memchr(b'\n', self.remain()) {
+            Some(index) => index+1,
+            None => self.remain().len(),
+        })
+    }
+
+    /// Takes characters from input until the first element that matches
+    /// `pred`. This terminating character is not part of the result.
+    pub fn take_until_cond<P>(&mut self, pred: P) -> &'a [u8]
+    where
+        P: Fn(u8) -> bool,
     {
-        Some(((input[0] - b'0') << 6) |
-             ((input[1] - b'0') << 3) |
-             ((input[2] - b'0')))
-    } else { None }
-}
-
-#[cfg(test)]
-#[test]
-fn test_parse_oct3() {
-    // Valid numbers
-    assert_eq!(parse_oct3(b"123"), Some(0o123));
-    assert_eq!(parse_oct3(b"3456"), Some(0o345));
-
-    // Various invalid sequences
-    assert_eq!(parse_oct3(b""), None);
-    assert_eq!(parse_oct3(b"4"), None);
-    assert_eq!(parse_oct3(b"x"), None);
-    assert_eq!(parse_oct3(b"1"), None);
-    assert_eq!(parse_oct3(b"18"), None);
-    assert_eq!(parse_oct3(b"1x"), None);
-    assert_eq!(parse_oct3(b"12"), None);
-    assert_eq!(parse_oct3(b"128"), None);
-    assert_eq!(parse_oct3(b"12x"), None);
-}
-
-/// Parses a C-style string. The implementation very closely mimics the
-/// GNU patch function of the same name.
-fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ErrorBuilder> {
-    if input.first() != Some(&b'\"') {
-        return Err(ErrorBuilder::NoMatch);
+        self.take_n(self.remain().iter()
+                    .position(|&c| pred(c))
+                    .unwrap_or(self.remain().len()))
     }
-    let mut index = 1;
-    let mut res = Vec::new();
-    while let Some(&c) = input.get(index) {
-        match c {
-            b'\\' => {
-                index += 1;
-                let c = match input.get(index) {
-                    Some(b'a') => b'\x07',
-                    Some(b'b') => b'\x08',
-                    Some(b'f') => b'\x0c',
-                    Some(b'n') => b'\n',
-                    Some(b'r') => b'\r',
-                    Some(b't') => b'\t',
-                    Some(b'v') => b'\x0b',
-                    Some(b'\\') => b'\\',
-                    Some(b'\"') => b'\"',
-                    _ => {
-                        match parse_oct3(&input[index..]) {
-                            Some(val) => {
-                                index += 2; // difference from a one-letter sequence
-                                val
-                            }
-                            None => {
-                                return Err(ErrorBuilder::BadSequence(&input[index-1..]));
+
+    pub fn take_number_usize(&mut self) -> Result<usize, ErrorBuilder<'a>> {
+        let errloc = self.remain();
+        let digits = self.take_until_cond(|c| !c.is_ascii_digit());
+        if digits.is_empty() {
+            return Err(BadNumber(errloc));
+        }
+        // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
+        let str = std::str::from_utf8(digits).unwrap();
+        usize::from_str(str).map_err(|_| NumberTooBig(digits))
+    }
+
+    /// Parses filename as-is included in the patch, delimited by first whitespace.
+    /// Returns byte slice of the path as-is in the input data.
+    fn take_filename_direct(&mut self) -> Result<&'a [u8], ErrorBuilder<'a>> {
+        match self.take_until_cond(is_whitespace) {
+            []   => Err(NoMatch),
+            name => Ok(name),
+        }
+    }
+
+    /// Parses a C-style string. The implementation very closely mimics the
+    /// GNU patch function of the same name.
+    pub fn take_c_string(&mut self) -> Result<Vec<u8>, ErrorBuilder<'a>> {
+        let errloc = self.remain();
+        if self.take_byte() != Some(&b'\"') {
+            return Err(NoMatch);
+        }
+        let mut res = Vec::new();
+        while let Some(&c) = self.take_byte() {
+            match c {
+                b'\\' => {
+                    let c = match self.take_byte() {
+                        Some(b'a') => b'\x07',
+                        Some(b'b') => b'\x08',
+                        Some(b'f') => b'\x0c',
+                        Some(b'n') => b'\n',
+                        Some(b'r') => b'\r',
+                        Some(b't') => b'\t',
+                        Some(b'v') => b'\x0b',
+                        Some(b'\\') => b'\\',
+                        Some(b'\"') => b'\"',
+                        _ => {
+                            match parse_oct3(&self.input[self.pos - 1..]) {
+                                Some(val) => {
+                                    // difference from a one-letter sequence
+                                    self.advance(2);
+                                    val
+                                }
+                                None => {
+                                    return Err(BadSequence(&self.input[self.pos - 2..]));
+                                }
                             }
                         }
-                    }
-                };
-                res.push(c);
+                    };
+                    res.push(c);
+                }
+                b'\"' => return Ok(res),
+                b'\n' => return Err(UnexpectedEndOfLine(errloc)),
+                other => res.push(other),
             }
-            b'\"' => return Ok((&input[index+1..], res)),
-            b'\n' => return Err(ErrorBuilder::UnexpectedEndOfLine(input)),
-            other => res.push(other),
         }
-        index += 1;
+        Err(UnexpectedEndOfFile)
     }
-    Err(ErrorBuilder::UnexpectedEndOfFile)
+
+    // Take a filename.
+    //
+    // Either written directly without any whitespace or inside quotation marks.
+    //
+    // Similar to `parse_name` function in patch.
+    fn take_filename(&mut self) -> Result<Filename<'a>, ErrorBuilder<'a>> {
+        self.take_until_cond(|c| !is_space(c));
+
+        // First attempt to parse it as quoted filename. This will reject it
+        // quickly if it does not start with a '"' character.
+        let startpos = self.pos;
+        if let Ok(filename_vec) = self.take_c_string() {
+            if filename_vec == NULL_FILENAME {
+                return Ok(Filename::DevNull);
+            }
+
+            let pathbuf = match () {
+                #[cfg(unix)]
+                () => {
+                    // We have an owned buffer, which must be turned into
+                    // an allocated `PathBuf`, but no conversion of encoding
+                    // is necessary on unix systems.
+
+                    use std::ffi::OsString;
+                    use std::os::unix::ffi::OsStringExt;
+                    PathBuf::from(OsString::from_vec(filename_vec))
+                }
+
+                #[cfg(not(unix))]
+                () => {
+                    // In non-unix systems, we don't know how `Path` is
+                    // represented, so we can not just take the byte slice
+                    // and use it as `Path`. For example on Windows
+                    // paths are a form of UTF-16, while the content of
+                    // patch file has undefined encoding and we assume
+                    // UTF-8. So, conversion must happen.
+
+                    PathBuf::from(String::from_utf8_lossy(bytes).owned())
+                }
+            };
+
+            Ok(Filename::Real(Cow::Owned(pathbuf)))
+        } else {
+            // Then attempt to parse it as direct filename (without quotes, spaces or escapes)
+            let filename = self.rewind(startpos).take_filename_direct()?;
+            if filename == NULL_FILENAME {
+                return Ok(Filename::DevNull);
+            }
+
+            let path = match () {
+                #[cfg(unix)]
+                () => {
+                    // We have a byte slice, which can be wraped into
+                    // a `Path` and used without any heap allocation.
+
+                    use std::ffi::OsStr;
+                    use std::os::unix::ffi::OsStrExt;
+                    Cow::Borrowed(Path::new(OsStr::from_bytes(filename)))
+                }
+
+                #[cfg(not(unix))]
+                () => {
+                    // In non-unix systems, conversion must happen.
+                    // See above.
+
+                    Cow::Owned(PathBuf::from(String::from_utf8_lossy(bytes).owned()))
+                }
+            };
+
+            Ok(Filename::Real(path))
+        }
+    }
+
+    /// Similar to `fetchmode` function in patch.
+    pub fn take_mode(&mut self) -> Result<u32, ErrorBuilder<'a>> {
+        self.take_until_cond(|c| !is_space(c));
+
+        let errloc = self.remain();
+        let digits = self.take_until_cond(|c| !is_oct_digit(c));
+
+        if digits.is_empty() {
+            return Err(NoMatch);
+        }
+        // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
+        if digits.len() != 6 {
+            return Err(BadMode(errloc));
+        }
+
+        let mode_str = std::str::from_utf8(digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
+        match u32::from_str_radix(mode_str, 8) {
+            Ok(number) => Ok(number),
+            Err(_) => Err(BadMode(errloc)),
+        }
+    }
+
+    pub fn take_metadata_line(&mut self) -> Result<MetadataLine<'a>, ErrorBuilder<'a>> {
+	use MetadataLine::*;
+
+        let remain = self.remain();
+        match remain.first().ok_or(NoMatch)? {
+            b'd' => {
+                if self.strip_prefix(b"diff --git ").is_some() {
+                    let old_filename = self.take_filename()?;
+                    let new_filename = self.take_filename()?;
+                    self.take_line_incl()?;
+                    return Ok(GitDiffSeparator(old_filename, new_filename))
+                }
+            }
+            b'-' => {
+                if self.strip_prefix(b"--- ").is_some() {
+                    let filename = self.take_filename()?;
+                    self.take_line_incl()?;
+                    return Ok(MinusFilename(filename));
+            }
+            }
+            b'+' => {
+                if self.strip_prefix(b"+++ ").is_some() {
+                    let filename = self.take_filename()?;
+                    self.take_line_incl()?;
+                    return Ok(PlusFilename(filename));
+                }
+            }
+            _ => {}
+        }
+        Err(NoMatch)
+    }
+
+    /// Parses a git object hash.
+    ///
+    /// Git diff produces an abbreviated OID (max 40 lowercase hex digits).
+    /// Git apply acccepts uppercase, but rejects hashes longer than 40 digits.
+    /// GNU patch does not check hash length, but rejects uppercase hex.
+    ///
+    /// This function permits both uppercase and long hashes.
+    /// Rationale: If git switches to a different hash algorithm, there is
+    /// some chance that our code will not have to change.
+    pub fn take_git_hash(&mut self) -> Result<&'a [u8], ErrorBuilder<'a>> {
+        let errloc = self.remain();
+        match self.take_until_cond(|c| !c.is_ascii_hexdigit()) {
+            []   => Err(BadHash(errloc)),
+            name => Ok(name),
+        }
+    }
+
+    pub fn take_git_metadata_line(&mut self) -> Result<GitMetadataLine<'a>, ErrorBuilder<'a>> {
+	use GitMetadataLine::*;
+
+        let remain = self.remain();
+        match remain.first().ok_or(NoMatch)? {
+            b'i' => {
+                if self.strip_prefix(b"index ").is_some() {
+                    let old_hash = self.take_git_hash()?;
+                    self.strip_prefix(b"..")
+                        .ok_or(NoMatch)?;
+                    let new_hash = self.take_git_hash()?;
+                    let mode = self.take_mode().map(Some).unwrap_or(None);
+                    self.newline()?;
+                    return Ok(Index(old_hash, new_hash, mode));
+                }
+            }
+            b'r' => {
+                if self.strip_prefix(b"rename from ").is_some() {
+                    // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
+                    self.take_line_skip()?;
+                    return Ok(RenameFrom);
+                } else if self.strip_prefix(b"rename to ").is_some() {
+                    self.take_line_skip()?;
+                    return Ok(RenameTo);
+                }
+            }
+            b'c' => {
+                if self.strip_prefix(b"copy from ").is_some() {
+                    self.take_line_skip()?;
+                    return Ok(CopyFrom);
+                } else if self.strip_prefix(b"copy to ").is_some() {
+                    self.take_line_skip()?;
+                    return Ok(CopyTo);
+                }
+            }
+            b'G' => {
+                if self.strip_prefix(b"GIT binary patch").is_some() {
+                    self.take_line_skip()?;
+                    return Ok(GitBinaryPatch);
+                }
+            }
+            b'o' => {
+                if self.strip_prefix(b"old mode ").is_some() {
+                    let mode = self.take_mode()?;
+                    self.newline()?;
+                    return Ok(OldMode(mode));
+                }
+            }
+            b'n' => {
+                if self.strip_prefix(b"new mode ").is_some() {
+                    let mode = self.take_mode()?;
+                    self.newline()?;
+                    return Ok(NewMode(mode));
+                } else if self.strip_prefix(b"new file mode ").is_some() {
+                    let mode = self.take_mode()?;
+                    self.newline()?;
+                    return Ok(NewFileMode(mode));
+                }
+            }
+            b'd' => {
+                if self.strip_prefix(b"deleted file mode ").is_some() {
+                    let mode = self.take_mode()?;
+                    self.newline()?;
+                    return Ok(DeletedFileMode(mode));
+                }
+            }
+            _ => {}
+        }
+        Err(NoMatch)
+    }
+
+    pub fn take_patch_line(&mut self) -> Result<PatchLine<'a>, ErrorBuilder<'a>> {
+        let startpos = self.pos;
+        self.take_metadata_line().map(PatchLine::Metadata)
+            .or_else(|_| {
+                if !self.rewind(startpos).eof() {
+                    Ok(PatchLine::Garbage(self.take_line_or_eof()))
+                } else {
+                    Ok(PatchLine::EndOfPatch)
+                }
+            })
+    }
+
+    pub fn take_git_patch_line(&mut self) -> Result<PatchLine<'a>, ErrorBuilder<'a>> {
+        let startpos = self.pos;
+        self.take_metadata_line().map(PatchLine::Metadata)
+            .or_else(|_| {
+                self.rewind(startpos).take_git_metadata_line().map(PatchLine::GitMetadata)
+            })
+            .or_else(|_| {
+                if !self.rewind(startpos).eof() {
+                    Ok(PatchLine::Garbage(self.take_line_or_eof()))
+                } else {
+                    Ok(PatchLine::EndOfPatch)
+                }
+            })
+    }
+
+    // Parses line and count like "3,4" or just "3"
+    pub fn take_hunk_line_and_count(&mut self) -> Result<(usize, usize), ErrorBuilder<'a>> {
+        let line = self.take_number_usize()?;
+        let count = if self.peek_byte() == Some(&b',') {
+            self.advance(1).take_number_usize()?
+        } else {
+            // If there is no ",123" part, then the line count is 1.
+            1
+        };
+        Ok((line, count))
+    }
+
+    /// Parses a line like "@@ -3,4 +5,6 @@ function\n"
+    pub fn take_hunk_header(&mut self) -> Result<HunkHeader<'a>, ErrorBuilder<'a>> {
+        let errloc = self.remain();
+
+        self.strip_prefix(b"@@ -")
+            .ok_or(NoMatch)?;
+
+        let (remove_line, remove_count) = self.take_hunk_line_and_count()
+            .map_err(|_| BadHunkHeader(errloc))?;
+        self.strip_prefix(b" +")
+            .ok_or(BadHunkHeader(errloc))?;
+        let (add_line, add_count) = self.take_hunk_line_and_count()
+            .map_err(|_| BadHunkHeader(errloc))?;
+        self.strip_prefix(b" @")
+            .ok_or(BadHunkHeader(errloc))?;
+
+        // Parse function if it is separated by " @@ "
+        let function = if self.strip_prefix(b"@ ").is_some() {
+            self.take_line_skip()?
+        } else {
+            self.take_line_incl().map(|_| &b""[..])?
+        };
+
+        Ok(HunkHeader {
+            add_line, add_count,
+            remove_line, remove_count,
+            function
+        })
+    }
+
+    pub fn peek_hunk_header(&mut self) -> Result<HunkHeader<'a>, ErrorBuilder<'a>> {
+        let startpos = self.pos;
+        let result = self.take_hunk_header();
+        self.rewind(startpos);
+        result
+    }
+
+    pub fn take_hunk_line(&mut self) -> Result<(HunkLineType, &'a [u8]), ErrorBuilder<'a>> {
+        use HunkLineType::*;
+
+        let startpos = self.pos;
+        let (hunk_line_type, line) = match self.take_byte() {
+            Some(b'+') => (Add, self.take_line_incl()?),
+            Some(b'-') => (Remove, self.take_line_incl()?),
+            Some(b' ') => (Context, self.take_line_incl()?),
+            // XXX: patch allows context lines starting with TAB character. That TAB is then part of the line.
+            Some(b'\t') => (Context, self.rewind(startpos).take_line_incl()?),
+            // XXX: patch allows completely empty line as an empty context line.
+            Some(b'\n') => (Context, &self.input[startpos..self.pos]),
+            Some(_) =>
+                return Err(BadLineInHunk(&self.input[startpos..])),
+            None =>
+                return Err(UnexpectedEndOfFile),
+        };
+        // Is there a "No newline..." tag?
+        match self.peek_byte() {
+            // There is, remove the newline at the end
+            Some(&c) if c == NO_NEW_LINE_TAG[0] => {
+                self.take_line_incl()?;
+                Ok((hunk_line_type, &line[..line.len() - 1]))
+            }
+            // There isn't, return what we have.
+            _ => Ok((hunk_line_type, line)),
+        }
+    }
+
+    pub fn take_hunk(&mut self) -> Result<TextHunk<'a>, ErrorBuilder<'a>> {
+        let errloc = self.remain();
+        let mut header = self.take_hunk_header()
+            .map_err(|err| if err == NoMatch { err }
+                     else { BadHunkHeader(errloc) })?;
+
+        let mut hunk = Hunk::new(
+            header.remove_line.saturating_sub(1),
+            header.add_line.saturating_sub(1),
+            header.function
+        );
+
+        hunk.add.content.reserve(header.add_count);
+        hunk.remove.content.reserve(header.remove_count);
+
+        let mut there_was_a_non_context_line = false;
+
+        while header.add_count > 0 || header.remove_count > 0 {
+            let errloc = self.remain();
+            let (line_type, line) = self.take_hunk_line()?;
+
+            match line_type {
+                HunkLineType::Add => {
+                    if header.add_count == 0 {
+                        return Err(BadLineInHunk(errloc));
+                    }
+
+                    hunk.add.content.push(line);
+                    header.add_count -= 1;
+
+                    there_was_a_non_context_line = true;
+                    hunk.suffix_context = 0;
+                }
+                HunkLineType::Remove => {
+                    if header.remove_count == 0 {
+                        return Err(BadLineInHunk(errloc));
+                    }
+
+                    hunk.remove.content.push(line);
+                    header.remove_count -= 1;
+
+                    there_was_a_non_context_line = true;
+                    hunk.suffix_context = 0;
+                }
+                HunkLineType::Context => {
+                    if header.remove_count == 0 || header.add_count == 0 {
+                        return Err(BadLineInHunk(errloc));
+                    }
+
+                    hunk.add.content.push(line);
+                    hunk.remove.content.push(line);
+                    header.add_count -= 1;
+                    header.remove_count -= 1;
+
+                    if !there_was_a_non_context_line {
+                        hunk.prefix_context += 1;
+                    } else {
+                        hunk.suffix_context += 1;
+                    }
+                }
+            }
+        }
+
+        Ok(hunk)
+    }
+
+    pub fn take_hunks(&mut self) -> Result<HunksVec<'a, &'a [u8]>, ErrorBuilder<'a>> {
+        let mut hunks = HunksVec::<&[u8]>::new();
+        loop {
+            match self.take_hunk() {
+                Ok(hunk) => hunks.push(hunk),
+                Err(NoMatch) =>
+                // TODO: Do anything for the case of not even one hunk?
+                    return Ok(hunks),
+                Err(err) =>
+                    return Err(err),
+            }
+        }
+    }
+
+    pub fn take_filepatch(&mut self, want_header: bool)
+        -> Result<(&'a [u8], TextFilePatch<'a>), ErrorBuilder<'a>>
+    {
+        #[derive(Debug, PartialEq)]
+        enum MetadataState {
+            Normal,
+            GitDiff,
+        }
+
+	let startpos = self.pos;
+        let mut want_header = want_header;
+        let mut header = &self.remain()[..0];
+        let mut state = MetadataState::Normal;
+        let mut extended_headers = false;
+
+        let mut metadata = FilePatchMetadata::default();
+
+        // First we read metadata lines or garbage and wait until we find a first hunk.
+        while !metadata.have_filename() || self.peek_hunk_header() == Err(NoMatch) {
+            let linestart = self.pos;
+
+            let patch_line = match state {
+                MetadataState::Normal => self.take_patch_line()?,
+                MetadataState::GitDiff => self.take_git_patch_line()?,
+            };
+
+            use PatchLine::*;
+            use MetadataLine::*;
+            use GitMetadataLine::*;
+
+            if let GitMetadata(_) = patch_line {
+                extended_headers = true;
+            }
+
+            match patch_line {
+                Garbage(line) => {
+                    if want_header {
+                        header = &self.input[startpos..self.pos];
+                    } else {
+			let endpos = self.pos;
+                        if let Ok(HunkHeader { .. }) = self.rewind(linestart).take_hunk_header() {
+                            self.warnings.push(format!("Possibly ignored hunk: {}", String::from_utf8_lossy(line.strip_suffix(b"\n").unwrap_or(line))));
+                        }
+                        if memchr::memchr(b'\n', line).is_none() {
+                            self.warnings.push("Patch unexpectedly ends in the middle of a line.".to_string());
+                        }
+			self.rewind(endpos);
+                    }
+                }
+
+                EndOfPatch => {
+                    // We have reached end of file without any hunks. It
+                    // could be still valid patch that only renames a file or
+                    // changes permissions... So lets check for that.
+                    return if extended_headers {
+                        metadata.build_hunkless_filepatch().ok_or(
+                            MissingFilenameForHunk(&self.input[linestart..]))
+                            .map(|filepatch| (header, filepatch))
+                    } else {
+                        Err(NoMatch)
+                    };
+                }
+
+                Metadata(MetadataLine::GitDiffSeparator(old_filename, new_filename)) => {
+                    // No more header lines after the first non-garbage line
+                    want_header = false;
+
+                    // Check if it is a valid patch (see above).
+                    if extended_headers {
+                        if let Some(filepatch) = metadata.build_hunkless_filepatch() {
+                            // We don't want to consume the GitDiffSeparator
+                            self.rewind(linestart);
+                            return Ok((header, filepatch));
+                        }
+                    }
+
+                    // Otherwise it just means that everything that may have
+                    // looked like metadata until now was just garbage.
+                    header = &self.input[startpos..linestart];
+
+                    // Reset metadata.
+                    metadata = FilePatchMetadata::default();
+                    metadata.old_filename = Some(old_filename);
+                    metadata.new_filename = Some(new_filename);
+                    state = MetadataState::GitDiff;
+                }
+                Metadata(PlusFilename(filename)) => {
+                    metadata.new_filename = Some(filename);
+                }
+                Metadata(MinusFilename(filename)) => {
+                    metadata.old_filename = Some(filename);
+                }
+
+                GitMetadata(Index(old_hash, new_hash, _)) => {
+                    metadata.old_hash = Some(old_hash);
+                    metadata.new_hash = Some(new_hash);
+                }
+
+                GitMetadata(RenameFrom) => {
+                    metadata.rename_from = true;
+                }
+                GitMetadata(RenameTo) => {
+                    metadata.rename_to = true;
+                }
+
+                GitMetadata(OldMode(mode)) |
+                GitMetadata(DeletedFileMode(mode)) => {
+                    metadata.old_permissions = permissions_from_mode(mode);
+                }
+                GitMetadata(NewMode(mode)) |
+                GitMetadata(NewFileMode(mode)) => {
+                    metadata.new_permissions = permissions_from_mode(mode);
+                }
+
+                GitMetadata(GitBinaryPatch) => {
+                    return Err(UnsupportedMetadata(&self.input[linestart..]));
+                }
+
+                GitMetadata(_) => {
+                    // Other metadata lines are ignored for now.
+                    // TODO: Implement some of them...
+                }
+            }
+        }
+
+        // Read the hunks!
+        let errloc = self.remain();
+        let hunks = self.take_hunks()?;
+
+        // We can make our filepatch
+        let filepatch = metadata.build_filepatch(hunks).ok_or(
+            MissingFilenameForHunk(errloc)
+        )?;
+
+        Ok((header, filepatch))
+    }
 }
 
 #[cfg(test)]
 #[test]
 fn test_parse_c_string() {
+    fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_c_string().map(|result| (parser.remain(), result))
+    }
+
     macro_rules! assert_bad_sequence {
         ($input:expr, $sequence:expr) => {
             assert_eq!(parse_c_string($input)
@@ -416,90 +1071,14 @@ fn test_parse_c_string() {
                Err(ErrorBuilder::NoMatch))
 }
 
-#[derive(Debug, PartialEq)]
-enum Filename<'a> {
-    /// Actual filename, either as byte slice of the patch file or owned buffer.
-    Real(Cow<'a, Path>),
-
-    /// The special "/dev/null" filename.
-    DevNull,
-}
-
-// Parses a filename.
-//
-// Either written directly without any whitespace or inside quotation marks.
-//
-// Similar to `parse_name` function in patch.
-fn parse_filename(input: &[u8]) -> Result<(&[u8], Filename), ErrorBuilder> {
-    let (_, input) = split_at_cond(input, |c| !is_space(c));
-
-    // First attempt to parse it as quoted filename. This will reject it
-    // quickly if it does not start with a '"' character.
-    if let Ok((remain, filename_vec)) = parse_c_string(input) {
-        if filename_vec == NULL_FILENAME {
-            Ok((remain, Filename::DevNull))
-        } else {
-            let pathbuf = match () {
-                #[cfg(unix)]
-                () => {
-                    // We have an owned buffer, which must be turned into
-                    // an allocated `PathBuf`, but no conversion of encoding
-                    // is necessary on unix systems.
-
-                    use std::ffi::OsString;
-                    use std::os::unix::ffi::OsStringExt;
-                    PathBuf::from(OsString::from_vec(filename_vec))
-                }
-
-                #[cfg(not(unix))]
-                () => {
-                    // In non-unix systems, we don't know how `Path` is
-                    // represented, so we can not just take the byte slice
-                    // and use it as `Path`. For example on Windows
-                    // paths are a form of UTF-16, while the content of
-                    // patch file has undefined encoding and we assume
-                    // UTF-8. So, conversion must happen.
-
-                    PathBuf::from(String::from_utf8_lossy(bytes).owned())
-                }
-            };
-
-            Ok((remain, Filename::Real(Cow::Owned(pathbuf))))
-        }
-    } else {
-        // Then attempt to parse it as direct filename (without quotes, spaces or escapes)
-        let (remain, filename) = parse_filename_direct(input)?;
-        if filename == NULL_FILENAME {
-            Ok((remain, Filename::DevNull))
-        } else {
-            let path = match () {
-                #[cfg(unix)]
-                () => {
-                    // We have a byte slice, which can be wraped into
-                    // a `Path` and used without any heap allocation.
-
-                    use std::ffi::OsStr;
-                    use std::os::unix::ffi::OsStrExt;
-                    Cow::Borrowed(Path::new(OsStr::from_bytes(filename)))
-                }
-
-                #[cfg(not(unix))]
-                () => {
-                    // In non-unix systems, conversion must happen.
-                    // See above.
-
-                    Cow::Owned(PathBuf::from(String::from_utf8_lossy(bytes).owned()))
-                }
-            };
-
-            Ok((remain, Filename::Real(path)))
-        }
-    }
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_filename() {
+    fn parse_filename(input: &[u8]) -> Result<(&[u8], Filename), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_filename().map(|result| (parser.remain(), result))
+    }
+
     macro_rules! assert_path {
         ($input:expr, $result:expr) => {
             assert_path!($input, $result, b"");
@@ -534,28 +1113,14 @@ fn test_parse_filename() {
     assert_eq!(parse_filename(b"  \n"), Err(ErrorBuilder::NoMatch));
 }
 
-/// Similar to `fetchmode` function in patch.
-fn parse_mode(input: &[u8]) -> Result<(&[u8], u32), ErrorBuilder> {
-    let (_, input) = split_at_cond(input, |c| !is_space(c));
-    let (digits, input_) = split_at_cond(input, |c| !is_oct_digit(c));
-
-    if digits.is_empty() {
-        return Err(ErrorBuilder::NoMatch);
-    }
-    if digits.len() != 6 { // This is what patch requires, but otherwise it fallbacks to 0, so maybe we should too?
-        return Err(ErrorBuilder::BadMode(input));
-    }
-
-    let mode_str = std::str::from_utf8(digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-7, so it is guaranteed to be valid UTF8.
-    match u32::from_str_radix(mode_str, 8) {
-        Ok(number) => Ok((input_, number)),
-        Err(_) => Err(ErrorBuilder::BadMode(input)),
-    }
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_mode() {
+    fn parse_mode(input: &[u8]) -> Result<(&[u8], u32), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_mode().map(|result| (parser.remain(), result))
+    }
+
     macro_rules! assert_bad_mode(
         ($mode:expr) => {
             let mode = $mode;
@@ -587,49 +1152,15 @@ fn test_parse_mode() {
                 ParseError::BadMode("100abc".to_string()));
 }
 
-#[derive(Debug, PartialEq)]
-enum MetadataLine<'a> {
-    GitDiffSeparator(Filename<'a>, Filename<'a>),
-
-    MinusFilename(Filename<'a>),
-    PlusFilename(Filename<'a>),
-
-    // ...?
-}
-
-fn parse_metadata_line(input: &[u8]) -> Result<(&[u8], MetadataLine), ErrorBuilder> {
-    match input.first().ok_or(ErrorBuilder::NoMatch)? {
-        b'd' => {
-            if let Some(input) = input.strip_prefix(b"diff --git ") {
-                let (input, old_filename) = parse_filename(input)?;
-                let (input, new_filename) = parse_filename(input)?;
-                let (input, _) = take_line_incl(input)?;
-                return Ok((input, MetadataLine::GitDiffSeparator(old_filename, new_filename)))
-            }
-        }
-        b'-' => {
-            if let Some(input) = input.strip_prefix(b"--- ") {
-                let (input, filename) = parse_filename(input)?;
-                let (input, _) = take_line_incl(input)?;
-                return Ok((input, MetadataLine::MinusFilename(filename)));
-            }
-        }
-        b'+' => {
-            if let Some(input) = input.strip_prefix(b"+++ ") {
-                let (input, filename) = parse_filename(input)?;
-                let (input, _) = take_line_incl(input)?;
-                return Ok((input, MetadataLine::PlusFilename(filename)));
-            }
-        }
-        _ => {}
-    }
-    Err(ErrorBuilder::NoMatch)
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_metadata_line() {
     use self::MetadataLine::*;
+
+    fn parse_metadata_line(input: &[u8]) -> Result<(&[u8], MetadataLine), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_metadata_line().map(|result| (parser.remain(), result))
+    }
 
     // All of them in basic form
     assert_parsed!(parse_metadata_line, b"diff --git aaa bbb\n", GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb")))));
@@ -642,27 +1173,14 @@ fn test_parse_metadata_line() {
 
 }
 
-/// Parses a git object hash.
-///
-/// Git diff produces an abbreviated OID (max 40 lowercase hex digits).
-/// Git apply acccepts uppercase, but rejects hashes longer than 40 digits.
-/// GNU patch does not check hash length, but rejects uppercase hex.
-///
-/// This function permits both uppercase and long hashes.
-/// Rationale: If git switches to a different hash algorithm, there is
-/// some chance that our code will not have to change.
-fn parse_git_hash(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
-    match split_at_cond(input, |c| !c.is_ascii_hexdigit()) {
-        ([], _)
-            => Err(ErrorBuilder::BadHash(input)),
-        (name, rest)
-            => Ok((rest, name)),
-    }
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_git_hash() {
+    fn parse_git_hash(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_git_hash().map(|result| (parser.remain(), result))
+    }
+
     // A shortened SHA1
     let hash = b"3505ee3";
     assert_parsed!(parse_git_hash, hash, s!(hash));
@@ -689,97 +1207,15 @@ fn test_parse_git_hash() {
                         ParseError::BadHash("non".to_string()));
 }
 
-#[derive(Debug, PartialEq)]
-enum GitMetadataLine<'a> {
-    Index(&'a [u8], &'a[u8], Option<u32>),
-
-    OldMode(u32),
-    NewMode(u32),
-    DeletedFileMode(u32),
-    NewFileMode(u32),
-
-    RenameFrom,
-    RenameTo,
-
-    CopyFrom,
-    CopyTo,
-
-    GitBinaryPatch,
-}
-
-fn parse_git_metadata_line(input: &[u8]) -> Result<(&[u8], GitMetadataLine), ErrorBuilder> {
-    match input.first().ok_or(ErrorBuilder::NoMatch)? {
-        b'i' => {
-            if let Some(input) = input.strip_prefix(b"index ") {
-                let (input, old_hash) = parse_git_hash(input)?;
-                let input = input.strip_prefix(b"..")
-                    .ok_or(ErrorBuilder::NoMatch)?;
-                let (input, new_hash) = parse_git_hash(input)?;
-                let (input, mode) = map_parsed(parse_mode(input), Some)
-                    .unwrap_or((input, None));
-                let (input, _) = newline(input)?;
-                return Ok((input, GitMetadataLine::Index(old_hash, new_hash, mode)));
-            }
-        }
-        b'r' => {
-            if let Some(input) = input.strip_prefix(b"rename from ") {
-                // The filename behind "rename to" and "rename from" is ignored by patch, so we ignore it too.
-                let (input, _) = take_line_skip(input)?;
-                return Ok((input, GitMetadataLine::RenameFrom));
-            } else if let Some(input) = input.strip_prefix(b"rename to ") {
-                let (input, _) = take_line_skip(input)?;
-                return Ok((input, GitMetadataLine::RenameTo));
-            }
-        }
-        b'c' => {
-            if let Some(input) = input.strip_prefix(b"copy from ") {
-                let (input, _) = take_line_skip(input)?;
-                return Ok((input, GitMetadataLine::CopyFrom));
-            } else if let Some(input) = input.strip_prefix(b"copy to ") {
-                let (input, _) = take_line_skip(input)?;
-                return Ok((input, GitMetadataLine::CopyTo));
-            }
-        }
-        b'G' => {
-            if let Some(input) = input.strip_prefix(b"GIT binary patch") {
-                let (input, _) = take_line_skip(input)?;
-                return Ok((input, GitMetadataLine::GitBinaryPatch));
-            }
-        }
-        b'o' => {
-            if let Some(input) = input.strip_prefix(b"old mode ") {
-                let (input, mode) = parse_mode(input)?;
-                let (input, _) = newline(input)?;
-                return Ok((input, GitMetadataLine::OldMode(mode)));
-            }
-        }
-        b'n' => {
-            if let Some(input) = input.strip_prefix(b"new mode ") {
-                let (input, mode) = parse_mode(input)?;
-                let (input, _) = newline(input)?;
-                return Ok((input, GitMetadataLine::NewMode(mode)));
-            } else if let Some(input) = input.strip_prefix(b"new file mode ") {
-                let (input, mode) = parse_mode(input)?;
-                let (input, _) = newline(input)?;
-                return Ok((input, GitMetadataLine::NewFileMode(mode)));
-            }
-        }
-        b'd' => {
-            if let Some(input) = input.strip_prefix(b"deleted file mode ") {
-                let (input, mode) = parse_mode(input)?;
-                let (input, _) = newline(input)?;
-                return Ok((input, GitMetadataLine::DeletedFileMode(mode)));
-            }
-        }
-        _ => {}
-    }
-    Err(ErrorBuilder::NoMatch)
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_git_metadata_line() {
     use self::GitMetadataLine::*;
+
+    fn parse_git_metadata_line(input: &[u8]) -> Result<(&[u8], GitMetadataLine), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_git_metadata_line().map(|result| (parser.remain(), result))
+    }
 
     // All of them in basic form
     assert_parsed!(parse_git_metadata_line, b"index 123456789ab..fecdba98765\n", Index(b"123456789ab", b"fecdba98765", None));
@@ -803,28 +1239,16 @@ fn test_parse_git_metadata_line() {
                Err(ErrorBuilder::NoMatch));
 }
 
-#[derive(Debug, PartialEq)]
-enum PatchLine<'a> {
-    Garbage(&'a [u8]),
-    Metadata(MetadataLine<'a>),
-    GitMetadata(GitMetadataLine<'a>),
-    EndOfPatch,
-}
-
-fn parse_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
-    map_parsed(parse_metadata_line(input), PatchLine::Metadata)
-	.or_else(|_| if !input.is_empty() {
-	    map_parsed(Ok(take_line_or_eof(input)), PatchLine::Garbage)
-	} else {
-	    Ok((input, PatchLine::EndOfPatch))
-	})
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_patch_line() {
     use self::PatchLine::*;
     use self::MetadataLine::*;
+
+    fn parse_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_patch_line().map(|result| (parser.remain(), result))
+    }
 
     assert_parsed!(parse_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
     assert_parsed!(parse_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
@@ -850,22 +1274,17 @@ fn test_parse_patch_line() {
     assert_garbage!(parse_patch_line, b"No newline at EOF");
 }
 
-fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
-    map_parsed(parse_metadata_line(input), PatchLine::Metadata)
-        .or_else(|_| map_parsed(parse_git_metadata_line(input), PatchLine::GitMetadata))
-        .or_else(|_| if !input.is_empty() {
-	    map_parsed(Ok(take_line_or_eof(input)), PatchLine::Garbage)
-	} else {
-	    Ok((input, PatchLine::EndOfPatch))
-	})
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_git_patch_line() {
     use self::PatchLine::*;
     use self::MetadataLine::*;
     use self::GitMetadataLine::*;
+
+    fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_git_patch_line().map(|result| (parser.remain(), result))
+    }
 
     assert_parsed!(parse_git_patch_line, b"diff --git aaa bbb\n", Metadata(GitDiffSeparator(Filename::Real(Cow::Owned(PathBuf::from("aaa"))), Filename::Real(Cow::Owned(PathBuf::from("bbb"))))));
     assert_parsed!(parse_git_patch_line, b"--- aaa\n", Metadata(MinusFilename(Filename::Real(Cow::Owned(PathBuf::from("aaa"))))));
@@ -890,21 +1309,14 @@ fn test_parse_git_patch_line() {
     assert_garbage!(parse_git_patch_line, b"No newline at EOF");
 }
 
-fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder> {
-    let (digits, input_) = split_at_cond(input, |c| !c.is_ascii_digit());
-    if digits.is_empty() {
-        return Err(ErrorBuilder::BadNumber(input));
-    }
-    let str = std::str::from_utf8(digits).unwrap(); // NOTE(unwrap): We know it is just digits 0-9, so it is guaranteed to be valid UTF8.
-    match usize::from_str(str) {
-        Ok(number) => Ok((input_, number)),
-        Err(_) => Err(ErrorBuilder::NumberTooBig(digits)),
-    }
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_number_usize() {
+    fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_number_usize().map(|result| (parser.remain(), result))
+    }
+
     assert_parsed!(parse_number_usize, b"0", 0);
     assert_parsed!(parse_number_usize, b"1", 1);
     assert_parsed!(parse_number_usize, b"123", 123);
@@ -922,70 +1334,27 @@ fn test_parse_number_usize() {
                         ParseError::NumberTooBig(num.to_string()));
 }
 
-// Parses line and count like "3,4" or just "3"
-fn parse_hunk_line_and_count(input: &[u8]) -> Result<(&[u8], (usize, usize)), ErrorBuilder> {
-    let (input, line) = parse_number_usize(input)?;
-    if input.first() == Some(&b',') {
-        let (input, count) = parse_number_usize(&input[1..])?;
-        Ok((input, (line, count)))
-    } else {
-        // If there is no ",123" part, then the line count is 1.
-        Ok((input, (line, 1)))
-    }
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_hunk_line_and_count() {
+    fn parse_hunk_line_and_count(input: &[u8]) -> Result<(&[u8], (usize, usize)), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_hunk_line_and_count().map(|result| (parser.remain(), result))
+    }
+
     assert_parsed!(parse_hunk_line_and_count, b"2", (2, 1));
     assert_parsed!(parse_hunk_line_and_count, b"2,3", (2, 3));
     assert_parsed!(parse_hunk_line_and_count, b"123,456", (123, 456));
 }
 
-#[derive(Debug, PartialEq)]
-struct HunkHeader<'a> {
-    pub add_line: usize,
-    pub add_count: usize,
-    pub remove_line: usize,
-    pub remove_count: usize,
-
-    pub function: &'a [u8],
-}
-
-/// Parses a line like "@@ -3,4 +5,6 @@ function\n"
-fn parse_hunk_header(input: &[u8]) -> Result<(&[u8], HunkHeader), ErrorBuilder> {
-    let input = input.strip_prefix(b"@@ -")
-        .ok_or(ErrorBuilder::NoMatch)?;
-
-    let (input, (remove_line, remove_count)) = parse_hunk_line_and_count(input)
-        .map_err(|_| ErrorBuilder::BadHunkHeader(input))?;
-    let input = input.strip_prefix(b" +")
-        .ok_or(ErrorBuilder::BadHunkHeader(input))?;
-    let (input, (add_line, add_count)) = parse_hunk_line_and_count(input)
-        .map_err(|_| ErrorBuilder::BadHunkHeader(input))?;
-    let input = input.strip_prefix(b" @")
-        .ok_or(ErrorBuilder::BadHunkHeader(input))?;
-
-    // Parse function if it is separated by " @@ "
-    let (input, function) = match input.strip_prefix(b"@ ") {
-        Some(input) =>
-            take_line_skip(input)?,
-        None =>
-            map_parsed(take_line_incl(input), |_| &b""[..])?,
-    };
-
-    Ok((input,
-        HunkHeader {
-            add_line, add_count,
-            remove_line, remove_count,
-            function
-        }
-    ))
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_hunk_header() {
+    fn parse_hunk_header(input: &[u8]) -> Result<(&[u8], HunkHeader), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_hunk_header().map(|result| (parser.remain(), result))
+    }
+
     let h1 = HunkHeader {
         add_line: 3,
         add_count: 4,
@@ -1041,48 +1410,17 @@ fn test_parse_hunk_header() {
     assert_eq!(parse_hunk_header(b"some garbage"), Err(ErrorBuilder::NoMatch));
 
     assert_parse_error!(parse_hunk_header, b"@@ - invalid\n",
-                        ParseError::BadHunkHeader(" invalid".to_string()));
-}
-
-#[derive(Debug, PartialEq)]
-enum HunkLineType {
-    Add,
-    Remove,
-    Context,
-}
-
-fn parse_hunk_line(input: &[u8]) -> Result<(&[u8], (HunkLineType, &[u8])), ErrorBuilder> {
-    let (hunk_line_type, (input, line)) = match input.first() {
-        Some(b'+') =>
-            (HunkLineType::Add, take_line_incl(&input[1..])?),
-        Some(b'-') =>
-            (HunkLineType::Remove, take_line_incl(&input[1..])?),
-        Some(b' ') =>
-            (HunkLineType::Context, take_line_incl(&input[1..])?),
-        // XXX: patch allows context lines starting with TAB character. That TAB is then part of the line.
-        Some(b'\t') =>
-            (HunkLineType::Context, take_line_incl(input)?),
-        // XXX: patch allows completely empty line as an empty context line.
-        Some(b'\n') =>
-            (HunkLineType::Context, (&input[1..], &input[..1])),
-        Some(_) =>
-            return Err(ErrorBuilder::BadLineInHunk(input)),
-        None =>
-            return Err(ErrorBuilder::UnexpectedEndOfFile),
-    };
-    // Was there "No newline..." tag?
-    match input.first() {
-        // There was, remove the newline at the end
-        Some(&c) if c == NO_NEW_LINE_TAG[0] =>
-            Ok((take_line_incl(input)?.0, (hunk_line_type, &line[..line.len() - 1]))),
-        // There wasn't, return what we have.
-        _ => Ok((input, (hunk_line_type, line))),
-    }
+                        ParseError::BadHunkHeader("@@ - invalid".to_string()));
 }
 
 #[cfg(test)]
 #[test]
 fn test_parse_hunk_line() {
+    fn parse_hunk_line(input: &[u8]) -> Result<(&[u8], (HunkLineType, &[u8])), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_hunk_line().map(|result| (parser.remain(), result))
+    }
+
     // Adding
     assert_parsed!(parse_hunk_line, b"+\n",                 (HunkLineType::Add, s!(b"\n")));
     assert_parsed!(parse_hunk_line, b"+aaa\n",              (HunkLineType::Add, s!(b"aaa\n")));
@@ -1121,76 +1459,14 @@ fn test_parse_hunk_line() {
                         ParseError::BadLineInHunk("wtf".to_string()));
 }
 
-fn parse_hunk(input: &[u8]) -> Result<(&[u8], TextHunk), ErrorBuilder> {
-    let (mut input, mut header) = parse_hunk_header(input)
-        .map_err(|err| if err == ErrorBuilder::NoMatch { err } else {
-            ErrorBuilder::BadHunkHeader(input)
-        })?;
-
-    let mut hunk = Hunk::new(
-        header.remove_line.saturating_sub(1),
-        header.add_line.saturating_sub(1),
-        header.function
-    );
-
-    hunk.add.content.reserve(header.add_count);
-    hunk.remove.content.reserve(header.remove_count);
-
-    let mut there_was_a_non_context_line = false;
-
-    while header.add_count > 0 || header.remove_count > 0 {
-        let (input_, (line_type, line)) = parse_hunk_line(input)?;
-
-        match line_type {
-            HunkLineType::Add => {
-                if header.add_count == 0 {
-                    return Err(ErrorBuilder::BadLineInHunk(input));
-                }
-
-                hunk.add.content.push(line);
-                header.add_count -= 1;
-
-                there_was_a_non_context_line = true;
-                hunk.suffix_context = 0;
-            }
-            HunkLineType::Remove => {
-                if header.remove_count == 0 {
-                    return Err(ErrorBuilder::BadLineInHunk(input));
-                }
-
-                hunk.remove.content.push(line);
-                header.remove_count -= 1;
-
-                there_was_a_non_context_line = true;
-                hunk.suffix_context = 0;
-            }
-            HunkLineType::Context => {
-                if header.remove_count == 0 || header.add_count == 0 {
-                    return Err(ErrorBuilder::BadLineInHunk(input));
-                }
-
-                hunk.add.content.push(line);
-                hunk.remove.content.push(line);
-                header.add_count -= 1;
-                header.remove_count -= 1;
-
-                if !there_was_a_non_context_line {
-                    hunk.prefix_context += 1;
-                } else {
-                    hunk.suffix_context += 1;
-                }
-            }
-        }
-
-        input = input_;
-    }
-
-    Ok((input, hunk))
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_hunk() {
+    fn parse_hunk(input: &[u8]) -> Result<(&[u8], TextHunk), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_hunk().map(|result| (parser.remain(), result))
+    }
+
     // Ok hunk
     let hunk_txt = br#"@@ -100,6 +110,7 @@ place
  aaa
@@ -1252,26 +1528,14 @@ xxxxx
                         ParseError::BadHunkHeader("@@ - invalid".to_string()));
 }
 
-fn parse_hunks(mut input: &[u8]) -> Result<(&[u8], HunksVec<&[u8]>), ErrorBuilder> {
-    let mut hunks = HunksVec::<&[u8]>::new();
-    loop {
-        match parse_hunk(input) {
-            Ok((input_, hunk)) => {
-                hunks.push(hunk);
-                input = input_;
-            }
-            Err(ErrorBuilder::NoMatch) =>
-                // TODO: Do anything for the case of not even one hunk?
-                return Ok((input, hunks)),
-            Err(err) =>
-                return Err(err),
-        }
-    }
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_hunks() {
+    fn parse_hunks(input: &[u8]) -> Result<(&[u8], HunksVec<&[u8]>), ErrorBuilder> {
+        let mut parser = InputParser::new(input);
+        parser.take_hunks().map(|result| (parser.remain(), result))
+    }
+
     let hunks_txt = br#"@@ -100,3 +110,3 @@ place1
  aaa
 -bbb
@@ -1399,164 +1663,16 @@ impl<'a> FilePatchMetadata<'a> {
     }
 }
 
-#[cfg(unix)]
-fn permissions_from_mode(mode: u32) -> Option<Permissions> {
-    use std::os::unix::fs::PermissionsExt;
-    Some(Permissions::from_mode(mode))
-}
-
-#[cfg(not(unix))]
-fn permissions_from_mode(mode: u32) -> Option<Permissions> {
-    static WARN_ONCE: std::sync::Once = std::sync::Once::new();
-
-    WARN_ONCE.call_once(|| {
-        eprintln!("Permissions are ignored on non-unix systems!");
-    });
-
-    None
-}
-
-#[derive(Debug, PartialEq)]
-enum MetadataState {
-    Normal,
-    GitDiff,
-}
-
-fn offsetof<T>(container: &[T], slice: &[T]) -> usize
-{
-    (slice.as_ptr() as usize) - (container.as_ptr() as usize)
-}
-
-fn parse_filepatch<'a>(bytes: &'a [u8], mut want_header: bool, warnings: &mut Vec<String>)
-    -> Result<(&'a [u8], (&'a [u8], TextFilePatch<'a>)), ErrorBuilder<'a>>
-{
-    let mut input = bytes;
-    let mut header = &bytes[..0];
-    let mut state = MetadataState::Normal;
-    let mut extended_headers = false;
-
-    let mut metadata = FilePatchMetadata::default();
-
-    // First we read metadata lines or garbage and wait until we find a first hunk.
-    while !metadata.have_filename() || parse_hunk_header(input) == Err(ErrorBuilder::NoMatch) {
-        let (input_, patch_line) = match state {
-            MetadataState::Normal => parse_patch_line(input)?,
-            MetadataState::GitDiff => parse_git_patch_line(input)?,
-        };
-
-        use self::PatchLine::*;
-        use self::MetadataLine::*;
-        use self::GitMetadataLine::*;
-
-        if let GitMetadata(_) = patch_line {
-            extended_headers = true;
-        }
-
-        match patch_line {
-            Garbage(line) => {
-                if want_header {
-                    header = &bytes[..offsetof(bytes, input_)];
-		} else {
-		    if let Ok((_, HunkHeader { .. })) = parse_hunk_header(line) {
-			warnings.push(format!("Possibly ignored hunk: {}", String::from_utf8_lossy(line.strip_suffix(b"\n").unwrap_or(line))));
-		    }
-                    if memchr::memchr(b'\n', line).is_none() {
-			warnings.push("Patch unexpectedly ends in the middle of a line.".to_string());
-		    }
-		}
-            }
-
-            EndOfPatch => {
-                // We have reached end of file without any hunks. It
-                // could be still valid patch that only renames a file or
-                // changes permissions... So lets check for that.
-                return if extended_headers {
-                    metadata.build_hunkless_filepatch().ok_or(
-                        ErrorBuilder::MissingFilenameForHunk(input))
-                        .map(|filepatch| (input, (header, filepatch)))
-                } else {
-                    Err(ErrorBuilder::NoMatch)
-                };
-            }
-
-            Metadata(MetadataLine::GitDiffSeparator(old_filename, new_filename)) => {
-                // No more header lines after the first non-garbage line
-                want_header = false;
-
-                // Check if it is a valid patch (see above).
-                if extended_headers {
-                    if let Some(filepatch) = metadata.build_hunkless_filepatch() {
-                        // Note that in this case we don't set `input = input_`, because we don't want to consume the GitDiffSeparator
-                        return Ok((input, (header, filepatch)));
-                    }
-                }
-
-                // Otherwise it just means that everything that may have
-                // looked like metadata until now was just garbage.
-                header = &bytes[..offsetof(bytes, input)];
-
-                // Reset metadata.
-                metadata = FilePatchMetadata::default();
-                metadata.old_filename = Some(old_filename);
-                metadata.new_filename = Some(new_filename);
-                state = MetadataState::GitDiff;
-            }
-            Metadata(PlusFilename(filename)) => {
-                metadata.new_filename = Some(filename);
-            }
-            Metadata(MinusFilename(filename)) => {
-                metadata.old_filename = Some(filename);
-            }
-
-            GitMetadata(Index(old_hash, new_hash, _)) => {
-                metadata.old_hash = Some(old_hash);
-                metadata.new_hash = Some(new_hash);
-            }
-
-            GitMetadata(RenameFrom) => {
-                metadata.rename_from = true;
-            }
-            GitMetadata(RenameTo) => {
-                metadata.rename_to = true;
-            }
-
-            GitMetadata(OldMode(mode)) |
-            GitMetadata(DeletedFileMode(mode)) => {
-                metadata.old_permissions = permissions_from_mode(mode);
-            }
-            GitMetadata(NewMode(mode)) |
-            GitMetadata(NewFileMode(mode)) => {
-                metadata.new_permissions = permissions_from_mode(mode);
-            }
-
-            GitMetadata(GitBinaryPatch) => {
-                return Err(ErrorBuilder::UnsupportedMetadata(input));
-            }
-
-            GitMetadata(_) => {
-                // Other metadata lines are ignored for now.
-                // TODO: Implement some of them...
-            }
-        }
-
-        input = input_; // Move to the next line.
-    }
-
-    // Read the hunks!
-    let (input_, hunks) = parse_hunks(input)?;
-
-    // We can make our filepatch
-    let filepatch = metadata.build_filepatch(hunks).ok_or(
-        ErrorBuilder::MissingFilenameForHunk(input)
-    )?;
-
-    input = input_;
-    Ok((input, (header, filepatch)))
-}
-
 #[cfg(test)]
 #[test]
 fn test_parse_filepatch() {
+    fn parse_filepatch<'a>(bytes: &'a [u8], want_header: bool)
+        -> Result<(&'a [u8], TextFilePatch<'a>, Vec<String>), ErrorBuilder<'a>>
+    {
+        let mut parser = InputParser::new(bytes);
+        parser.take_filepatch(want_header).map(|result| (result.0, result.1, parser.warnings))
+    }
+
     // Regular filepatch
     let filepatch_txt = br#"garbage1
 garbage2
@@ -1572,8 +1688,7 @@ Some other line...
 Other content.
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1604,8 +1719,7 @@ Some other line...
 Other content.
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1633,8 +1747,7 @@ garbage3
 +ccc
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1663,8 +1776,7 @@ garbage3
 +ccc
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1693,8 +1805,7 @@ garbage3
 -ccc
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1723,8 +1834,7 @@ garbage3
 -ccc
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1762,8 +1872,7 @@ Some other line...
 Other content.
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1790,8 +1899,7 @@ rename to filename2
 +++ filename2
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1821,8 +1929,7 @@ rename to filename2
  ddd
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1851,8 +1958,7 @@ garbage3
  ppp
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1883,8 +1989,7 @@ diff --git filename1 filename1
  ppp
 "#;
 
-    let mut warnings = vec![];
-    let (header, file_patch) = parse_filepatch(filepatch_txt, true, &mut warnings).unwrap().1;
+    let (header, file_patch, warnings) = parse_filepatch(filepatch_txt, true).unwrap();
     assert!(warnings.is_empty());
 
     assert_lines_eq!(header, [
@@ -1910,9 +2015,7 @@ GIT binary patch
 ???
 "#;
 
-    let mut warnings = vec![];
-    let ret = parse_filepatch(filepatch_txt, false, &mut warnings);
-    assert!(warnings.is_empty());
+    let ret = parse_filepatch(filepatch_txt, false);
     match ret {
         Err(error) => {
             assert_eq!(ParseError::from(error),
@@ -1939,9 +2042,7 @@ garbage3
  ppp
 "#;
 
-    let mut warnings = vec![];
-    let ret = parse_filepatch(filepatch_txt, false, &mut warnings);
-    assert!(warnings.is_empty());
+    let ret = parse_filepatch(filepatch_txt, false);
     match ret {
         Err(error) => {
             assert_eq!(ParseError::from(error),
@@ -1962,6 +2063,13 @@ garbage3
 fn test_parse_filepatch_unix() {
     use std::os::unix::fs::PermissionsExt;
 
+    fn parse_filepatch<'a>(bytes: &'a [u8], want_header: bool)
+        -> Result<(&'a [u8], TextFilePatch<'a>, Vec<String>), ErrorBuilder<'a>>
+    {
+        let mut parser = InputParser::new(bytes);
+        parser.take_filepatch(want_header).map(|result| (result.0, result.1, parser.warnings))
+    }
+
     // Mode changing filepatch
     let filepatch_txt = br#"garbage1
 garbage2
@@ -1976,8 +2084,7 @@ new mode 100755
  ddd
 "#;
 
-    let mut warnings = vec![];
-    let (_header, file_patch) = parse_filepatch(filepatch_txt, false, &mut warnings).unwrap().1;
+    let (_header, file_patch, warnings) = parse_filepatch(filepatch_txt, false).unwrap();
     assert!(warnings.is_empty());
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -2004,8 +2111,7 @@ diff --git filename2 filename2
  ddd
 "#;
 
-    let mut warnings = vec![];
-    let (_header, file_patch) = parse_filepatch(filepatch_txt, false, &mut warnings).unwrap().1;
+    let (_header, file_patch, warnings) = parse_filepatch(filepatch_txt, false).unwrap();
     assert!(warnings.is_empty());
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -2024,8 +2130,7 @@ old mode 100644
 new mode 100755
 "#;
 
-    let mut warnings = vec![];
-    let (_header, file_patch) = parse_filepatch(filepatch_txt, false, &mut warnings).unwrap().1;
+    let (_header, file_patch, warnings) = parse_filepatch(filepatch_txt, false).unwrap();
     assert!(warnings.is_empty());
     assert_eq!(file_patch.kind(), FilePatchKind::Modify);
     assert_eq!(file_patch.old_filename(), Some(&Cow::Owned(PathBuf::from("filename1"))));
@@ -2036,8 +2141,7 @@ new mode 100755
 }
 
 pub fn parse_patch(bytes: &[u8], strip: usize) -> Result<TextPatch, ParseError> {
-    let mut input = bytes;
-    let mut warnings = vec![];
+    let mut parser = InputParser::new(bytes);
 
     let mut wants_header = true;
     let mut header = &bytes[..0];
@@ -2045,12 +2149,12 @@ pub fn parse_patch(bytes: &[u8], strip: usize) -> Result<TextPatch, ParseError> 
 
     loop {
         // Parse one filepatch at time. If it is the first one, ask it to give us its header as well.
-        let (_input, (filepatch_header, mut filepatch)) = match parse_filepatch(input, wants_header, &mut warnings) {
+        let (filepatch_header, mut filepatch) = match parser.take_filepatch(wants_header) {
             // We got one
             Ok(header_and_filepatch) => header_and_filepatch,
 
             // No more filepatches...
-            Err(ErrorBuilder::NoMatch) => break,
+            Err(NoMatch) => break,
 
             // Actual error
             Err(err) => {
@@ -2064,8 +2168,6 @@ pub fn parse_patch(bytes: &[u8], strip: usize) -> Result<TextPatch, ParseError> 
             wants_header = false;
         }
 
-        input = _input;
-
         filepatch.strip(strip);
         file_patches.push(filepatch);
     }
@@ -2073,7 +2175,7 @@ pub fn parse_patch(bytes: &[u8], strip: usize) -> Result<TextPatch, ParseError> 
     Ok(TextPatch {
         header,
         file_patches,
-	warnings,
+        warnings: parser.warnings,
     })
 }
 
