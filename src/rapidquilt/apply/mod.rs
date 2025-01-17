@@ -4,6 +4,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use thiserror::Error;
+use colored::*;
 
 pub mod sequential;
 pub mod parallel;
@@ -88,4 +89,12 @@ pub enum ApplyError {
 
     #[error("Failed to save quilt backup file: {filename:?}")]
     SaveQuiltBackupFile { filename: PathBuf },
+}
+
+fn prefix_warning() -> ColoredString {
+    "warning:".bright_yellow().bold()
+}
+
+fn prefix_hint() -> ColoredString {
+    "hint:".purple()
 }

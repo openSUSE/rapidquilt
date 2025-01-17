@@ -31,7 +31,7 @@ use libpatch::patch::unified::writer::UnifiedPatchHunkHeaderWriter;
 use libpatch::patch::FilePatchApplyReport;
 
 use crate::apply::common::*;
-use crate::apply::Verbosity;
+use crate::apply::{Verbosity, prefix_hint, prefix_warning};
 
 
 /// Try if the patch would apply with some fuzz. It doesn't do any permanent changes.
@@ -196,15 +196,15 @@ pub fn analyze_patch_failure<'arena, H: BuildHasher, W: Write>(
                 // Fuzz hint
                 writeln!(writer)?;
                 if let Some(working_fuzz) = test_apply_with_fuzzes(patch_status, modified_files) {
-                    write!(writer, "    {} Patch would apply on this file with fuzz {}", "hint:".purple(), working_fuzz)?;
+                    write!(writer, "    {} Patch would apply on this file with fuzz {}", prefix_hint(), working_fuzz)?;
                 } else {
-                    write!(writer, "    {} Patch would not apply on this file with any fuzz", "hint:".purple())?;
+                    write!(writer, "    {} Patch would not apply on this file with any fuzz", prefix_hint())?;
                 }
                 writeln!(writer)?;
 
                 // Other patches hint
                 writeln!(writer)?;
-                write!(writer, "    {} ", "hint:".purple())?;
+                write!(writer, "    {} ", prefix_hint())?;
 
                 if other_patches.is_empty() {
                     writeln!(writer, "No previous patches touched this file.")?;
@@ -534,7 +534,7 @@ pub fn print_difference_to_closest_match<W: Write>(
 
     if let Some(best_path) = best_path {
         writeln!(writer)?;
-        writeln!(writer, "{}{} Comparison of the content of the {} and the content expected by the {}:", prefix, "hint:".purple(), "<file<".bright_cyan(), ">hunk>".bright_magenta())?;
+        writeln!(writer, "{}{} Comparison of the content of the {} and the content expected by the {}:", prefix, prefix_hint(), "<file<".bright_cyan(), ">hunk>".bright_magenta())?;
         writeln!(writer)?;
 
         // NOTE: There must be at least one node in the path: the target node.
@@ -565,7 +565,7 @@ pub fn print_difference_to_closest_match<W: Write>(
             }
         }
     } else {
-        writeln!(writer, "{}{} No matching lines in the file.", prefix, "hint:".purple())?;
+        writeln!(writer, "{}{} No matching lines in the file.", prefix, prefix_hint())?;
     }
     writeln!(writer)?;
 
@@ -591,7 +591,7 @@ pub fn print_analysis_note(patch_filename: &Path, note: &dyn Note, file_patch: &
     }
 
     match note.severity() {
-        NoteSeverity::Warning => write!(out, "{} ", "warning:".bright_yellow().bold())?,
+        NoteSeverity::Warning => write!(out, "{} ", prefix_warning())?,
     }
 
     note.write(&mut out)?;

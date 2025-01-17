@@ -12,7 +12,6 @@ use std::hash::BuildHasher;
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
 
-use colored::*;
 use anyhow::{Context, Result};
 use seahash::SeaHasher;
 
@@ -32,7 +31,7 @@ pub fn print_parser_warnings(
 {
     // Print parser warnings if not silent
     if config.verbosity >= Verbosity::Normal &&	!patch.warnings.is_empty() {
-	eprintln!("{} {}:", "warning:".bright_yellow().bold(), filename.display());
+	eprintln!("{} {}:", prefix_warning(), filename.display());
 	for warning in &patch.warnings {
 	    eprintln!("         {}",  warning);
 	}
