@@ -591,7 +591,7 @@ pub fn print_analysis_note(patch_filename: &Path, note: &dyn Note, file_patch: &
     }
 
     match note.severity() {
-        NoteSeverity::Warning => write!(out, "{}: ", "warning".bright_yellow().bold())?,
+        NoteSeverity::Warning => write!(out, "{} ", "warning:".bright_yellow().bold())?,
     }
 
     note.write(&mut out)?;
