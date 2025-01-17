@@ -564,9 +564,10 @@ pub fn print_difference_to_closest_match<W: Write>(
                 hunk_line += 1;
             }
         }
-
-        writeln!(writer)?;
+    } else {
+        writeln!(writer, "{}{} No matching lines in the file.", prefix, "hint:".purple())?;
     }
+    writeln!(writer)?;
 
     Ok(())
 }
