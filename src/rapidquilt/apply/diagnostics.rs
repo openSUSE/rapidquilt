@@ -508,7 +508,8 @@ pub fn print_difference_to_closest_match<W: Write>(
         InHunk,
     }
 
-    let write_line = |writer: &mut W, line_type: WriteLineType, line_str: &str, line_num: Option<usize>| -> Result<()> {
+    let write_line = |writer: &mut W, line_type: WriteLineType, line_str: &[u8], line_num: Option<usize>| -> Result<()> {
+	let line_str = String::from_utf8_lossy(line_str);
         let line_num_str = match line_num {
             Some(line_num) => Cow::Owned(format!("{:5}", line_num + 1)),
             None                 => Cow::Borrowed("     "), // 5 characters for number + 1 for ':'
@@ -542,22 +543,22 @@ pub fn print_difference_to_closest_match<W: Write>(
         let mut hunk_line = 0;
         for &(next_hunk_line, next_file_line) in &best_path {
             while file_line < next_file_line {
-                write_line(writer, WriteLineType::InFile, &String::from_utf8_lossy(modified_file.content[file_line]), Some(file_line))?;
+                write_line(writer, WriteLineType::InFile, modified_file.content[file_line], Some(file_line))?;
                 file_line += 1;
             }
 
             while hunk_line < next_hunk_line {
-                write_line(writer, WriteLineType::InHunk, &String::from_utf8_lossy(hunk_view.remove_content()[hunk_line]), None)?;
+                write_line(writer, WriteLineType::InHunk, hunk_view.remove_content()[hunk_line], None)?;
                 hunk_line += 1;
             }
 
             if let Some(content) = hunk_view.remove_content().get(hunk_line)  {
                 let file_content = &modified_file.content[file_line];
                 if file_content == content {
-                    write_line(writer, WriteLineType::Matching, &String::from_utf8_lossy(content), Some(file_line))?;
+                    write_line(writer, WriteLineType::Matching, content, Some(file_line))?;
                 } else {
-                    write_line(writer, WriteLineType::InFile, &String::from_utf8_lossy(file_content), Some(file_line))?;
-                    write_line(writer, WriteLineType::InHunk, &String::from_utf8_lossy(content), None)?;
+                    write_line(writer, WriteLineType::InFile, file_content, Some(file_line))?;
+                    write_line(writer, WriteLineType::InHunk, content, None)?;
                 }
                 file_line += 1;
                 hunk_line += 1;
