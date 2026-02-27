@@ -1022,7 +1022,7 @@ impl<'a> InputParser<'a> {
 #[cfg(test)]
 #[test]
 fn test_parse_c_string() {
-    fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ErrorBuilder> {
+    fn parse_c_string(input: &[u8]) -> Result<(&[u8], Vec<u8>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_c_string().map(|result| (parser.remain(), result))
     }
@@ -1074,7 +1074,7 @@ fn test_parse_c_string() {
 #[cfg(test)]
 #[test]
 fn test_parse_filename() {
-    fn parse_filename(input: &[u8]) -> Result<(&[u8], Filename), ErrorBuilder> {
+    fn parse_filename(input: &[u8]) -> Result<(&[u8], Filename<'_>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_filename().map(|result| (parser.remain(), result))
     }
@@ -1116,7 +1116,7 @@ fn test_parse_filename() {
 #[cfg(test)]
 #[test]
 fn test_parse_mode() {
-    fn parse_mode(input: &[u8]) -> Result<(&[u8], u32), ErrorBuilder> {
+    fn parse_mode(input: &[u8]) -> Result<(&[u8], u32), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_mode().map(|result| (parser.remain(), result))
     }
@@ -1157,7 +1157,7 @@ fn test_parse_mode() {
 fn test_parse_metadata_line() {
     use self::MetadataLine::*;
 
-    fn parse_metadata_line(input: &[u8]) -> Result<(&[u8], MetadataLine), ErrorBuilder> {
+    fn parse_metadata_line(input: &[u8]) -> Result<(&[u8], MetadataLine<'_>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_metadata_line().map(|result| (parser.remain(), result))
     }
@@ -1176,7 +1176,7 @@ fn test_parse_metadata_line() {
 #[cfg(test)]
 #[test]
 fn test_parse_git_hash() {
-    fn parse_git_hash(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder> {
+    fn parse_git_hash(input: &[u8]) -> Result<(&[u8], &[u8]), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_git_hash().map(|result| (parser.remain(), result))
     }
@@ -1212,7 +1212,7 @@ fn test_parse_git_hash() {
 fn test_parse_git_metadata_line() {
     use self::GitMetadataLine::*;
 
-    fn parse_git_metadata_line(input: &[u8]) -> Result<(&[u8], GitMetadataLine), ErrorBuilder> {
+    fn parse_git_metadata_line(input: &[u8]) -> Result<(&[u8], GitMetadataLine<'_>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_git_metadata_line().map(|result| (parser.remain(), result))
     }
@@ -1245,7 +1245,7 @@ fn test_parse_patch_line() {
     use self::PatchLine::*;
     use self::MetadataLine::*;
 
-    fn parse_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
+    fn parse_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine<'_>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_patch_line().map(|result| (parser.remain(), result))
     }
@@ -1281,7 +1281,7 @@ fn test_parse_git_patch_line() {
     use self::MetadataLine::*;
     use self::GitMetadataLine::*;
 
-    fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine), ErrorBuilder> {
+    fn parse_git_patch_line(input: &[u8]) -> Result<(&[u8], PatchLine<'_>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_git_patch_line().map(|result| (parser.remain(), result))
     }
@@ -1312,7 +1312,7 @@ fn test_parse_git_patch_line() {
 #[cfg(test)]
 #[test]
 fn test_parse_number_usize() {
-    fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder> {
+    fn parse_number_usize(input: &[u8]) -> Result<(&[u8], usize), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_number_usize().map(|result| (parser.remain(), result))
     }
@@ -1337,7 +1337,7 @@ fn test_parse_number_usize() {
 #[cfg(test)]
 #[test]
 fn test_parse_hunk_line_and_count() {
-    fn parse_hunk_line_and_count(input: &[u8]) -> Result<(&[u8], (usize, usize)), ErrorBuilder> {
+    fn parse_hunk_line_and_count(input: &[u8]) -> Result<(&[u8], (usize, usize)), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_hunk_line_and_count().map(|result| (parser.remain(), result))
     }
@@ -1350,7 +1350,7 @@ fn test_parse_hunk_line_and_count() {
 #[cfg(test)]
 #[test]
 fn test_parse_hunk_header() {
-    fn parse_hunk_header(input: &[u8]) -> Result<(&[u8], HunkHeader), ErrorBuilder> {
+    fn parse_hunk_header(input: &[u8]) -> Result<(&[u8], HunkHeader<'_>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_hunk_header().map(|result| (parser.remain(), result))
     }
@@ -1416,7 +1416,7 @@ fn test_parse_hunk_header() {
 #[cfg(test)]
 #[test]
 fn test_parse_hunk_line() {
-    fn parse_hunk_line(input: &[u8]) -> Result<(&[u8], (HunkLineType, &[u8])), ErrorBuilder> {
+    fn parse_hunk_line(input: &[u8]) -> Result<(&[u8], (HunkLineType, &[u8])), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_hunk_line().map(|result| (parser.remain(), result))
     }
@@ -1462,7 +1462,7 @@ fn test_parse_hunk_line() {
 #[cfg(test)]
 #[test]
 fn test_parse_hunk() {
-    fn parse_hunk(input: &[u8]) -> Result<(&[u8], TextHunk), ErrorBuilder> {
+    fn parse_hunk(input: &[u8]) -> Result<(&[u8], TextHunk<'_>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_hunk().map(|result| (parser.remain(), result))
     }
@@ -1531,7 +1531,7 @@ xxxxx
 #[cfg(test)]
 #[test]
 fn test_parse_hunks() {
-    fn parse_hunks(input: &[u8]) -> Result<(&[u8], HunksVec<&[u8]>), ErrorBuilder> {
+    fn parse_hunks(input: &[u8]) -> Result<(&[u8], HunksVec<'_, &[u8]>), ErrorBuilder<'_>> {
         let mut parser = InputParser::new(input);
         parser.take_hunks().map(|result| (parser.remain(), result))
     }
@@ -2140,7 +2140,7 @@ new mode 100755
     assert_eq!(file_patch.hunks.len(), 0);
 }
 
-pub fn parse_patch(bytes: &[u8], strip: usize) -> Result<TextPatch, ParseError> {
+pub fn parse_patch(bytes: &[u8], strip: usize) -> Result<TextPatch<'_>, ParseError> {
     let mut parser = InputParser::new(bytes);
 
     let mut wants_header = true;
